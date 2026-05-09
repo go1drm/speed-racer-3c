@@ -17,8 +17,8 @@ extends RigidBody3D
 @export var turn_speed_high_speed_mult: float = 0.45  ## 高速时转向衰减到的倍率(新增: 防甩)
 @export var high_speed_threshold: float = 25.0   ## 多少 m/s 以上开始衰减转向
 @export var turn_stop_limit: float = 0.6
-@export var ground_friction: float = 6.0
-@export var natural_decel: float = 2.5
+@export var ground_friction: float = 6.0         ## (旧)正常状态侧向抗滑摩擦
+@export var natural_decel: float = 2.5           ## (旧)松油门滚动摩擦, 沿惯性反向
 
 # ---------------- 漂移 ----------------
 @export_group("Drift")
@@ -29,12 +29,17 @@ extends RigidBody3D
 @export var drift_yaw_offset_tuck: float = 18.0
 @export var drift_yaw_offset_side: float = 35.0
 @export var side_drift_threshold: float = 1.2
-@export var drift_min_angle_to_boost: float = 15.0  ## 完成度低门槛(度): 小喷资格
-@export var drift_min_angle_to_double: float = 35.0  ## 完成度高门槛(度): 双喷资格
-@export var drift_max_duration: float = 5.0
+@export var drift_min_angle_to_boost: float = 10.0  ## 完成度低门槛(度): 小喷资格
+@export var drift_min_angle_to_double: float = 25.0  ## (旧逻辑保留, 已废弃) 双喷资格累积角(度)
+@export var drift_max_duration: float = 5.0         ## 漂移最长持续(秒), 设为 0 = 不限时
 @export var drift_break_speed_ratio: float = 0.5
+@export var drift_low_speed_grace_time: float = 0.6   ## 低速触发后给玩家多少秒"挽救"窗口
+@export var drift_grace_save_angle: float = 8.0       ## 宽限期内车头再转过此角度(度)即取消断漂
 @export var drift_accel_mult: float = 0.35           ## 漂移时油门加速力倍率 (越小越减速感)
-@export var drift_passive_decel: float = 8.0        ## 漂移时被动减速力 (模拟打滑能耗)
+@export var drift_passive_decel: float = 8.0        ## (旧)漂移惯性反向阻力, 与 drift_inertial_decel 等价
+@export var drift_inertial_decel: float = 8.0        ## 漂移时沿惯性方向反向施加的阻力(总能耗摩擦)
+@export var drift_max_speed: float = 30.0            ## 漂移时速度软上限(m/s); <=0 时禁用此限制
+@export var drift_speed_brake_strength: float = 18.0  ## 超过上限时的反向刹车力强度
 @export var drift_counter_steer_break_time: float = 0.25  ## 反向打方向超过此时长(秒)断漂
 
 # ---------------- 集气公式参数 ----------------
@@ -45,6 +50,7 @@ extends RigidBody3D
 @export var charge_min_per_sec: float = 12.0
 @export var crash_charge_penalty: float = 0.2
 @export var max_nitro_stock: int = 2
+@export var instant_nitro_settle: bool = true       ## 集气满立即生成氮气格(false=本次漂移结束才结算)
 @export var wall_crash_speed_loss: float = 6.0     ## 一帧速度损失超过此值(m/s)才算撞墙
 
 # ---------------- 喷射 ----------------
@@ -52,12 +58,17 @@ extends RigidBody3D
 @export var mini_boost_cost: float = 35.0           ## 已废弃, 保留兼容
 @export var mini_boost_power: float = 24.0
 @export var mini_boost_time: float = 0.55
-@export var boost_window_time: float = 0.4           ## 退漂后多少秒内按 W 才能放出小喷/双喷
+@export var mini_boost_curve: Curve                  ## 小喷力度随时间曲线 (0~1 输入, 0~1+ 输出)
+@export var boost_window_time: float = 1.2           ## 退漂后多少秒内按 W 才能放出小喷/双喷
 @export var double_boost_window: float = 0.35
 @export var double_boost_power: float = 42.0
 @export var double_boost_time: float = 0.85
+@export var double_boost_curve: Curve                ## 双喷力度随时间曲线
+@export var double_charge_hold_time: float = 0.4   ## 小喷期间按住 Q 多少秒可解锁双喷
+@export var double_charge_window: float = 0.6      ## 解锁后, 多少秒内不按 W 会失效
 @export var nitro_power: float = 58.0
 @export var nitro_time: float = 2.2
+@export var nitro_boost_curve: Curve                 ## 氮气力度随时间曲线
 @export var boost_speed_multiplier: float = 1.55
 
 # ---------------- 视觉 ----------------
@@ -66,6 +77,16 @@ extends RigidBody3D
 @export var body_tilt_max_deg: float = 12.0          ## 过弯车身最大侧倾角(度) - 防侧翻
 @export var head_yaw_deg: float = 4.0                ## 非漂移时车头左右"拧头"幅度(度)
 @export var sphere_offset: Vector3 = Vector3.DOWN
+
+# ---------------- 地面物理(防弹跳) ----------------
+@export_group("Ground Physics")
+@export var ground_stick_enabled: bool = true         ## 落地抑制反弹总开关
+@export var ground_stick_vy_threshold: float = 3.0    ## 接触地面且 Y 速度向上小于此值(m/s)直接归零, 防微弹
+@export var ground_stick_down_clamp: float = 0.0      ## 接触地面时向下速度限制(0=不限制, 保留下坠感; 设>0 会夹紧)
+@export var slope_as_wall_enabled: bool = true        ## 把陡斜面视为墙壁
+@export var slope_wall_angle_deg: float = 50.0        ## 斜面法线与竖直方向夹角 ≥ 此值视为墙(度)。越小越严格(地面→墙)
+@export var slope_wall_bounce_absorb: float = 0.75    ## 撞斜面墙时吸收多少速度(0=完全弹, 1=完全停)
+@export var slope_wall_push_back: float = 4.0         ## 撞斜面墙时沿法线方向推开多少(m/s)
 
 # ---------------- 节点 ----------------
 @onready var car_mesh: Node3D = get_node_or_null("CarMesh")
@@ -90,6 +111,12 @@ signal drift_ended(charge_gained_this_round: float, succeeded: bool)
 signal boost_triggered(type: String)
 signal wall_crashed(lost_amount: float)
 signal camera_shake_requested(intensity: float, duration: float)
+signal boost_window_opened(level: String, duration: float)   ## 退漂后小喷/双喷窗口开启
+signal boost_window_closed                                    ## 窗口关闭(用满或超时)
+signal drift_charge_level_changed(level: String)              ## 漂移中等级变化: "none"/"mini"/"double"
+signal double_charge_progress(progress: float)                ## 小喷期间按住Q的蓄能进度 0~1
+signal double_charge_ready                                    ## 双喷蓄满, 可按 W 释放
+signal double_charge_lost                                     ## 双喷资格失效
 
 # ---------------- 状态 ----------------
 enum State { NORMAL, DRIFT }
@@ -98,6 +125,8 @@ var is_boosting: bool = false
 var boost_type: String = ""
 var boost_time_left: float = 0.0
 var boost_power: float = 0.0
+var boost_base_power: float = 0.0     # 喷射基础力度(用于曲线缩放)
+var boost_total_time: float = 0.0     # 喷射总时长(用于归一化进度)
 var last_mini_end_time: float = -999.0
 
 # 输入
@@ -113,14 +142,28 @@ var drift_accum_angle_deg: float = 0.0      # 漂移累计车头转过的角度(
 var drift_elapsed: float = 0.0              # 漂移已持续时间
 var drift_counter_steer_time: float = 0.0
 var prev_yaw: float = 0.0
+var _prev_forward_xz: Vector2 = Vector2.ZERO   # 上一帧车头水平投影方向(用于稳定算 yaw delta)
+
+# 低速断漂宽限期
+var _low_speed_grace_left: float = 0.0   # 宽限剩余秒数, >0 表示正在判断中
+var _grace_start_angle: float = 0.0       # 进入宽限期时的累计角度(用于判挽救)
 
 # 退漂窗口期: 窗口内按 W 才能放出本次漂移积累的小喷/双喷
 var boost_window_left: float = 0.0                # 窗口剩余秒数, 0 表示无窗口
 var boost_window_level: String = ""               # 窗口可释放等级 "mini" / "double"
 
+# 漂移中实时等级 (用于 HUD 小喷灯)
+var _drift_charge_level: String = "none"          # "none"/"mini"/"double"
+
+# 双喷蓄能状态(小喷期间按住 Q 蓄能)
+var _double_charge_t: float = 0.0     # 当前已按住 Q 的累计时间
+var _double_armed: bool = false       # 双喷已蓄满, 可按 W 释放
+var _double_armed_left: float = 0.0   # 蓄满后剩余有效秒数
+
 # 氮气槽
 var charge: float = 0.0
 var nitro_stock: int = 0
+var _pending_nitro: int = 0      # 漂移期间累计待结算的氮气格(等退漂时一次性发放)
 
 # 特效
 var fx_node: Node3D = null
@@ -274,10 +317,12 @@ func _physics_process(delta: float) -> void:
 	if ground_ray and ground_ray.is_colliding():
 		_apply_drive_force(delta)
 		_apply_lateral_friction(delta)
+		_apply_ground_stick(delta)
 
 	_update_drift_charge(delta)
 	_check_drift_timeout(delta)
 	_update_boost_window(delta)
+	_update_double_charge(delta)
 	_update_visuals(delta)
 	_emit_hud_signals()
 	_last_frame_speed = linear_velocity.length()
@@ -291,8 +336,11 @@ func _read_input() -> void:
 	steer_input = Input.get_axis("steer_right", "steer_left")
 
 	# Q 点按：NORMAL 时入漂，DRIFT 时手动退漂(不喷)
+	# 例外: 小喷期间按 Q 是为了蓄能双喷, 不入漂
 	if Input.is_action_just_pressed("drift"):
-		if state == State.NORMAL:
+		if is_boosting and boost_type == "mini":
+			pass  # 小喷期间按 Q 留给双喷蓄能逻辑处理, 这里不入漂
+		elif state == State.NORMAL:
 			_try_start_drift()
 		else:
 			_end_drift(false)   # 手动退漂不喷
@@ -340,23 +388,32 @@ func _apply_drive_force(_delta: float) -> void:
 	var forward: Vector3 = -car_mesh.global_transform.basis.z
 	var current_speed: float = linear_velocity.dot(forward)
 	var speed_cap: float = max_speed * (boost_speed_multiplier if is_boosting else 1.0)
+	# 漂移时如果设了上限, 取较小者作为本次的速度封顶
+	if state == State.DRIFT and drift_max_speed > 0.0:
+		speed_cap = minf(speed_cap, drift_max_speed)
 
-	# 漂移中: 油门加速被大幅削弱, 而且额外有被动减速力 (模拟轮胎打滑能量损失)
+	# 漂移中: 油门加速被大幅削弱
 	var accel_mult: float = drift_accel_mult if state == State.DRIFT else 1.0
 
 	if throttle_input > 0.01:
 		if current_speed < speed_cap:
 			apply_central_force(forward * acceleration * throttle_input * accel_mult * mass)
 	elif throttle_input < -0.01:
-		apply_central_force(forward * brake_force * throttle_input * mass)
-	else:
-		var fwd_vel: Vector3 = forward * current_speed
-		if fwd_vel.length() > 0.1:
-			apply_central_force(-fwd_vel.normalized() * natural_decel * mass)
+		# 刹车: 沿当前速度反向施力(正确的惯性反向, 不再硬绑车头)
+		var v_horiz: Vector3 = linear_velocity
+		v_horiz.y = 0.0
+		if v_horiz.length() > 0.5:
+			apply_central_force(-v_horiz.normalized() * brake_force * absf(throttle_input) * mass)
 
-	# 漂移时持续被动减速(QQ飞车经典手感)
-	if state == State.DRIFT and current_speed > 0.5:
-		apply_central_force(-forward * drift_passive_decel * mass)
+	# 漂移速度软封顶: 超过 drift_max_speed 时按超出比例施加反向刹车力
+	if state == State.DRIFT and drift_max_speed > 0.0:
+		var total_speed: float = linear_velocity.length()
+		if total_speed > drift_max_speed:
+			var over_ratio: float = (total_speed - drift_max_speed) / drift_max_speed
+			over_ratio = minf(over_ratio, 1.5)  # 防过度刹车
+			# 沿当前速度反方向施力(整体减速)
+			var brake_dir: Vector3 = -linear_velocity.normalized()
+			apply_central_force(brake_dir * drift_speed_brake_strength * over_ratio * mass)
 
 	# 喷射推力沿当前速度方向施加(防侧翻)
 	if is_boosting:
@@ -370,11 +427,56 @@ func _apply_drive_force(_delta: float) -> void:
 
 
 func _apply_lateral_friction(delta: float) -> void:
+	# ============================================================
+	# 正确的摩擦力模型: 把速度分解到车头 long(前后) / lat(侧向) 两轴
+	# 每个分量各自沿"该分量反方向"(即惯性该分量方向的反向)施加阻力
+	# 合力 = 两个方向反向阻力之和, 整体朝"惯性反方向"指向
+	# ============================================================
+	var forward: Vector3 = -car_mesh.global_transform.basis.z
 	var right: Vector3 = car_mesh.global_transform.basis.x
-	var lateral_speed: float = linear_velocity.dot(right)
-	var friction: float = drift_friction if state == State.DRIFT else ground_friction
-	var correction: Vector3 = -right * lateral_speed * friction * delta
-	apply_central_impulse(correction * mass)
+	# Y 分量不参与地面摩擦(由地面物理处理)
+	var v: Vector3 = linear_velocity
+	v.y = 0.0
+
+	# 速度分解
+	var v_long: float = v.dot(forward)    # 前进方向速度(正=前, 负=倒)
+	var v_lat: float = v.dot(right)       # 侧向速度(漂移时很大)
+
+	# 侧向摩擦: 漂移时小(drift_friction), 正常时大(ground_friction)
+	var lat_k: float = drift_friction if state == State.DRIFT else ground_friction
+
+	# 前进方向滚动摩擦: 松油门时生效(natural_decel), 漂移时叠加额外能耗
+	# 踩油门/刹车时不施加滚动摩擦(否则与驱动力冲突)
+	var long_k: float = 0.0
+	if state == State.DRIFT:
+		# 漂移: 用 drift_inertial_decel 作为整体能耗, 同时叠加 drift_passive_decel 兼容
+		long_k = maxf(drift_inertial_decel, drift_passive_decel)
+	elif absf(throttle_input) < 0.05:
+		# 正常松油门: 滚动摩擦
+		long_k = natural_decel
+
+	# 沿"该方向速度分量的反方向"施加阻力(惯性反向)
+	# 用冲量形式: impulse = -velocity_component * k * delta
+	var lat_impulse: Vector3 = -right * v_lat * lat_k * delta
+	var long_impulse: Vector3 = -forward * v_long * long_k * delta
+	apply_central_impulse((lat_impulse + long_impulse) * mass)
+
+
+# ============================================================
+#  地面吸附(防弹跳)
+# ============================================================
+func _apply_ground_stick(_delta: float) -> void:
+	if not ground_stick_enabled:
+		return
+	var v: Vector3 = linear_velocity
+	# 接触地面时若 Y 速度朝上且小于阈值, 直接归零(防微弹)
+	if v.y > 0.0 and v.y < ground_stick_vy_threshold:
+		v.y = 0.0
+		linear_velocity = v
+	# 可选: 限制向下速度
+	if ground_stick_down_clamp > 0.0 and v.y < -ground_stick_down_clamp:
+		v.y = -ground_stick_down_clamp
+		linear_velocity = v
 
 
 # ============================================================
@@ -475,6 +577,13 @@ func _try_start_drift() -> void:
 	drift_accum_charge = 0.0
 	drift_accum_angle_deg = 0.0
 	drift_elapsed = 0.0
+	_low_speed_grace_left = 0.0
+	_grace_start_angle = 0.0
+	# 记录入漂时车头方向(XZ 投影), 后续每帧以此为基准算 yaw 变化
+	var _fwd0: Vector3 = -car_mesh.global_transform.basis.z
+	_prev_forward_xz = Vector2(_fwd0.x, _fwd0.z).normalized()
+	_drift_charge_level = "none"
+	emit_signal("drift_charge_level_changed", "none")
 	emit_signal("drift_started", drift_mode)
 	if drift_fx_node and drift_fx_node.has_method("set_drifting"):
 		drift_fx_node.set_drifting(true)
@@ -491,14 +600,19 @@ func _end_drift(_success_boost: bool = false) -> void:
 	drift_accum_angle_deg = 0.0
 	drift_elapsed = 0.0
 	drift_mode = ""
-	# 根据完成度评级开启喷射窗口
-	# 高门槛 → 双喷资格; 低门槛 → 小喷资格; 不到 → 无窗口
-	if final_angle >= drift_min_angle_to_double:
-		boost_window_level = "double"
-		boost_window_left = boost_window_time
-		emit_signal("boost_window_opened", "double", boost_window_time)
-		print("[Car] 退漂窗口: 双喷可用 (角度=%.1f)" % final_angle)
-	elif final_angle >= drift_min_angle_to_boost:
+	_low_speed_grace_left = 0.0
+	_grace_start_angle = 0.0
+	# 延迟结算氮气: 漂移期间积累的格子, 退漂时一次性发放
+	if _pending_nitro > 0:
+		nitro_stock = mini(nitro_stock + _pending_nitro, max_nitro_stock)
+		_pending_nitro = 0
+		emit_signal("nitro_stock_changed", nitro_stock, max_nitro_stock)
+	# 漂移结束: 通知 HUD 灭灯(交给窗口期接管显示)
+	if _drift_charge_level != "none":
+		_drift_charge_level = "none"
+		emit_signal("drift_charge_level_changed", "none")
+	# 根据完成度评级开启小喷窗口(双喷不再走这条路, 改为小喷期间按 Q 蓄能)
+	if final_angle >= drift_min_angle_to_boost:
 		boost_window_level = "mini"
 		boost_window_left = boost_window_time
 		emit_signal("boost_window_opened", "mini", boost_window_time)
@@ -516,13 +630,44 @@ func _check_drift_timeout(delta: float) -> void:
 	if state != State.DRIFT:
 		return
 	drift_elapsed += delta
-	if drift_elapsed >= drift_max_duration:
+	# 每秒打印一次漂移状态供调试
+	if int(drift_elapsed * 2.0) != int((drift_elapsed - delta) * 2.0):
+		print("[Car] 漂移中 elapsed=%.1f angle=%.1f° lvl=%s grace=%.2f" % [drift_elapsed, drift_accum_angle_deg, _drift_charge_level, _low_speed_grace_left])
+	# drift_max_duration <= 0 表示不限时
+	if drift_max_duration > 0.0 and drift_elapsed >= drift_max_duration:
 		_end_drift(false)
 		return
-	# 速度不够自动断漂
-	if linear_velocity.length() < drift_min_speed * drift_break_speed_ratio:
-		_end_drift(false)
-		print("[Car] 自动断漂: 速度过低")
+
+	var low_speed: bool = linear_velocity.length() < drift_min_speed * drift_break_speed_ratio
+	if low_speed:
+		# 已在宽限期: 倒计时 + 检查"挽救"
+		if _low_speed_grace_left > 0.0:
+			_low_speed_grace_left -= delta
+			# 期间车头再转过 grace_save_angle 即视为挽救成功, 退出宽限期
+			if drift_accum_angle_deg - _grace_start_angle >= drift_grace_save_angle:
+				print("[Car] 低速挽救成功! 转过 %.1f° (>= %.1f°)" % [drift_accum_angle_deg - _grace_start_angle, drift_grace_save_angle])
+				_low_speed_grace_left = 0.0
+				return
+			# 宽限到期 → 真正断漂
+			if _low_speed_grace_left <= 0.0:
+				_low_speed_grace_left = 0.0
+				_end_drift(false)
+				print("[Car] 自动断漂: 低速宽限期结束未挽救")
+		else:
+			# 第一次进入低速: 启动宽限期
+			if drift_low_speed_grace_time > 0.0:
+				_low_speed_grace_left = drift_low_speed_grace_time
+				_grace_start_angle = drift_accum_angle_deg
+				print("[Car] 进入低速宽限期 %.2fs (累计角度=%.1f°)" % [drift_low_speed_grace_time, drift_accum_angle_deg])
+			else:
+				# 没设宽限期 → 直接断漂(兼容旧行为)
+				_end_drift(false)
+				print("[Car] 自动断漂: 速度过低(无宽限)")
+	else:
+		# 速度恢复: 取消宽限期
+		if _low_speed_grace_left > 0.0:
+			print("[Car] 速度恢复, 退出宽限期")
+			_low_speed_grace_left = 0.0
 
 
 # ============================================================
@@ -536,25 +681,45 @@ func _update_drift_charge(delta: float) -> void:
 	var lateral_speed_abs: float = absf(linear_velocity.dot(right))
 	var lateral_contrib: float = lateral_speed_abs * charge_per_lateral_m * delta
 
-	var yaw_delta: float = angle_difference(prev_yaw, car_mesh.rotation.y)
-	var yaw_rate_abs: float = absf(yaw_delta) / maxf(delta, 0.0001)
+	# 【关键】用 basis.z 在 XZ 平面投影的夹角算 yaw_delta, 避免欧拉角跳变 bug
+	var fwd: Vector3 = -car_mesh.global_transform.basis.z
+	var fwd_xz: Vector2 = Vector2(fwd.x, fwd.z).normalized()
+	var yaw_delta_rad: float = 0.0
+	if _prev_forward_xz.length() > 0.01:
+		yaw_delta_rad = _prev_forward_xz.angle_to(fwd_xz)
+	_prev_forward_xz = fwd_xz
+
+	var yaw_rate_abs: float = absf(yaw_delta_rad) / maxf(delta, 0.0001)
 	var yaw_contrib: float = yaw_rate_abs * charge_yaw_rate_weight
 
-	# 累积角度（只计与漂移方向一致的 yaw 变化）
-	if signf(yaw_delta) == signf(drift_dir) or drift_dir == 0.0:
-		drift_accum_angle_deg += rad_to_deg(absf(yaw_delta))
+	# 累积角度(绝对值, 任意方向都算)
+	drift_accum_angle_deg += rad_to_deg(absf(yaw_delta_rad))
 
 	var floor_contrib: float = charge_min_per_sec * delta
 	var inc: float = lateral_contrib + yaw_contrib + floor_contrib
 	drift_accum_charge += inc
 	charge += inc
 
-	while charge >= charge_nitro_full and nitro_stock < max_nitro_stock:
+	while charge >= charge_nitro_full and nitro_stock + _pending_nitro < max_nitro_stock:
 		charge -= charge_nitro_full
-		nitro_stock += 1
-		emit_signal("nitro_stock_changed", nitro_stock, max_nitro_stock)
-	if nitro_stock >= max_nitro_stock:
+		if instant_nitro_settle:
+			# 立即结算: 直接加格子, 触发 HUD 闪光
+			nitro_stock += 1
+			emit_signal("nitro_stock_changed", nitro_stock, max_nitro_stock)
+		else:
+			# 延迟结算: 进入待发放队列, 退漂时统一加
+			_pending_nitro += 1
+	# 集气槽夹紧(防止溢出): 满栏时锁在 99
+	if nitro_stock + _pending_nitro >= max_nitro_stock:
 		charge = minf(charge, charge_nitro_full - 1.0)
+
+	# 实时等级判定: 通知 HUD 小喷灯(双喷不再在漂移中亮, 改为小喷期间按 Q 蓄能时亮)
+	var new_level: String = "none"
+	if drift_accum_angle_deg >= drift_min_angle_to_boost:
+		new_level = "mini"
+	if new_level != _drift_charge_level:
+		_drift_charge_level = new_level
+		emit_signal("drift_charge_level_changed", new_level)
 
 
 func angle_difference(a: float, b: float) -> float:
@@ -568,34 +733,86 @@ func angle_difference(a: float, b: float) -> float:
 #  喷射
 # ============================================================
 func _try_boost_w() -> void:
-	# 漂移中按 W: 立即退漂(进入窗口判定)
+	# 1) 双喷蓄满 + 小喷中 → 直接接力释放双喷
+	if _double_armed:
+		print("[Car] 双喷接力释放!")
+		_double_armed = false
+		_double_armed_left = 0.0
+		emit_signal("double_charge_lost")
+		_start_boost("double", double_boost_power, double_boost_time)
+		return
+
+	# 2) 漂移中按 W: 立即退漂(进入窗口判定)
+	print("[Car] 按 W! state=", state, " angle=%.1f" % drift_accum_angle_deg, " win_left=%.2f" % boost_window_left, " win_lvl=", boost_window_level)
 	if state == State.DRIFT:
 		_end_drift()
+		print("[Car]   退漂后 win_left=%.2f" % boost_window_left, " win_lvl=", boost_window_level)
 		# 如果窗口立即开了, 顺势直接释放对应等级喷射
 		if boost_window_left > 0.0:
 			_consume_boost_window()
 		return
 
-	# NORMAL 状态按 W: 看有没有窗口可消耗
+	# 3) NORMAL 状态按 W: 看有没有窗口可消耗
 	if boost_window_left > 0.0:
+		print("[Car]   NORMAL 状态消耗窗口")
 		_consume_boost_window()
 		return
 
-	# 既不在漂, 也没窗口 → 啥也不做(以前会用集气放喷射, 现已废弃)
+	# 既不在漂, 也没窗口, 也没蓄好双喷 → 啥也不做
+	print("[Car]   无效按 W (无窗口/不漂移)")
 	emit_signal("boost_triggered", "insufficient")
 
 
 func _consume_boost_window() -> void:
-	if boost_window_level == "double":
-		_start_boost("double", double_boost_power, double_boost_time)
-		print("[Car] 双喷释放!")
-	elif boost_window_level == "mini":
+	# 现在只处理小喷窗口(双喷走 _double_armed 路径)
+	if boost_window_level == "mini":
 		_start_boost("mini", mini_boost_power, mini_boost_time)
 		print("[Car] 小喷释放!")
 	# 关闭窗口
 	boost_window_level = ""
 	boost_window_left = 0.0
 	emit_signal("boost_window_closed")
+
+
+# ============================================================
+#  双喷蓄能 (小喷期间按住 Q 一段时间 → 双喷就绪 → 按 W 释放)
+# ============================================================
+func _update_double_charge(delta: float) -> void:
+	# 双喷已就绪: 倒计时, 超时失效
+	if _double_armed:
+		_double_armed_left -= delta
+		if _double_armed_left <= 0.0:
+			_double_armed = false
+			_double_armed_left = 0.0
+			emit_signal("double_charge_lost")
+			print("[Car] 双喷资格超时失效")
+		return
+
+	# 必须满足: 正在小喷 + 不在漂移状态(漂移按 Q 是退漂)
+	if not is_boosting or boost_type != "mini":
+		# 离开小喷状态时清零进度
+		if _double_charge_t > 0.0:
+			_double_charge_t = 0.0
+			emit_signal("double_charge_progress", 0.0)
+		return
+
+	# 小喷期间持续按住 Q
+	if Input.is_action_pressed("drift"):
+		_double_charge_t += delta
+		var prog: float = clampf(_double_charge_t / maxf(double_charge_hold_time, 0.001), 0.0, 1.0)
+		emit_signal("double_charge_progress", prog)
+		if _double_charge_t >= double_charge_hold_time:
+			_double_armed = true
+			_double_armed_left = double_charge_window
+			_double_charge_t = 0.0
+			emit_signal("double_charge_ready")
+			emit_signal("double_charge_progress", 1.0)
+			print("[Car] 双喷已蓄满, 可按 W")
+	else:
+		# 松开 Q: 进度重置
+		if _double_charge_t > 0.0:
+			_double_charge_t = 0.0
+			emit_signal("double_charge_progress", 0.0)
 
 
 func _update_boost_window(delta: float) -> void:
@@ -618,7 +835,9 @@ func _try_nitro() -> void:
 
 func _start_boost(type_name: String, power: float, duration: float) -> void:
 	boost_type = type_name
+	boost_base_power = power
 	boost_power = power
+	boost_total_time = duration
 	boost_time_left = duration
 	is_boosting = true
 	emit_signal("boost_triggered", type_name)
@@ -634,12 +853,31 @@ func _update_boost_timer(delta: float) -> void:
 	if not is_boosting:
 		return
 	boost_time_left -= delta
+	# 应用曲线: 进度 0..1 → 曲线值 → 缩放当前推力
+	var progress: float = 1.0 - clampf(boost_time_left / maxf(boost_total_time, 0.0001), 0.0, 1.0)
+	var curve: Curve = _get_boost_curve(boost_type)
+	if curve:
+		boost_power = boost_base_power * curve.sample(progress)
+	else:
+		boost_power = boost_base_power
 	if boost_time_left <= 0.0:
 		if boost_type == "mini":
 			last_mini_end_time = Time.get_ticks_msec() / 1000.0
 		is_boosting = false
 		boost_type = ""
 		boost_power = 0.0
+		boost_base_power = 0.0
+
+
+func _get_boost_curve(type_name: String) -> Curve:
+	match type_name:
+		"mini":
+			return mini_boost_curve
+		"double":
+			return double_boost_curve
+		"nitro":
+			return nitro_boost_curve
+	return null
 
 
 # ============================================================
@@ -659,6 +897,34 @@ func _on_body_entered(_body: Node) -> void:
 	drift_accum_charge *= crash_charge_penalty
 	emit_signal("wall_crashed", lost)
 	emit_signal("camera_shake_requested", 0.4, 0.25)
+
+
+# ============================================================
+#  斜面墙 + 接触法线检测 (在物理回调中才能拿到有效 contact)
+# ============================================================
+func _integrate_forces(state_phys: PhysicsDirectBodyState3D) -> void:
+	if not slope_as_wall_enabled:
+		return
+	var contact_count: int = state_phys.get_contact_count()
+	if contact_count <= 0:
+		return
+	var wall_threshold_rad: float = deg_to_rad(slope_wall_angle_deg)
+	var absorbed: bool = false
+	for i in range(contact_count):
+		var n: Vector3 = state_phys.get_contact_local_normal(i)
+		# n 与 Y 轴夹角: 0°=纯地面, 90°=纯墙
+		var angle_to_up: float = n.angle_to(Vector3.UP)
+		if angle_to_up >= wall_threshold_rad and not absorbed:
+			# 投影出沿法线方向的速度分量, 抵消掉
+			var v: Vector3 = state_phys.linear_velocity
+			var into_wall: float = -v.dot(n)  # 朝墙冲的速率(正值)
+			if into_wall > 0.5:
+				v += n * into_wall * slope_wall_bounce_absorb
+				# 沿法线推开一点, 避免卡墙
+				v += n * slope_wall_push_back
+				state_phys.linear_velocity = v
+				absorbed = true
+				emit_signal("camera_shake_requested", 0.35, 0.2)
 
 
 # ============================================================

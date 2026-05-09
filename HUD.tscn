@@ -1,6 +1,7 @@
-[gd_scene load_steps=4 format=3 uid="uid://dhud0qqcar02"]
+[gd_scene load_steps=6 format=3 uid="uid://dhud0qqcar02"]
 
 [ext_resource type="Script" path="res://HUD.gd" id="1_hud"]
+[ext_resource type="Texture2D" path="res://assets/ui/boost_flame.png" id="2_flame"]
 
 [sub_resource type="StyleBoxFlat" id="SBFlatBG"]
 bg_color = Color(0.08, 0.08, 0.1, 0.55)
@@ -15,6 +16,18 @@ corner_radius_top_left = 6
 corner_radius_top_right = 6
 corner_radius_bottom_right = 6
 corner_radius_bottom_left = 6
+
+[sub_resource type="StyleBoxFlat" id="SBFlatBoostBG"]
+bg_color = Color(0.05, 0.05, 0.08, 0.78)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.35, 0.35, 0.42, 0.85)
+corner_radius_top_left = 10
+corner_radius_top_right = 10
+corner_radius_bottom_right = 10
+corner_radius_bottom_left = 10
 
 [node name="HUD" type="CanvasLayer"]
 script = ExtResource("1_hud")
@@ -87,12 +100,40 @@ theme_override_constants/separation = 12
 [node name="Slot1" type="ColorRect" parent="Root/ChargeBox/NitroRow"]
 custom_minimum_size = Vector2(120, 22)
 layout_mode = 2
+size_flags_vertical = 4
 color = Color(0.22, 0.22, 0.28, 0.85)
 
 [node name="Slot2" type="ColorRect" parent="Root/ChargeBox/NitroRow"]
 custom_minimum_size = Vector2(120, 22)
 layout_mode = 2
+size_flags_vertical = 4
 color = Color(0.22, 0.22, 0.28, 0.85)
+
+; ============ 小喷指示灯（氮气槽右侧）============
+[node name="BoostLamp" type="PanelContainer" parent="Root/ChargeBox/NitroRow"]
+custom_minimum_size = Vector2(56, 56)
+layout_mode = 2
+size_flags_vertical = 4
+theme_override_styles/panel = SubResource("SBFlatBoostBG")
+
+[node name="FlameIcon" type="TextureRect" parent="Root/ChargeBox/NitroRow/BoostLamp"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+texture = ExtResource("2_flame")
+expand_mode = 1
+stretch_mode = 5
+modulate = Color(0.35, 0.35, 0.4, 1)
+
+[node name="BoostLampLabel" type="Label" parent="Root/ChargeBox/NitroRow/BoostLamp"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+theme_override_colors/font_color = Color(1, 1, 1, 0.9)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.95)
+theme_override_constants/outline_size = 4
+text = "W"
+horizontal_alignment = 1
+vertical_alignment = 2
 
 [node name="ChargeBar" type="ProgressBar" parent="Root/ChargeBox"]
 custom_minimum_size = Vector2(0, 18)
@@ -180,9 +221,9 @@ theme_override_constants/outline_size = 3
 text = "↑↓  加速 / 刹车
 ←→  左右转向
 Q   点按入漂 / 退漂
-W   退漂窗口内按可放小喷或双喷
+W   退漂窗口内: 小喷
 E   氮气（消耗 1 格）
 
-漂角度 ≥ 15° 退漂可小喷
-漂角度 ≥ 35° 退漂可双喷
+漂角度 ≥ 10° 退漂可小喷（黄灯亮）
+小喷期间按住 Q 蓄能（灯变粉）→ 按 W 双喷
 撞墙：当前漂移集气 -80%"
