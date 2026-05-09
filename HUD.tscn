@@ -179,9 +179,10 @@ theme_override_colors/font_outline_color = Color(0, 0, 0, 0.85)
 theme_override_constants/outline_size = 3
 text = "↑↓  加速 / 刹车
 ←→  左右转向
-Q   漂移（按住）
-W   小喷（消耗 35 集气）
+Q   点按入漂 / 退漂
+W   退漂窗口内按可放小喷或双喷
 E   氮气（消耗 1 格）
 
-双喷：小喷结束 0.35s 内再按 W
+漂角度 ≥ 15° 退漂可小喷
+漂角度 ≥ 35° 退漂可双喷
 撞墙：当前漂移集气 -80%"

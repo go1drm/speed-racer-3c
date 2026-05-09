@@ -29,9 +29,10 @@ extends RigidBody3D
 @export var drift_yaw_offset_tuck: float = 18.0
 @export var drift_yaw_offset_side: float = 35.0
 @export var side_drift_threshold: float = 1.2
-@export var drift_min_angle_to_boost: float = 15.0  ## 退漂小喷最低累积角度(度)
-@export var drift_max_duration: float = 5.0          ## 漂移最长时间 (防一直漂)
-@export var drift_break_speed_ratio: float = 0.5     ## 速度低于 drift_min_speed * 此值时自动断漂
+@export var drift_min_angle_to_boost: float = 15.0  ## 完成度低门槛(度): 小喷资格
+@export var drift_min_angle_to_double: float = 35.0  ## 完成度高门槛(度): 双喷资格
+@export var drift_max_duration: float = 5.0
+@export var drift_break_speed_ratio: float = 0.5
 @export var drift_accel_mult: float = 0.35           ## 漂移时油门加速力倍率 (越小越减速感)
 @export var drift_passive_decel: float = 8.0        ## 漂移时被动减速力 (模拟打滑能耗)
 @export var drift_counter_steer_break_time: float = 0.25  ## 反向打方向超过此时长(秒)断漂
@@ -48,9 +49,10 @@ extends RigidBody3D
 
 # ---------------- 喷射 ----------------
 @export_group("Boost")
-@export var mini_boost_cost: float = 35.0
+@export var mini_boost_cost: float = 35.0           ## 已废弃, 保留兼容
 @export var mini_boost_power: float = 24.0
 @export var mini_boost_time: float = 0.55
+@export var boost_window_time: float = 0.4           ## 退漂后多少秒内按 W 才能放出小喷/双喷
 @export var double_boost_window: float = 0.35
 @export var double_boost_power: float = 42.0
 @export var double_boost_time: float = 0.85
@@ -109,8 +111,12 @@ var drift_yaw_offset: float = 0.0
 var drift_accum_charge: float = 0.0
 var drift_accum_angle_deg: float = 0.0      # 漂移累计车头转过的角度(度)
 var drift_elapsed: float = 0.0              # 漂移已持续时间
-var drift_counter_steer_time: float = 0.0   # 反向打方向已持续时间
+var drift_counter_steer_time: float = 0.0
 var prev_yaw: float = 0.0
+
+# 退漂窗口期: 窗口内按 W 才能放出本次漂移积累的小喷/双喷
+var boost_window_left: float = 0.0                # 窗口剩余秒数, 0 表示无窗口
+var boost_window_level: String = ""               # 窗口可释放等级 "mini" / "double"
 
 # 氮气槽
 var charge: float = 0.0
@@ -271,6 +277,7 @@ func _physics_process(delta: float) -> void:
 
 	_update_drift_charge(delta)
 	_check_drift_timeout(delta)
+	_update_boost_window(delta)
 	_update_visuals(delta)
 	_emit_hud_signals()
 	_last_frame_speed = linear_velocity.length()
@@ -474,16 +481,33 @@ func _try_start_drift() -> void:
 	print("[Car] 进入漂移 mode=", drift_mode, " fx=", drift_fx_node != null)
 
 
-func _end_drift(success_boost: bool) -> void:
+func _end_drift(_success_boost: bool = false) -> void:
 	if state != State.DRIFT:
 		return
+	var final_angle: float = drift_accum_angle_deg
 	var gained: float = drift_accum_charge
 	state = State.NORMAL
 	drift_accum_charge = 0.0
 	drift_accum_angle_deg = 0.0
 	drift_elapsed = 0.0
 	drift_mode = ""
-	emit_signal("drift_ended", gained, success_boost)
+	# 根据完成度评级开启喷射窗口
+	# 高门槛 → 双喷资格; 低门槛 → 小喷资格; 不到 → 无窗口
+	if final_angle >= drift_min_angle_to_double:
+		boost_window_level = "double"
+		boost_window_left = boost_window_time
+		emit_signal("boost_window_opened", "double", boost_window_time)
+		print("[Car] 退漂窗口: 双喷可用 (角度=%.1f)" % final_angle)
+	elif final_angle >= drift_min_angle_to_boost:
+		boost_window_level = "mini"
+		boost_window_left = boost_window_time
+		emit_signal("boost_window_opened", "mini", boost_window_time)
+		print("[Car] 退漂窗口: 小喷可用 (角度=%.1f)" % final_angle)
+	else:
+		boost_window_level = ""
+		boost_window_left = 0.0
+		print("[Car] 退漂: 完成度不足无窗口 (角度=%.1f)" % final_angle)
+	emit_signal("drift_ended", gained, boost_window_level != "")
 	if drift_fx_node and drift_fx_node.has_method("set_drifting"):
 		drift_fx_node.set_drifting(false)
 
@@ -544,43 +568,44 @@ func angle_difference(a: float, b: float) -> float:
 #  喷射
 # ============================================================
 func _try_boost_w() -> void:
-	var now: float = Time.get_ticks_msec() / 1000.0
-
-	# 情况 A：在漂移中 → 要求累计角度足够才能退漂小喷
+	# 漂移中按 W: 立即退漂(进入窗口判定)
 	if state == State.DRIFT:
-		if drift_accum_angle_deg < drift_min_angle_to_boost:
-			print("[Car] 小喷失败: 角度不够 ", drift_accum_angle_deg, " < ", drift_min_angle_to_boost)
-			emit_signal("boost_triggered", "insufficient")
-			return
-		if charge < mini_boost_cost:
-			print("[Car] 小喷失败: 集气不够 ", charge, " < ", mini_boost_cost)
-			emit_signal("boost_triggered", "insufficient")
-			return
-		charge -= mini_boost_cost
-		_end_drift(true)
-		_start_boost("mini", mini_boost_power, mini_boost_time)
-		print("[Car] 小喷触发!")
+		_end_drift()
+		# 如果窗口立即开了, 顺势直接释放对应等级喷射
+		if boost_window_left > 0.0:
+			_consume_boost_window()
 		return
 
-	# 情况 B：正在喷射中 → 小喷尾巴接双喷(QQ飞车经典连喷)
-	if is_boosting and boost_type == "mini" and charge >= mini_boost_cost:
-		charge -= mini_boost_cost
+	# NORMAL 状态按 W: 看有没有窗口可消耗
+	if boost_window_left > 0.0:
+		_consume_boost_window()
+		return
+
+	# 既不在漂, 也没窗口 → 啥也不做(以前会用集气放喷射, 现已废弃)
+	emit_signal("boost_triggered", "insufficient")
+
+
+func _consume_boost_window() -> void:
+	if boost_window_level == "double":
 		_start_boost("double", double_boost_power, double_boost_time)
-		print("[Car] 双喷触发 (小喷中接续)!")
-		return
-
-	# 情况 C：小喷刚结束的窗口内 → 双喷
-	if now - last_mini_end_time <= double_boost_window and charge >= mini_boost_cost:
-		charge -= mini_boost_cost
-		_start_boost("double", double_boost_power, double_boost_time)
-		print("[Car] 双喷触发 (窗口内)!")
-		return
-
-	# 其它情况 (非漂移、非喷射、窗口外): 如果集气够也能直接小喷
-	if charge >= mini_boost_cost:
-		charge -= mini_boost_cost
+		print("[Car] 双喷释放!")
+	elif boost_window_level == "mini":
 		_start_boost("mini", mini_boost_power, mini_boost_time)
-		print("[Car] 普通小喷 (静态集气触发)")
+		print("[Car] 小喷释放!")
+	# 关闭窗口
+	boost_window_level = ""
+	boost_window_left = 0.0
+	emit_signal("boost_window_closed")
+
+
+func _update_boost_window(delta: float) -> void:
+	if boost_window_left <= 0.0:
+		return
+	boost_window_left -= delta
+	if boost_window_left <= 0.0:
+		boost_window_left = 0.0
+		boost_window_level = ""
+		emit_signal("boost_window_closed")
 
 
 func _try_nitro() -> void:

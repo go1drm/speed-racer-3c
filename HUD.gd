@@ -44,6 +44,9 @@ func _connect_to_car() -> void:
 	car.connect("drift_ended", _on_drift_ended)
 	car.connect("boost_triggered", _on_boost_triggered)
 	car.connect("wall_crashed", _on_wall_crashed)
+	if car.has_signal("boost_window_opened"):
+		car.connect("boost_window_opened", _on_boost_window_opened)
+		car.connect("boost_window_closed", _on_boost_window_closed)
 
 
 func _process(delta: float) -> void:
@@ -127,3 +130,19 @@ func _on_wall_crashed(lost_amount: float) -> void:
 	crash_label.text = "撞墙！集气 -%d" % int(lost_amount)
 	crash_label.modulate = Color(1.0, 0.3, 0.3, 1.0)
 	_crash_timer = 1.0
+
+
+func _on_boost_window_opened(level: String, _duration: float) -> void:
+	if level == "double":
+		boost_label.text = "按 W！双喷"
+		boost_label.modulate = Color(1.0, 0.4, 0.6, 1.0)
+	else:
+		boost_label.text = "按 W！小喷"
+		boost_label.modulate = Color(1.0, 0.85, 0.25, 1.0)
+	_boost_timer = 0.5  # 短暂显示, 因为窗口本身只有 0.4 秒
+
+
+func _on_boost_window_closed() -> void:
+	# 让提示快速消失(避免和喷射触发后的提示叠加)
+	if _boost_timer > 0.15:
+		_boost_timer = 0.15

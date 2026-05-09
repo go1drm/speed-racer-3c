@@ -28,7 +28,8 @@ const PARAMS := [
 	["drift_yaw_offset_tuck",     "甩尾yaw偏移(度)",    0.0,  60.0,  1.0],
 	["drift_yaw_offset_side",     "侧身yaw偏移(度)",    0.0,  80.0,  1.0],
 	["side_drift_threshold",      "侧身触发侧速阈值",   0.0,  8.0,   0.1],
-	["drift_min_angle_to_boost",  "退漂小喷最低累积角", 0.0,  120.0, 1.0],
+	["drift_min_angle_to_boost",  "小喷资格累积角(度)",   0.0,  120.0, 1.0],
+	["drift_min_angle_to_double", "双喷资格累积角(度)",   0.0,  180.0, 1.0],
 	["drift_max_duration",        "漂移最长持续(秒)",   1.0,  15.0,  0.5],
 	["drift_break_speed_ratio",   "低速断漂阈值倍率",   0.0,  1.0,   0.05],
 	["drift_accel_mult",          "漂移加速倍率",       0.0,  1.5,   0.05],
@@ -44,7 +45,7 @@ const PARAMS := [
 	["max_nitro_stock",           "氮气槽上限",         1,    5,     1],
 
 	["__group", "[b]喷射[/b]"],
-	["mini_boost_cost",           "小喷消耗集气",       5.0,  100.0, 1.0],
+	["mini_boost_cost",           "小喷消耗(已废弃)",   5.0,  100.0, 1.0],
 	["mini_boost_power",          "小喷推进力",         5.0,  100.0, 1.0],
 	["mini_boost_time",           "小喷持续(秒)",       0.1,  3.0,   0.05],
 	["double_boost_window",       "双喷窗口(秒)",       0.05, 2.0,   0.05],
