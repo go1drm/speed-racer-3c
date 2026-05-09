@@ -30,18 +30,20 @@ var _flames: Array[GPUParticles3D] = []
 var _drifting: bool = false
 var _timer: float = 0.0
 var _marks: Array = []
-var _shared_mark_mesh: QuadMesh = null
+var _shared_mark_mesh: PlaneMesh = null
 var _shared_mark_mat: StandardMaterial3D = null
 
 
 func _ready() -> void:
-	# 准备共享胎印资源
-	_shared_mark_mesh = QuadMesh.new()
+	# 准备共享胎印资源 (PlaneMesh 默认躺在 XZ 平面, 面朝 +Y, 正好适合做地面胎印)
+	_shared_mark_mesh = PlaneMesh.new()
 	_shared_mark_mesh.size = tire_mark_size
+
 	_shared_mark_mat = StandardMaterial3D.new()
-	_shared_mark_mat.albedo_color = Color(0.04, 0.04, 0.04, 0.92)
+	_shared_mark_mat.albedo_color = Color(0.05, 0.05, 0.05, 0.95)
 	_shared_mark_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_shared_mark_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_shared_mark_mat.render_priority = 1
 
 
 func set_car(car: RigidBody3D) -> void:
@@ -216,12 +218,11 @@ func _update_mark_fadeout(delta: float) -> void:
 
 
 func _spawn_mark_under_wheel(wheel: Node3D) -> void:
-	# 从轮子位置正下方做射线
 	var wheel_pos: Vector3 = wheel.global_position
 	var space := get_world_3d().direct_space_state
 	var q := PhysicsRayQueryParameters3D.create(
-		wheel_pos + Vector3(0, 0.5, 0),
-		wheel_pos + Vector3(0, -1.5, 0)
+		wheel_pos + Vector3(0, 1.0, 0),
+		wheel_pos + Vector3(0, -3.0, 0)
 	)
 	q.exclude = [_car_body.get_rid()]
 	var hit := space.intersect_ray(q)
@@ -233,26 +234,32 @@ func _spawn_mark_under_wheel(wheel: Node3D) -> void:
 	m.material_override = _shared_mark_mat.duplicate()
 	m.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
-	# 朝向：Y=地面法线, Z=车身前进方向投影到地面
-	var up: Vector3 = hit.normal
+	# 由于 QuadMesh 已设为 FACE_Y(平躺), 默认就在 XZ 平面上
+	# 我们只需要算一个 yaw 角度让胎印的长边沿着车身前进方向
 	var car_basis := _car_mesh.global_transform.basis
-	var fwd: Vector3 = -car_basis.z
-	fwd = fwd - up * fwd.dot(up)
-	if fwd.length() < 0.01:
-		fwd = Vector3.FORWARD
-	else:
-		fwd = fwd.normalized()
-	var right: Vector3 = up.cross(fwd).normalized()
-	fwd = right.cross(up).normalized()
+	var fwd_world: Vector3 = -car_basis.z
+	# 投影到水平面
+	fwd_world.y = 0.0
+	if fwd_world.length() < 0.001:
+		fwd_world = Vector3.FORWARD
+	fwd_world = fwd_world.normalized()
+	# yaw = 车头朝向角度
+	var yaw: float = atan2(fwd_world.x, fwd_world.z)
 
-	var basis := Basis(right, up, fwd)
-	m.global_transform = Transform3D(basis, hit.position + up * 0.05)
+	var t := Transform3D()
+	t.origin = hit.position + Vector3(0, 0.15, 0)   # 抬高 0.15m, 防 Z-fighting
+	t.basis = Basis(Vector3.UP, yaw)               # 绕 Y 轴旋转 yaw 度
+	m.global_transform = t
 
 	get_tree().current_scene.add_child(m)
 	if not permanent_marks:
 		_marks.append({"node": m, "life": tire_mark_lifetime})
+	else:
+		_marks.append({"node": m, "life": 999999.0})   # 永久也存进列表用于上限管理
 
-	# 数量上限保护（即便永久也有上限防显存爆炸）
+	if _marks.size() == 1:
+		print("[DriftFX] 第一个胎印 at world ", hit.position, " yaw=", rad_to_deg(yaw))
+
 	while _marks.size() > tire_mark_max:
 		var oldest = _marks.pop_front()
 		if is_instance_valid(oldest.node):
