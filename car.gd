@@ -60,11 +60,11 @@ extends RigidBody3D
 @export var sphere_offset: Vector3 = Vector3.DOWN
 
 # ---------------- 节点 ----------------
-@onready var car_mesh: Node3D = $CarMesh
-@onready var body_mesh: Node3D = $CarMesh/suv2
-@onready var ground_ray: RayCast3D = $CarMesh/RayCast3D
-@onready var right_wheel: Node3D = $CarMesh/suv2/wheel_frontRight
-@onready var left_wheel: Node3D = $CarMesh/suv2/wheel_frontLeft
+@onready var car_mesh: Node3D = get_node_or_null("CarMesh")
+@onready var body_mesh: Node3D = get_node_or_null("CarMesh/suv2")
+@onready var ground_ray: RayCast3D = get_node_or_null("CarMesh/RayCast3D")
+@onready var right_wheel: Node3D = get_node_or_null("CarMesh/suv2/wheel_frontRight")
+@onready var left_wheel: Node3D = get_node_or_null("CarMesh/suv2/wheel_frontLeft")
 
 @export var auto_spawn_hud: bool = true
 @export var hud_scene: PackedScene = preload("res://HUD.tscn")
@@ -120,6 +120,28 @@ var _initial_recorded: bool = false
 #  Lifecycle
 # ============================================================
 func _ready() -> void:
+	# ========== 诊断: 打印所有关键节点状态 ==========
+	print("[Car] ===== 启动诊断 =====")
+	print("[Car] car_mesh     : ", car_mesh,     " (期望非空)")
+	print("[Car] body_mesh    : ", body_mesh,    " (期望非空, 路径 CarMesh/suv2)")
+	print("[Car] ground_ray   : ", ground_ray,   " (期望非空)")
+	print("[Car] right_wheel  : ", right_wheel)
+	print("[Car] left_wheel   : ", left_wheel)
+	if car_mesh:
+		print("[Car] CarMesh 的所有子节点:")
+		for c in car_mesh.get_children():
+			print("       - ", c.name, " (", c.get_class(), ")")
+	print("[Car] ===================")
+
+	# 如果关键节点缺失, 至少把 Tuner 和 HUD 起来, 方便诊断/调整
+	if not car_mesh or not body_mesh:
+		push_error("[Car] 关键节点缺失! 车辆控制禁用, 但会启动 Tuner/HUD 以便诊断。")
+		if auto_spawn_hud and hud_scene:
+			call_deferred("_spawn_hud")
+		if auto_spawn_tuner and tuner_scene:
+			call_deferred("_spawn_tuner")
+		return
+
 	contact_monitor = true
 	max_contacts_reported = 4
 	body_entered.connect(_on_body_entered)
@@ -222,12 +244,14 @@ func _spawn_tuner() -> void:
 #  主循环
 # ============================================================
 func _physics_process(delta: float) -> void:
+	if not car_mesh or not body_mesh:
+		return
 	_read_input()
 	_update_boost_timer(delta)
 
 	car_mesh.position = position + sphere_offset
 
-	if ground_ray.is_colliding():
+	if ground_ray and ground_ray.is_colliding():
 		_apply_drive_force(delta)
 		_apply_lateral_friction(delta)
 
@@ -321,13 +345,16 @@ func _apply_lateral_friction(delta: float) -> void:
 #  视觉 + 车头朝向 (含高速转向衰减)
 # ============================================================
 func _update_visuals(delta: float) -> void:
+	if not car_mesh or not body_mesh:
+		return
 	if linear_velocity.length() < turn_stop_limit:
 		prev_yaw = car_mesh.rotation.y
 		return
 
-	var wheel_turn: float = deg_to_rad(steering_deg) * steer_input
-	right_wheel.rotation.y = wheel_turn
-	left_wheel.rotation.y = wheel_turn
+	if right_wheel and left_wheel:
+		var wheel_turn: float = deg_to_rad(steering_deg) * steer_input
+		right_wheel.rotation.y = wheel_turn
+		left_wheel.rotation.y = wheel_turn
 
 	# 【关键】高速转向衰减：速度越快，转向响应越慢
 	var speed: float = linear_velocity.length()
