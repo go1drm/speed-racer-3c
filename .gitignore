@@ -15,6 +15,9 @@ export_presets.cfg
 *.bak
 *.swp
 *~
+*.log
+run_stdout.log
+run_stderr.log
 
 # ===== 操作系统 =====
 Thumbs.db

@@ -57,6 +57,7 @@ extends RigidBody3D
 @export_group("Visual")
 @export var body_tilt: float = 28.0                  ## 过弯侧倾对速度的敏感度(越大越迟钝)
 @export var body_tilt_max_deg: float = 12.0          ## 过弯车身最大侧倾角(度) - 防侧翻
+@export var head_yaw_deg: float = 4.0                ## 非漂移时车头左右"拧头"幅度(度)
 @export var sphere_offset: Vector3 = Vector3.DOWN
 
 # ---------------- 节点 ----------------
@@ -120,22 +121,11 @@ var _initial_recorded: bool = false
 #  Lifecycle
 # ============================================================
 func _ready() -> void:
-	# ========== 诊断: 打印所有关键节点状态 ==========
-	print("[Car] ===== 启动诊断 =====")
-	print("[Car] car_mesh     : ", car_mesh,     " (期望非空)")
-	print("[Car] body_mesh    : ", body_mesh,    " (期望非空, 路径 CarMesh/suv2)")
-	print("[Car] ground_ray   : ", ground_ray,   " (期望非空)")
-	print("[Car] right_wheel  : ", right_wheel)
-	print("[Car] left_wheel   : ", left_wheel)
-	if car_mesh:
-		print("[Car] CarMesh 的所有子节点:")
-		for c in car_mesh.get_children():
-			print("       - ", c.name, " (", c.get_class(), ")")
-	print("[Car] ===================")
-
 	# 如果关键节点缺失, 至少把 Tuner 和 HUD 起来, 方便诊断/调整
 	if not car_mesh or not body_mesh:
 		push_error("[Car] 关键节点缺失! 车辆控制禁用, 但会启动 Tuner/HUD 以便诊断。")
+		if car_mesh:
+			print("[Car] CarMesh 子节点: ", car_mesh.get_children())
 		if auto_spawn_hud and hud_scene:
 			call_deferred("_spawn_hud")
 		if auto_spawn_tuner and tuner_scene:
@@ -147,10 +137,9 @@ func _ready() -> void:
 	body_entered.connect(_on_body_entered)
 
 	# 记录 CarMesh 的初始位置和朝向(由 glb/tscn 设置, 代表美术摆好的出生点)
-	if car_mesh:
-		_initial_car_mesh_basis = car_mesh.global_transform.basis
-		_initial_car_mesh_position = car_mesh.global_position
-		_initial_recorded = true
+	_initial_car_mesh_basis = car_mesh.global_transform.basis
+	_initial_car_mesh_position = car_mesh.global_position
+	_initial_recorded = true
 
 	# 出生时: 直接把刚体对齐到 CarMesh 的位置(你在编辑器里调好的位置)
 	call_deferred("_snap_to_car_mesh_origin")
