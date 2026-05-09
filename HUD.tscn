@@ -1,4 +1,4 @@
-[gd_scene load_steps=4 format=3 uid="uid://dhud0qqcar01"]
+[gd_scene load_steps=4 format=3 uid="uid://dhud0qqcar02"]
 
 [ext_resource type="Script" path="res://HUD.gd" id="1_hud"]
 
@@ -38,7 +38,7 @@ anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = -240.0
-offset_top = -140.0
+offset_top = -160.0
 offset_right = -30.0
 offset_bottom = -30.0
 grow_horizontal = 0
@@ -49,7 +49,7 @@ alignment = 2
 layout_mode = 2
 theme_override_font_sizes/font_size = 84
 theme_override_colors/font_color = Color(1, 1, 1, 1)
-theme_override_colors/font_outline_color = Color(0, 0, 0, 0.8)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.85)
 theme_override_constants/outline_size = 6
 text = "0"
 horizontal_alignment = 2
@@ -58,12 +58,12 @@ horizontal_alignment = 2
 layout_mode = 2
 theme_override_font_sizes/font_size = 20
 theme_override_colors/font_color = Color(1, 0.85, 0.3, 1)
-theme_override_colors/font_outline_color = Color(0, 0, 0, 0.8)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.85)
 theme_override_constants/outline_size = 4
 text = "KM/H"
 horizontal_alignment = 2
 
-; ============ 蓄力槽（底部中间）============
+; ============ 集气槽 + 氮气双格（底部中间）============
 [node name="ChargeBox" type="VBoxContainer" parent="Root"]
 layout_mode = 1
 anchors_preset = 7
@@ -71,15 +71,31 @@ anchor_left = 0.5
 anchor_top = 1.0
 anchor_right = 0.5
 anchor_bottom = 1.0
-offset_left = -180.0
-offset_top = -70.0
-offset_right = 180.0
+offset_left = -200.0
+offset_top = -110.0
+offset_right = 200.0
 offset_bottom = -30.0
 grow_horizontal = 2
 grow_vertical = 0
+theme_override_constants/separation = 8
+
+[node name="NitroRow" type="HBoxContainer" parent="Root/ChargeBox"]
+layout_mode = 2
+alignment = 1
+theme_override_constants/separation = 12
+
+[node name="Slot1" type="ColorRect" parent="Root/ChargeBox/NitroRow"]
+custom_minimum_size = Vector2(120, 22)
+layout_mode = 2
+color = Color(0.22, 0.22, 0.28, 0.85)
+
+[node name="Slot2" type="ColorRect" parent="Root/ChargeBox/NitroRow"]
+custom_minimum_size = Vector2(120, 22)
+layout_mode = 2
+color = Color(0.22, 0.22, 0.28, 0.85)
 
 [node name="ChargeBar" type="ProgressBar" parent="Root/ChargeBox"]
-custom_minimum_size = Vector2(0, 20)
+custom_minimum_size = Vector2(0, 18)
 layout_mode = 2
 theme_override_styles/background = SubResource("SBFlatBG")
 theme_override_styles/fill = SubResource("SBFlatFill")
@@ -90,12 +106,12 @@ show_percentage = false
 layout_mode = 2
 theme_override_font_sizes/font_size = 14
 theme_override_colors/font_color = Color(1, 1, 1, 0.85)
-theme_override_colors/font_outline_color = Color(0, 0, 0, 0.8)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.85)
 theme_override_constants/outline_size = 3
 text = "0 / 100"
 horizontal_alignment = 1
 
-; ============ 漂移提示（上方居中）============
+; ============ 漂移提示 ============
 [node name="DriftLabel" type="Label" parent="Root"]
 layout_mode = 1
 anchors_preset = 5
@@ -112,42 +128,60 @@ theme_override_constants/outline_size = 6
 text = ""
 horizontal_alignment = 1
 
-; ============ 喷射提示（上方居中，偏下）============
+; ============ 喷射提示 ============
 [node name="BoostLabel" type="Label" parent="Root"]
 layout_mode = 1
 anchors_preset = 5
 anchor_left = 0.5
 anchor_right = 0.5
-offset_left = -250.0
+offset_left = -260.0
 offset_top = 130.0
-offset_right = 250.0
-offset_bottom = 200.0
+offset_right = 260.0
+offset_bottom = 210.0
 grow_horizontal = 2
-theme_override_font_sizes/font_size = 58
+theme_override_font_sizes/font_size = 60
 theme_override_colors/font_outline_color = Color(0, 0, 0, 0.9)
 theme_override_constants/outline_size = 8
 text = ""
 horizontal_alignment = 1
 
-; ============ 操作提示（左下）============
+; ============ 撞墙提示 ============
+[node name="CrashLabel" type="Label" parent="Root"]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -180.0
+offset_top = 220.0
+offset_right = 180.0
+offset_bottom = 270.0
+grow_horizontal = 2
+theme_override_font_sizes/font_size = 28
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.9)
+theme_override_constants/outline_size = 5
+text = ""
+horizontal_alignment = 1
+
+; ============ 操作提示 ============
 [node name="HelpLabel" type="Label" parent="Root"]
 layout_mode = 1
 anchors_preset = 2
 anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 20.0
-offset_top = -160.0
-offset_right = 340.0
+offset_top = -180.0
+offset_right = 360.0
 offset_bottom = -20.0
 grow_vertical = 0
 theme_override_font_sizes/font_size = 16
-theme_override_colors/font_color = Color(1, 1, 1, 0.75)
-theme_override_colors/font_outline_color = Color(0, 0, 0, 0.8)
+theme_override_colors/font_color = Color(1, 1, 1, 0.78)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.85)
 theme_override_constants/outline_size = 3
-text = "W/S  加速 / 刹车
-A/D  转向
-Shift  漂移（进弯后按住）
-Space  氮气（蓄满 100）
+text = "↑↓  加速 / 刹车
+←→  左右转向
+Q   漂移（按住）
+W   小喷（消耗 35 集气）
+E   氮气（消耗 1 格）
 
-小喷：漂移后自动触发
-双喷：小喷结束 0.35s 内再漂"
+双喷：小喷结束 0.35s 内再按 W
+撞墙：当前漂移集气 -80%"
