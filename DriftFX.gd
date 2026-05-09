@@ -8,8 +8,10 @@ extends Node3D
 @export var permanent_marks: bool = true            ## 永久胎印(不会淡出/不会被回收)
 @export var tire_mark_lifetime: float = 6.0         ## 非永久模式下的胎印寿命
 @export var tire_mark_interval: float = 0.025       ## 放置间隔(秒)
-@export var tire_mark_size: Vector2 = Vector2(0.45, 0.7)
-@export var tire_mark_max: int = 1500               ## 上限(防爆显存; 永久模式下也兜底)
+@export var tire_mark_size: Vector2 = Vector2(0.18, 0.35)  ## 胎印宽×长(米)
+@export var tire_mark_max: int = 1500               ## 上限(防爆显存)
+@export var tire_mark_only_rear: bool = true        ## 只有后轮才留胎印
+@export var tire_mark_texture: Texture2D = preload("res://assets/fx/tire_mark.png")
 
 # ---------------- 轮胎发光 ----------------
 @export_group("Wheel Glow")
@@ -40,10 +42,15 @@ func _ready() -> void:
 	_shared_mark_mesh.size = tire_mark_size
 
 	_shared_mark_mat = StandardMaterial3D.new()
-	_shared_mark_mat.albedo_color = Color(0.05, 0.05, 0.05, 0.95)
+	# 用生成的贴图作为 albedo, 自带透明通道
+	if tire_mark_texture:
+		_shared_mark_mat.albedo_texture = tire_mark_texture
+	_shared_mark_mat.albedo_color = Color(1, 1, 1, 1)
 	_shared_mark_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_shared_mark_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_shared_mark_mat.render_priority = 1
+	# 关闭背面剔除, 防止从下方/斜角看不到
+	_shared_mark_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 
 
 func set_car(car: RigidBody3D) -> void:
@@ -195,10 +202,16 @@ func _process(delta: float) -> void:
 	if _timer > 0.0:
 		return
 	_timer = tire_mark_interval
-	# 4 个轮子各放一个（前轮也漂移甩出胎印更真实）
-	for w in _wheels:
-		if w:
-			_spawn_mark_under_wheel(w)
+	# _wheels 顺序: [0]=前左, [1]=前右, [2]=后左, [3]=后右
+	# 只有后轮才留胎印（前轮一般是导向轮, 不做驱动打滑）
+	var indices_to_mark: Array
+	if tire_mark_only_rear:
+		indices_to_mark = [2, 3]
+	else:
+		indices_to_mark = [0, 1, 2, 3]
+	for i in indices_to_mark:
+		if i < _wheels.size() and _wheels[i]:
+			_spawn_mark_under_wheel(_wheels[i])
 
 
 func _update_mark_fadeout(delta: float) -> void:
@@ -231,7 +244,11 @@ func _spawn_mark_under_wheel(wheel: Node3D) -> void:
 
 	var m := MeshInstance3D.new()
 	m.mesh = _shared_mark_mesh
-	m.material_override = _shared_mark_mat.duplicate()
+	# 永久模式下共享同一个材质 (省显存); 非永久模式需要 duplicate 才能独立淡出 alpha
+	if permanent_marks:
+		m.material_override = _shared_mark_mat
+	else:
+		m.material_override = _shared_mark_mat.duplicate()
 	m.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 	# 由于 QuadMesh 已设为 FACE_Y(平躺), 默认就在 XZ 平面上

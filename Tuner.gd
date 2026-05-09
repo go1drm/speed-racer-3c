@@ -63,6 +63,7 @@ const PARAMS := [
 # 漂移特效相关参数（独立放, 因为目标对象是 DriftFX 不是 car）
 const FX_PARAMS := [
 	["permanent_marks",           "胎印永久(0=会淡出 1=永久)", 0, 1, 1],
+	["tire_mark_only_rear",       "只有后轮留胎印(0=四轮 1=仅后轮)", 0, 1, 1],
 	["tire_mark_lifetime",        "胎印淡出时长(秒)",          1.0,  30.0, 0.5],
 	["tire_mark_interval",        "胎印放置间隔(秒)",          0.01, 0.2,  0.005],
 	["glow_energy",               "轮胎发光强度",              0.0,  20.0, 0.5],
