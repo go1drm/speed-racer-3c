@@ -30,6 +30,10 @@ const PARAMS := [
 	["side_drift_threshold",      "侧身触发侧速阈值",   0.0,  8.0,   0.1],
 	["drift_min_angle_to_boost",  "退漂小喷最低累积角", 0.0,  120.0, 1.0],
 	["drift_max_duration",        "漂移最长持续(秒)",   1.0,  15.0,  0.5],
+	["drift_break_speed_ratio",   "低速断漂阈值倍率",   0.0,  1.0,   0.05],
+	["drift_accel_mult",          "漂移加速倍率",       0.0,  1.5,   0.05],
+	["drift_passive_decel",       "漂移被动减速力",     0.0,  30.0,  0.5],
+	["drift_counter_steer_break_time", "反打断漂秒数",  0.05, 1.5,   0.05],
 
 	["__group", "[b]集气公式[/b]"],
 	["charge_nitro_full",         "一格氮气=多少集气",  20.0, 300.0, 5.0],

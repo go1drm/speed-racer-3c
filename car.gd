@@ -32,6 +32,9 @@ extends RigidBody3D
 @export var drift_min_angle_to_boost: float = 15.0  ## 退漂小喷最低累积角度(度)
 @export var drift_max_duration: float = 5.0          ## 漂移最长时间 (防一直漂)
 @export var drift_break_speed_ratio: float = 0.5     ## 速度低于 drift_min_speed * 此值时自动断漂
+@export var drift_accel_mult: float = 0.35           ## 漂移时油门加速力倍率 (越小越减速感)
+@export var drift_passive_decel: float = 8.0        ## 漂移时被动减速力 (模拟打滑能耗)
+@export var drift_counter_steer_break_time: float = 0.25  ## 反向打方向超过此时长(秒)断漂
 
 # ---------------- 集气公式参数 ----------------
 @export_group("Charge Formula")
@@ -106,6 +109,7 @@ var drift_yaw_offset: float = 0.0
 var drift_accum_charge: float = 0.0
 var drift_accum_angle_deg: float = 0.0      # 漂移累计车头转过的角度(度)
 var drift_elapsed: float = 0.0              # 漂移已持续时间
+var drift_counter_steer_time: float = 0.0   # 反向打方向已持续时间
 var prev_yaw: float = 0.0
 
 # 氮气槽
@@ -330,9 +334,12 @@ func _apply_drive_force(_delta: float) -> void:
 	var current_speed: float = linear_velocity.dot(forward)
 	var speed_cap: float = max_speed * (boost_speed_multiplier if is_boosting else 1.0)
 
+	# 漂移中: 油门加速被大幅削弱, 而且额外有被动减速力 (模拟轮胎打滑能量损失)
+	var accel_mult: float = drift_accel_mult if state == State.DRIFT else 1.0
+
 	if throttle_input > 0.01:
 		if current_speed < speed_cap:
-			apply_central_force(forward * acceleration * throttle_input * mass)
+			apply_central_force(forward * acceleration * throttle_input * accel_mult * mass)
 	elif throttle_input < -0.01:
 		apply_central_force(forward * brake_force * throttle_input * mass)
 	else:
@@ -340,15 +347,18 @@ func _apply_drive_force(_delta: float) -> void:
 		if fwd_vel.length() > 0.1:
 			apply_central_force(-fwd_vel.normalized() * natural_decel * mass)
 
-	# 【修复】喷射推力沿"当前实际速度方向"施加, 而不是车头朝向
-	# 这样漂移或侧滑时喷射不会把车推向奇怪方向导致翻车
+	# 漂移时持续被动减速(QQ飞车经典手感)
+	if state == State.DRIFT and current_speed > 0.5:
+		apply_central_force(-forward * drift_passive_decel * mass)
+
+	# 喷射推力沿当前速度方向施加(防侧翻)
 	if is_boosting:
 		var vel_dir: Vector3 = linear_velocity
-		vel_dir.y = 0.0   # 只要水平方向, 防止上飞
+		vel_dir.y = 0.0
 		if vel_dir.length() > 1.0:
 			vel_dir = vel_dir.normalized()
 		else:
-			vel_dir = forward   # 速度太低时退化为车头方向
+			vel_dir = forward
 		apply_central_force(vel_dir * boost_power * mass)
 
 

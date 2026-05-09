@@ -115,10 +115,10 @@ func _build_flame_particle() -> GPUParticles3D:
 	p.emitting = false
 	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
-	# 火焰 mesh
+	# 火焰 mesh (尺寸是之前的 30%)
 	var sm := SphereMesh.new()
-	sm.radius = 0.18
-	sm.height = 0.36
+	sm.radius = 0.054
+	sm.height = 0.108
 	p.draw_pass_1 = sm
 
 	# 发光材质
@@ -132,17 +132,17 @@ func _build_flame_particle() -> GPUParticles3D:
 	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 	p.material_override = mat
 
-	# 粒子运动
+	# 粒子运动 (速度也缩 30%)
 	var proc := ParticleProcessMaterial.new()
 	proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
-	proc.emission_sphere_radius = 0.1
-	proc.direction = Vector3(0, 0.6, 1)         # 往后上方喷
+	proc.emission_sphere_radius = 0.03
+	proc.direction = Vector3(0, 0.6, 1)
 	proc.spread = 25.0
-	proc.initial_velocity_min = 3.0
-	proc.initial_velocity_max = 6.0
-	proc.gravity = Vector3(0, -2, 0)
-	proc.scale_min = 0.6
-	proc.scale_max = 1.5
+	proc.initial_velocity_min = 0.9
+	proc.initial_velocity_max = 1.8
+	proc.gravity = Vector3(0, -0.6, 0)
+	proc.scale_min = 0.18
+	proc.scale_max = 0.45
 	proc.color = Color(1.0, 0.6, 0.15, 1)
 	proc.hue_variation_min = -0.08
 	proc.hue_variation_max = 0.1
