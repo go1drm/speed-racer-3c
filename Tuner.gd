@@ -56,6 +56,14 @@ const PARAMS := [
 	["head_yaw_deg",              "车头左右拧头幅度(度)",      0.0,  20.0,  0.5],
 ]
 
+# 漂移特效相关参数（独立放, 因为目标对象是 DriftFX 不是 car）
+const FX_PARAMS := [
+	["permanent_marks",           "胎印永久(0=会淡出 1=永久)", 0, 1, 1],
+	["tire_mark_lifetime",        "胎印淡出时长(秒)",          1.0,  30.0, 0.5],
+	["tire_mark_interval",        "胎印放置间隔(秒)",          0.01, 0.2,  0.005],
+	["glow_energy",               "轮胎发光强度",              0.0,  20.0, 0.5],
+]
+
 const SAVE_PATH := "user://tune.cfg"
 
 
@@ -90,8 +98,52 @@ func _bind_car() -> void:
 		if _rows.has(prop):
 			_rows[prop].slider.set_value_no_signal(float(v))
 			_rows[prop].spin.set_value_no_signal(float(v))
-	# 自动加载保存的配置（如果有）
+
+	# 同样加载 FX 参数默认值
+	var fx = _get_drift_fx()
+	if fx:
+		for p in FX_PARAMS:
+			var prop: String = p[0]
+			if not prop in fx:
+				continue
+			var v = fx.get(prop)
+			_defaults[prop] = v
+			if _rows.has(prop):
+				_rows[prop].slider.set_value_no_signal(float(v))
+				_rows[prop].spin.set_value_no_signal(float(v))
+
 	_load_from_file()
+
+
+func _get_drift_fx() -> Node:
+	if not car:
+		return null
+	for c in car.get_children():
+		if c.name == "DriftFX" or c.get_script() and str(c.get_script().resource_path).ends_with("DriftFX.gd"):
+			return c
+	return null
+
+
+func _apply_fx(prop: String, v: float) -> void:
+	var fx = _get_drift_fx()
+	if not fx:
+		return
+	if not prop in fx:
+		return
+	var current = fx.get(prop)
+	if typeof(current) == TYPE_INT:
+		fx.set(prop, int(round(v)))
+	elif typeof(current) == TYPE_BOOL:
+		fx.set(prop, v >= 0.5)
+	else:
+		fx.set(prop, v)
+
+
+func _on_clear_marks() -> void:
+	var fx = _get_drift_fx()
+	if fx and fx.has_method("clear_all_marks"):
+		fx.clear_all_marks()
+		print("[Tuner] 已清除所有胎印")
 
 
 # ============================================================
@@ -173,6 +225,11 @@ func _build_ui() -> void:
 			continue
 		_add_param_row(list, p[0], p[1], p[2], p[3], p[4])
 
+	# 漂移特效参数（目标是 DriftFX, 用 _apply_fx 单独处理）
+	_add_group_header(list, "[b]漂移特效[/b]")
+	for p in FX_PARAMS:
+		_add_param_row(list, p[0], p[1], p[2], p[3], p[4], true)
+
 
 func _add_group_header(parent: Node, title_text: String) -> void:
 	var sep := HSeparator.new()
@@ -186,7 +243,7 @@ func _add_group_header(parent: Node, title_text: String) -> void:
 	parent.add_child(lbl)
 
 
-func _add_param_row(parent: Node, prop: String, label_text: String, vmin: float, vmax: float, step: float) -> void:
+func _add_param_row(parent: Node, prop: String, label_text: String, vmin: float, vmax: float, step: float, is_fx: bool = false) -> void:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
 	parent.add_child(row)
@@ -216,14 +273,20 @@ func _add_param_row(parent: Node, prop: String, label_text: String, vmin: float,
 	# 双向绑定
 	slider.value_changed.connect(func(v: float) -> void:
 		spin.set_value_no_signal(v)
-		_apply(prop, v)
+		if is_fx:
+			_apply_fx(prop, v)
+		else:
+			_apply(prop, v)
 	)
 	spin.value_changed.connect(func(v: float) -> void:
 		slider.set_value_no_signal(v)
-		_apply(prop, v)
+		if is_fx:
+			_apply_fx(prop, v)
+		else:
+			_apply(prop, v)
 	)
 
-	_rows[prop] = {"slider": slider, "spin": spin}
+	_rows[prop] = {"slider": slider, "spin": spin, "is_fx": is_fx}
 
 
 # ============================================================

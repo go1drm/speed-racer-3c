@@ -1,57 +1,6 @@
-[gd_scene load_steps=6 format=3 uid="uid://ddriftfxcar03"]
+[gd_scene load_steps=2 format=3 uid="uid://ddriftfxcar04"]
 
 [ext_resource type="Script" path="res://DriftFX.gd" id="1_drift"]
 
-[sub_resource type="SphereMesh" id="FlameMesh"]
-radius = 0.3
-height = 0.6
-
-[sub_resource type="StandardMaterial3D" id="FlameMat"]
-shading_mode = 0
-vertex_color_use_as_albedo = true
-albedo_color = Color(1.0, 0.6, 0.1, 1)
-emission_enabled = true
-emission = Color(1.0, 0.35, 0.0, 1)
-emission_energy_multiplier = 10.0
-blend_mode = 1
-cull_mode = 2
-disable_receive_shadows = true
-
-[sub_resource type="ParticleProcessMaterial" id="FlameProc"]
-emission_shape = 1
-emission_sphere_radius = 0.25
-direction = Vector3(0, 0.6, 1)
-spread = 30.0
-initial_velocity_min = 4.0
-initial_velocity_max = 8.0
-gravity = Vector3(0, -2, 0)
-scale_min = 1.2
-scale_max = 2.5
-color = Color(1.0, 0.6, 0.15, 1)
-hue_variation_min = -0.08
-hue_variation_max = 0.12
-
 [node name="DriftFX" type="Node3D"]
 script = ExtResource("1_drift")
-
-[node name="FlameLeft" type="GPUParticles3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.6, 0.4, 0.9)
-cast_shadow = 0
-amount = 80
-lifetime = 0.6
-preprocess = 0.0
-emitting = false
-process_material = SubResource("FlameProc")
-draw_pass_1 = SubResource("FlameMesh")
-material_override = SubResource("FlameMat")
-
-[node name="FlameRight" type="GPUParticles3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.6, 0.4, 0.9)
-cast_shadow = 0
-amount = 80
-lifetime = 0.6
-preprocess = 0.0
-emitting = false
-process_material = SubResource("FlameProc")
-draw_pass_1 = SubResource("FlameMesh")
-material_override = SubResource("FlameMat")

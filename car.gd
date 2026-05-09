@@ -72,6 +72,7 @@ extends RigidBody3D
 @export var auto_spawn_hud: bool = true
 @export var hud_scene: PackedScene = preload("res://HUD.tscn")
 @export var fx_scene: PackedScene = preload("res://BoostFX.tscn")
+@export var drift_fx_scene: PackedScene = preload("res://DriftFX.tscn")
 @export var tuner_scene: PackedScene = preload("res://Tuner.tscn")
 @export var auto_spawn_tuner: bool = true
 
@@ -157,6 +158,9 @@ func _ready() -> void:
 	if fx_scene:
 		fx_node = fx_scene.instantiate()
 		call_deferred("_attach_fx")
+	if drift_fx_scene:
+		drift_fx_node = drift_fx_scene.instantiate()
+		call_deferred("_attach_drift_fx")
 
 
 func _snap_to_car_mesh_origin() -> void:
@@ -219,11 +223,11 @@ func _attach_drift_fx() -> void:
 	if not drift_fx_node:
 		print("[Car] drift_fx_node 是 null, 跳过挂接")
 		return
-	# 挂在场景根(不是 CarMesh 下), 由 DriftFX 自己跟踪车身位置
-	get_tree().current_scene.add_child(drift_fx_node)
+	# 挂在 car 节点下作为子节点 (DriftFX 内部会自己找轮子)
+	add_child(drift_fx_node)
 	if drift_fx_node.has_method("set_car"):
 		drift_fx_node.set_car(self)
-	print("[Car] DriftFX 已挂载到场景根, 有 CarMesh 子节点吗? ", has_node("CarMesh"))
+	print("[Car] DriftFX 已挂载")
 
 
 func _spawn_hud() -> void:
@@ -242,7 +246,7 @@ func _spawn_tuner() -> void:
 	var tuner: CanvasLayer = tuner_scene.instantiate()
 	tuner.name = "Tuner"
 	get_tree().current_scene.add_child(tuner)
-	tuner.car_path = tuner.get_path_to(self)
+	tuner.set("car_path", tuner.get_path_to(self))
 	tuner.call_deferred("_bind_car")
 
 
