@@ -113,6 +113,7 @@ var fx_node: Node3D = null
 
 # 初始朝向(由 _ready 记录, 用于复位时恢复)
 var _initial_car_mesh_basis: Basis = Basis.IDENTITY
+var _initial_car_mesh_position: Vector3 = Vector3.ZERO
 var _initial_recorded: bool = false
 
 # ============================================================
@@ -123,13 +124,14 @@ func _ready() -> void:
 	max_contacts_reported = 4
 	body_entered.connect(_on_body_entered)
 
-	# 记录 CarMesh 的初始朝向(由 glb/tscn 设置, 代表赛道起点的车头方向)
+	# 记录 CarMesh 的初始位置和朝向(由 glb/tscn 设置, 代表美术摆好的出生点)
 	if car_mesh:
 		_initial_car_mesh_basis = car_mesh.global_transform.basis
+		_initial_car_mesh_position = car_mesh.global_position
 		_initial_recorded = true
 
-	# 出生时自动寻找地面，防止卡进地图
-	call_deferred("_auto_place_on_ground")
+	# 出生时: 直接把刚体对齐到 CarMesh 的位置(你在编辑器里调好的位置)
+	call_deferred("_snap_to_car_mesh_origin")
 
 	if auto_spawn_hud and hud_scene:
 		call_deferred("_spawn_hud")
@@ -138,6 +140,19 @@ func _ready() -> void:
 	if fx_scene:
 		fx_node = fx_scene.instantiate()
 		call_deferred("_attach_fx")
+
+
+func _snap_to_car_mesh_origin() -> void:
+	# 刚体位置 = CarMesh 位置 - sphere_offset (因为之后 _physics_process 里会做 car_mesh.pos = pos + sphere_offset)
+	if not _initial_recorded:
+		return
+	global_position = _initial_car_mesh_position - sphere_offset
+	linear_velocity = Vector3.ZERO
+	angular_velocity = Vector3.ZERO
+	# CarMesh 的位置和朝向保持原样, 不需要动
+	if body_mesh:
+		body_mesh.rotation = Vector3.ZERO
+	print("[Car] 出生点对齐到 CarMesh 位置: ", _initial_car_mesh_position)
 
 
 func _auto_place_on_ground() -> void:
@@ -246,11 +261,30 @@ func _read_input() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	# R 键复位（用 _unhandled_input 避免被 UI 吃掉）
+	# R 键复位到初始出生点（回到你在编辑器里调好的 CarMesh 位置）
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_R or event.physical_keycode == KEY_R:
-			_auto_place_on_ground()
+			_reset_to_origin()
 			get_viewport().set_input_as_handled()
+
+
+func _reset_to_origin() -> void:
+	if not _initial_recorded:
+		_auto_place_on_ground()
+		return
+	global_position = _initial_car_mesh_position - sphere_offset
+	linear_velocity = Vector3.ZERO
+	angular_velocity = Vector3.ZERO
+	if car_mesh:
+		car_mesh.global_position = _initial_car_mesh_position
+		car_mesh.global_transform.basis = _initial_car_mesh_basis
+	if body_mesh:
+		body_mesh.rotation = Vector3.ZERO
+	# 退出漂移/喷射状态
+	state = State.NORMAL
+	is_boosting = false
+	boost_time_left = 0.0
+	print("[Car] 已复位到出生点")
 
 
 # ============================================================
