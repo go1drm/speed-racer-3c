@@ -111,6 +111,9 @@ var nitro_stock: int = 0
 # 特效
 var fx_node: Node3D = null
 
+# 其它
+var _r_prev: bool = false   # R 键上一帧状态
+
 # ============================================================
 #  Lifecycle
 # ============================================================
@@ -119,6 +122,9 @@ func _ready() -> void:
 	max_contacts_reported = 4
 	body_entered.connect(_on_body_entered)
 
+	# 出生时自动寻找地面，防止卡进地图
+	call_deferred("_auto_place_on_ground")
+
 	if auto_spawn_hud and hud_scene:
 		call_deferred("_spawn_hud")
 	if auto_spawn_tuner and tuner_scene:
@@ -126,6 +132,24 @@ func _ready() -> void:
 	if fx_scene:
 		fx_node = fx_scene.instantiate()
 		call_deferred("_attach_fx")
+
+
+func _auto_place_on_ground() -> void:
+	# 从当前 X/Z 位置上方 500 米处往下射线，落到第一块碰撞体上方 2 米
+	var from: Vector3 = Vector3(global_position.x, global_position.y + 500.0, global_position.z)
+	var to:   Vector3 = Vector3(global_position.x, global_position.y - 500.0, global_position.z)
+	var space := get_world_3d().direct_space_state
+	var query := PhysicsRayQueryParameters3D.create(from, to)
+	query.exclude = [self.get_rid()]
+	var hit := space.intersect_ray(query)
+	if hit.is_empty():
+		push_warning("Car: 出生点正下方找不到地面，保持原位")
+		return
+	# 落在命中点上方 2 米，清零速度
+	global_position = hit.position + Vector3(0, 2.0, 0)
+	linear_velocity = Vector3.ZERO
+	angular_velocity = Vector3.ZERO
+	print("[Car] 出生点已校正到: ", global_position)
 
 
 func _attach_fx() -> void:
@@ -194,6 +218,14 @@ func _read_input() -> void:
 	# E 氮气
 	if Input.is_action_just_pressed("nitro"):
 		_try_nitro()
+
+	# R 复位（掉下赛道/翻车时按）
+	if Input.is_physical_key_pressed(KEY_R) and not _r_prev:
+		_auto_place_on_ground()
+		# 同时重置车头朝向
+		car_mesh.global_rotation = Vector3.ZERO
+		body_mesh.rotation = Vector3.ZERO
+	_r_prev = Input.is_physical_key_pressed(KEY_R)
 
 
 # ============================================================
