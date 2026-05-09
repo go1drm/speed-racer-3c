@@ -30,7 +30,7 @@ transform = Transform3D(-0.866023, -0.433016, 0.250001, 0, 0.499998, 0.866027, -
 shadow_enabled = true
 
 [node name="mergedBlocks(Clone)" parent="." index="2"]
-transform = Transform3D(7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0, 0)
+transform = Transform3D(28, 0, 0, 0, 28, 0, 0, 0, 28, 0, 0, 0)
 
 [node name="StaticBody3D" type="StaticBody3D" parent="mergedBlocks(Clone)" index="0"]
 
@@ -38,7 +38,7 @@ transform = Transform3D(7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0, 0)
 shape = SubResource("ConcavePolygonShape3D_slpey")
 
 [node name="Car" parent="." index="3" instance=ExtResource("2_sl2w6")]
-transform = Transform3D(0.998097, 0, 0.0616583, 0, 1, 0, -0.0616584, 0, 0.998097, 0, 8.21748, 21.26496)
+transform = Transform3D(0.998097, 0, 0.0616583, 0, 1, 0, -0.0616584, 0, 0.998097, 0, 32.86992, 85.05984)
 
 [node name="CarMesh" parent="Car" index="1"]
 transform = Transform3D(0.0025831, 0, 0.999997, 0, 1, 0, -0.999997, 0, 0.0025831, 0, 0, 5.29861)
