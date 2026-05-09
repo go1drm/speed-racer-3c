@@ -1,0 +1,27 @@
+# 统一换行符，避免跨平台协作时 diff 变成一整片
+* text=auto eol=lf
+
+# Godot 文本资源
+*.gd        text eol=lf
+*.tscn      text eol=lf
+*.tres      text eol=lf
+*.godot     text eol=lf
+*.import    text eol=lf
+*.cfg       text eol=lf
+
+# 二进制资源（不做换行转换，不参与 diff）
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.webp      binary
+*.gif       binary
+*.glb       binary
+*.gltf      binary
+*.fbx       binary
+*.obj       binary
+*.blend     binary
+*.wav       binary
+*.ogg       binary
+*.mp3       binary
+*.ttf       binary
+*.otf       binary

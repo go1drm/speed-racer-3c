@@ -1,0 +1,35 @@
+# ===== Godot 4+ 标准忽略规则 =====
+
+# Godot 自动生成的目录（缓存、导入资源、临时数据）
+.godot/
+.import/
+
+# 导出到的构建产物目录（可按需调整）
+build/
+builds/
+exports/
+export_presets.cfg
+
+# 系统/编辑器临时文件
+*.tmp
+*.bak
+*.swp
+*~
+
+# ===== 操作系统 =====
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# ===== 常见 IDE =====
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# ===== Mono/C# (如果后续启用) =====
+.mono/
+mono_crash.*.json
+*.csproj
+*.sln
