@@ -111,8 +111,9 @@ var nitro_stock: int = 0
 # 特效
 var fx_node: Node3D = null
 
-# 其它
-var _r_prev: bool = false   # R 键上一帧状态
+# 初始朝向(由 _ready 记录, 用于复位时恢复)
+var _initial_car_mesh_basis: Basis = Basis.IDENTITY
+var _initial_recorded: bool = false
 
 # ============================================================
 #  Lifecycle
@@ -121,6 +122,11 @@ func _ready() -> void:
 	contact_monitor = true
 	max_contacts_reported = 4
 	body_entered.connect(_on_body_entered)
+
+	# 记录 CarMesh 的初始朝向(由 glb/tscn 设置, 代表赛道起点的车头方向)
+	if car_mesh:
+		_initial_car_mesh_basis = car_mesh.global_transform.basis
+		_initial_recorded = true
 
 	# 出生时自动寻找地面，防止卡进地图
 	call_deferred("_auto_place_on_ground")
@@ -135,9 +141,15 @@ func _ready() -> void:
 
 
 func _auto_place_on_ground() -> void:
-	# 从当前 X/Z 位置上方 500 米处往下射线，落到第一块碰撞体上方 2 米
-	var from: Vector3 = Vector3(global_position.x, global_position.y + 500.0, global_position.z)
-	var to:   Vector3 = Vector3(global_position.x, global_position.y - 500.0, global_position.z)
+	# 如果 CarMesh 有独立位置(top_level=true, 由 glb 场景带的初始位置), 优先从 CarMesh 正上方射线
+	# 这样能对齐到美术放置的赛道起点, 而不是 tscn 里随手写的 transform
+	var origin_xz: Vector3 = global_position
+	if car_mesh and car_mesh.top_level:
+		origin_xz = car_mesh.global_position
+		origin_xz.y = global_position.y  # Y 用刚体的, 等下用射线校正
+
+	var from: Vector3 = Vector3(origin_xz.x, origin_xz.y + 500.0, origin_xz.z)
+	var to:   Vector3 = Vector3(origin_xz.x, origin_xz.y - 1000.0, origin_xz.z)
 	var space := get_world_3d().direct_space_state
 	var query := PhysicsRayQueryParameters3D.create(from, to)
 	query.exclude = [self.get_rid()]
@@ -145,11 +157,24 @@ func _auto_place_on_ground() -> void:
 	if hit.is_empty():
 		push_warning("Car: 出生点正下方找不到地面，保持原位")
 		return
-	# 落在命中点上方 2 米，清零速度
-	global_position = hit.position + Vector3(0, 2.0, 0)
+
+	var target_pos: Vector3 = hit.position + Vector3(0, 2.0, 0)
+	global_position = target_pos
 	linear_velocity = Vector3.ZERO
 	angular_velocity = Vector3.ZERO
-	print("[Car] 出生点已校正到: ", global_position)
+
+	# CarMesh 是 top_level=true 的独立坐标节点，必须手动同步
+	if car_mesh:
+		car_mesh.global_position = target_pos + sphere_offset
+		# 恢复初始朝向(glb/tscn 设置的赛道起点方向)
+		if _initial_recorded:
+			car_mesh.global_transform.basis = _initial_car_mesh_basis
+		else:
+			car_mesh.global_rotation = Vector3.ZERO
+	if body_mesh:
+		body_mesh.rotation = Vector3.ZERO
+
+	print("[Car] 出生点已校正到: ", target_pos)
 
 
 func _attach_fx() -> void:
@@ -219,13 +244,13 @@ func _read_input() -> void:
 	if Input.is_action_just_pressed("nitro"):
 		_try_nitro()
 
-	# R 复位（掉下赛道/翻车时按）
-	if Input.is_physical_key_pressed(KEY_R) and not _r_prev:
-		_auto_place_on_ground()
-		# 同时重置车头朝向
-		car_mesh.global_rotation = Vector3.ZERO
-		body_mesh.rotation = Vector3.ZERO
-	_r_prev = Input.is_physical_key_pressed(KEY_R)
+
+func _unhandled_input(event: InputEvent) -> void:
+	# R 键复位（用 _unhandled_input 避免被 UI 吃掉）
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_R or event.physical_keycode == KEY_R:
+			_auto_place_on_ground()
+			get_viewport().set_input_as_handled()
 
 
 # ============================================================
