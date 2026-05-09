@@ -40,6 +40,7 @@ extends RigidBody3D
 @export var charge_min_per_sec: float = 12.0
 @export var crash_charge_penalty: float = 0.2
 @export var max_nitro_stock: int = 2
+@export var wall_crash_speed_loss: float = 6.0     ## 一帧速度损失超过此值(m/s)才算撞墙
 
 # ---------------- 喷射 ----------------
 @export_group("Boost")
@@ -111,6 +112,10 @@ var nitro_stock: int = 0
 
 # 特效
 var fx_node: Node3D = null
+var drift_fx_node: Node3D = null
+
+# 撞墙检测
+var _last_frame_speed: float = 0.0
 
 # 初始朝向(由 _ready 记录, 用于复位时恢复)
 var _initial_car_mesh_basis: Basis = Basis.IDENTITY
@@ -209,6 +214,13 @@ func _attach_fx() -> void:
 		fx_node.position = Vector3(0, 0.2, 0.8)
 
 
+func _attach_drift_fx() -> void:
+	if drift_fx_node and car_mesh:
+		car_mesh.add_child(drift_fx_node)
+		if drift_fx_node.has_method("set_car"):
+			drift_fx_node.set_car(self)
+
+
 func _spawn_hud() -> void:
 	if get_tree().current_scene.find_child("HUD", true, false):
 		return
@@ -248,6 +260,7 @@ func _physics_process(delta: float) -> void:
 	_check_drift_timeout(delta)
 	_update_visuals(delta)
 	_emit_hud_signals()
+	_last_frame_speed = linear_velocity.length()
 
 
 # ============================================================
@@ -318,8 +331,16 @@ func _apply_drive_force(_delta: float) -> void:
 		if fwd_vel.length() > 0.1:
 			apply_central_force(-fwd_vel.normalized() * natural_decel * mass)
 
+	# 【修复】喷射推力沿"当前实际速度方向"施加, 而不是车头朝向
+	# 这样漂移或侧滑时喷射不会把车推向奇怪方向导致翻车
 	if is_boosting:
-		apply_central_force(forward * boost_power * mass)
+		var vel_dir: Vector3 = linear_velocity
+		vel_dir.y = 0.0   # 只要水平方向, 防止上飞
+		if vel_dir.length() > 1.0:
+			vel_dir = vel_dir.normalized()
+		else:
+			vel_dir = forward   # 速度太低时退化为车头方向
+		apply_central_force(vel_dir * boost_power * mass)
 
 
 func _apply_lateral_friction(delta: float) -> void:
@@ -441,6 +462,8 @@ func _end_drift(success_boost: bool) -> void:
 	drift_elapsed = 0.0
 	drift_mode = ""
 	emit_signal("drift_ended", gained, success_boost)
+	if drift_fx_node and drift_fx_node.has_method("set_drifting"):
+		drift_fx_node.set_drifting(false)
 
 
 func _check_drift_timeout(delta: float) -> void:
@@ -557,6 +580,12 @@ func _update_boost_timer(delta: float) -> void:
 func _on_body_entered(_body: Node) -> void:
 	if state != State.DRIFT:
 		return
+	# 【修复】只有真正撞墙才扣气: 用"速度大小骤降"判定
+	# 保存上一帧速度, 本帧碰撞后若速度损失 > 阈值才算撞墙
+	var cur_speed: float = linear_velocity.length()
+	var speed_loss: float = _last_frame_speed - cur_speed
+	if speed_loss < wall_crash_speed_loss:
+		return   # 轻微擦碰, 不算
 	var lost: float = drift_accum_charge * (1.0 - crash_charge_penalty)
 	charge = maxf(charge - lost, 0.0)
 	drift_accum_charge *= crash_charge_penalty
