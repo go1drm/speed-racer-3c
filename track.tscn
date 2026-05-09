@@ -38,7 +38,7 @@ transform = Transform3D(7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0, 0)
 shape = SubResource("ConcavePolygonShape3D_slpey")
 
 [node name="Car" parent="." index="3" instance=ExtResource("2_sl2w6")]
-transform = Transform3D(0.998097, 0, 0.0616583, 0, 1, 0, -0.0616584, 0, 0.998097, 0, 4.10874, 10.63248)
+transform = Transform3D(0.998097, 0, 0.0616583, 0, 1, 0, -0.0616584, 0, 0.998097, 0, 8.21748, 21.26496)
 
 [node name="CarMesh" parent="Car" index="1"]
 transform = Transform3D(0.0025831, 0, 0.999997, 0, 1, 0, -0.999997, 0, 0.0025831, 0, 0, 5.29861)

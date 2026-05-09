@@ -101,7 +101,7 @@ func _on_drift_started(mode: String) -> void:
 	_drift_timer = 1.2
 
 
-func _on_drift_ended(_gained: float) -> void:
+func _on_drift_ended(_gained: float, _succeeded: bool = false) -> void:
 	_drift_timer = 0.2
 
 

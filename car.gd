@@ -1,10 +1,10 @@
 extends RigidBody3D
 ## ============================================================
-##  QQ飞车式车辆控制器 v2 —— 炸弹猫精调版
-##  操作：↑↓←→ 方向 · Q 漂移（按住）· W 小喷 · E 氮气
-##  漂移集气：漂移距离 × 车头摆动角速度权重（按你的公式）
-##  撞墙：当前漂移累计的集气 × 0.2（扣80%）
-##  氮气：集满 100 得 1 个，上限 2 个
+##  QQ飞车式车辆控制器 v3 —— 炸弹猫精调版
+##  操作：↑↓←→ 方向 · Q 点按入漂 · W 小喷退漂 · E 氮气
+##  核心：点按Q入漂 → 方向键控制漂移角度 → 角度足够后按W退漂+小喷
+##  集气公式：侧向滑移距离 × 基础率 + 车头角速度 × 权重
+##  撞墙：当前漂移累计集气 × 0.2（扣80%）
 ## ============================================================
 
 # ---------------- 基础移动 ----------------
@@ -12,37 +12,41 @@ extends RigidBody3D
 @export var max_speed: float = 45.0
 @export var acceleration: float = 55.0
 @export var brake_force: float = 80.0
-@export var steering_deg: float = 28.0
-@export var turn_speed: float = 3.2
+@export var steering_deg: float = 28.0           ## 前轮视觉转角
+@export var turn_speed: float = 3.2              ## 普通转向响应速度
+@export var turn_speed_high_speed_mult: float = 0.45  ## 高速时转向衰减到的倍率(新增: 防甩)
+@export var high_speed_threshold: float = 25.0   ## 多少 m/s 以上开始衰减转向
 @export var turn_stop_limit: float = 0.6
 @export var ground_friction: float = 6.0
 @export var natural_decel: float = 2.5
 
 # ---------------- 漂移 ----------------
 @export_group("Drift")
-@export var drift_friction: float = 1.0            ## 漂移时侧向摩擦（越小越滑）
-@export var drift_steer_mult: float = 1.6          ## 漂移时转向增幅
+@export var drift_friction: float = 1.0
+@export var drift_steer_mult: float = 1.6
 @export var drift_min_speed: float = 10.0
 @export var drift_body_tilt: float = 22.0
 @export var drift_yaw_offset_tuck: float = 18.0
 @export var drift_yaw_offset_side: float = 35.0
-@export var side_drift_threshold: float = 1.2      ## 进入瞬间反向侧速多大算侧身
+@export var side_drift_threshold: float = 1.2
+@export var drift_min_angle_to_boost: float = 25.0  ## 漂移累计角度 >= 多少度才能退漂小喷
+@export var drift_max_duration: float = 5.0          ## 漂移最长时间 (防一直漂)
 
 # ---------------- 集气公式参数 ----------------
 @export_group("Charge Formula")
-@export var charge_nitro_full: float = 100.0       ## 集满 100 = 1 个氮气
-@export var charge_per_lateral_m: float = 2.2      ## 每米侧向滑移贡献的基础集气
-@export var charge_yaw_rate_weight: float = 1.8    ## 车头角速度权重（越大侧身越值钱）
-@export var charge_min_per_sec: float = 12.0       ## 漂移时的最低集气速率（兜底）
-@export var crash_charge_penalty: float = 0.2      ## 撞墙后本次漂移已集气保留比例（=0.2 扣80%）
-@export var max_nitro_stock: int = 2               ## 氮气槽上限
+@export var charge_nitro_full: float = 100.0
+@export var charge_per_lateral_m: float = 2.2
+@export var charge_yaw_rate_weight: float = 1.8
+@export var charge_min_per_sec: float = 12.0
+@export var crash_charge_penalty: float = 0.2
+@export var max_nitro_stock: int = 2
 
 # ---------------- 喷射 ----------------
 @export_group("Boost")
-@export var mini_boost_cost: float = 35.0          ## 小喷消耗集气
+@export var mini_boost_cost: float = 35.0
 @export var mini_boost_power: float = 24.0
 @export var mini_boost_time: float = 0.55
-@export var double_boost_window: float = 0.35      ## 小喷结束后多少秒内再按 W 触发双喷
+@export var double_boost_window: float = 0.35
 @export var double_boost_power: float = 42.0
 @export var double_boost_time: float = 0.85
 @export var nitro_power: float = 58.0
@@ -64,14 +68,16 @@ extends RigidBody3D
 @export var auto_spawn_hud: bool = true
 @export var hud_scene: PackedScene = preload("res://HUD.tscn")
 @export var fx_scene: PackedScene = preload("res://BoostFX.tscn")
+@export var tuner_scene: PackedScene = preload("res://Tuner.tscn")
+@export var auto_spawn_tuner: bool = true
 
 # ---------------- 信号 ----------------
 signal speed_changed(kmh: float)
 signal charge_changed(value: float, max_value: float)
 signal nitro_stock_changed(stock: int, max_stock: int)
 signal drift_started(mode: String)
-signal drift_ended(charge_gained_this_round: float)
-signal boost_triggered(type: String)          ## "mini" / "double" / "nitro"
+signal drift_ended(charge_gained_this_round: float, succeeded: bool)
+signal boost_triggered(type: String)
 signal wall_crashed(lost_amount: float)
 signal camera_shake_requested(intensity: float, duration: float)
 
@@ -92,8 +98,10 @@ var steer_input: float = 0.0
 var drift_mode: String = ""
 var drift_dir: float = 0.0
 var drift_yaw_offset: float = 0.0
-var drift_accum_charge: float = 0.0          # 本次漂移累计集气（撞墙时要扣）
-var prev_yaw: float = 0.0                    # 车头上一帧 yaw（求角速度用）
+var drift_accum_charge: float = 0.0
+var drift_accum_angle_deg: float = 0.0      # 漂移累计车头转过的角度(度)
+var drift_elapsed: float = 0.0              # 漂移已持续时间
+var prev_yaw: float = 0.0
 
 # 氮气槽
 var charge: float = 0.0
@@ -112,7 +120,8 @@ func _ready() -> void:
 
 	if auto_spawn_hud and hud_scene:
 		call_deferred("_spawn_hud")
-	# 预生成特效节点挂在车壳上
+	if auto_spawn_tuner and tuner_scene:
+		call_deferred("_spawn_tuner")
 	if fx_scene:
 		fx_node = fx_scene.instantiate()
 		call_deferred("_attach_fx")
@@ -121,7 +130,7 @@ func _ready() -> void:
 func _attach_fx() -> void:
 	if fx_node and car_mesh:
 		car_mesh.add_child(fx_node)
-		fx_node.position = Vector3(0, 0.2, 0.8)   # 车尾位置
+		fx_node.position = Vector3(0, 0.2, 0.8)
 
 
 func _spawn_hud() -> void:
@@ -132,6 +141,16 @@ func _spawn_hud() -> void:
 	get_tree().current_scene.add_child(hud)
 	hud.car_path = hud.get_path_to(self)
 	hud.call_deferred("_connect_to_car")
+
+
+func _spawn_tuner() -> void:
+	if get_tree().current_scene.find_child("Tuner", true, false):
+		return
+	var tuner: CanvasLayer = tuner_scene.instantiate()
+	tuner.name = "Tuner"
+	get_tree().current_scene.add_child(tuner)
+	tuner.car_path = tuner.get_path_to(self)
+	tuner.call_deferred("_bind_car")
 
 
 # ============================================================
@@ -148,6 +167,7 @@ func _physics_process(delta: float) -> void:
 		_apply_lateral_friction(delta)
 
 	_update_drift_charge(delta)
+	_check_drift_timeout(delta)
 	_update_visuals(delta)
 	_emit_hud_signals()
 
@@ -159,13 +179,14 @@ func _read_input() -> void:
 	throttle_input = Input.get_axis("brake", "accelerate")
 	steer_input = Input.get_axis("steer_right", "steer_left")
 
-	# Q 漂移：按住进入 / 松手退出
+	# Q 点按：NORMAL 时入漂，DRIFT 时手动退漂(不喷)
 	if Input.is_action_just_pressed("drift"):
-		_try_start_drift()
-	if Input.is_action_just_released("drift"):
-		_try_end_drift()
+		if state == State.NORMAL:
+			_try_start_drift()
+		else:
+			_end_drift(false)   # 手动退漂不喷
 
-	# W 小喷：主动按键，需要满足条件
+	# W 小喷：NORMAL 时如果刚好蓄满可直接小喷 / DRIFT 时角度够了退漂+小喷
 	if Input.is_action_just_pressed("boost"):
 		_try_boost_w()
 
@@ -205,7 +226,7 @@ func _apply_lateral_friction(delta: float) -> void:
 
 
 # ============================================================
-#  视觉 + 车头朝向
+#  视觉 + 车头朝向 (含高速转向衰减)
 # ============================================================
 func _update_visuals(delta: float) -> void:
 	if linear_velocity.length() < turn_stop_limit:
@@ -216,7 +237,15 @@ func _update_visuals(delta: float) -> void:
 	right_wheel.rotation.y = wheel_turn
 	left_wheel.rotation.y = wheel_turn
 
-	var turn_mult: float = drift_steer_mult if state == State.DRIFT else 1.0
+	# 【关键】高速转向衰减：速度越快，转向响应越慢
+	var speed: float = linear_velocity.length()
+	var speed_factor: float = 1.0
+	if state != State.DRIFT and speed > high_speed_threshold:
+		var over: float = (speed - high_speed_threshold) / maxf(max_speed - high_speed_threshold, 1.0)
+		over = clampf(over, 0.0, 1.0)
+		speed_factor = lerpf(1.0, turn_speed_high_speed_mult, over)
+
+	var turn_mult: float = drift_steer_mult if state == State.DRIFT else speed_factor
 	var turn_rad: float = deg_to_rad(steering_deg) * steer_input * turn_mult
 
 	var new_basis: Basis = car_mesh.global_transform.basis.rotated(
@@ -264,14 +293,13 @@ func _try_start_drift() -> void:
 		return
 	if linear_velocity.length() < drift_min_speed:
 		return
-	if absf(steer_input) < 0.2:
+	if absf(steer_input) < 0.15:
 		return
-	if throttle_input < 0.1:
+	if throttle_input < 0.05:
 		return
 
 	var right: Vector3 = car_mesh.global_transform.basis.x
 	var lateral_speed: float = linear_velocity.dot(right)
-	# 反打判定：侧向速度方向与转向方向相反，且有一定侧速
 	var counter_steer: bool = (
 		signf(lateral_speed) != signf(steer_input)
 		and absf(lateral_speed) > side_drift_threshold
@@ -287,49 +315,59 @@ func _try_start_drift() -> void:
 
 	state = State.DRIFT
 	drift_accum_charge = 0.0
+	drift_accum_angle_deg = 0.0
+	drift_elapsed = 0.0
 	emit_signal("drift_started", drift_mode)
 
 
-func _try_end_drift() -> void:
+func _end_drift(success_boost: bool) -> void:
 	if state != State.DRIFT:
 		return
 	var gained: float = drift_accum_charge
 	state = State.NORMAL
 	drift_accum_charge = 0.0
+	drift_accum_angle_deg = 0.0
+	drift_elapsed = 0.0
 	drift_mode = ""
-	emit_signal("drift_ended", gained)
+	emit_signal("drift_ended", gained, success_boost)
+
+
+func _check_drift_timeout(delta: float) -> void:
+	if state != State.DRIFT:
+		return
+	drift_elapsed += delta
+	if drift_elapsed >= drift_max_duration:
+		_end_drift(false)
 
 
 # ============================================================
-#  集气公式（按照宝贝给的正确公式）
-#    charge_per_frame = lateral_speed * dt * base_rate + yaw_rate * weight
+#  集气公式
 # ============================================================
 func _update_drift_charge(delta: float) -> void:
 	if state != State.DRIFT:
 		return
 
-	# 1. 侧向滑移距离贡献
 	var right: Vector3 = car_mesh.global_transform.basis.x
 	var lateral_speed_abs: float = absf(linear_velocity.dot(right))
 	var lateral_contrib: float = lateral_speed_abs * charge_per_lateral_m * delta
 
-	# 2. 车头角速度贡献（侧身漂的 yaw 变化更剧烈）
-	var yaw_rate_abs: float = absf(angle_difference(prev_yaw, car_mesh.rotation.y)) / maxf(delta, 0.0001)
+	var yaw_delta: float = angle_difference(prev_yaw, car_mesh.rotation.y)
+	var yaw_rate_abs: float = absf(yaw_delta) / maxf(delta, 0.0001)
 	var yaw_contrib: float = yaw_rate_abs * charge_yaw_rate_weight
 
-	# 3. 兜底每秒最低速率
-	var floor_contrib: float = charge_min_per_sec * delta
+	# 累积角度（只计与漂移方向一致的 yaw 变化）
+	if signf(yaw_delta) == signf(drift_dir) or drift_dir == 0.0:
+		drift_accum_angle_deg += rad_to_deg(absf(yaw_delta))
 
+	var floor_contrib: float = charge_min_per_sec * delta
 	var inc: float = lateral_contrib + yaw_contrib + floor_contrib
 	drift_accum_charge += inc
 	charge += inc
 
-	# 满 100 转成一个氮气
 	while charge >= charge_nitro_full and nitro_stock < max_nitro_stock:
 		charge -= charge_nitro_full
 		nitro_stock += 1
 		emit_signal("nitro_stock_changed", nitro_stock, max_nitro_stock)
-	# 如果氮气已满，集气也封顶
 	if nitro_stock >= max_nitro_stock:
 		charge = minf(charge, charge_nitro_full - 1.0)
 
@@ -345,16 +383,27 @@ func angle_difference(a: float, b: float) -> float:
 #  喷射
 # ============================================================
 func _try_boost_w() -> void:
-	# 双喷判定（小喷结束后 0.35s 内又按 W）
 	var now: float = Time.get_ticks_msec() / 1000.0
+
+	# 情况 A：在漂移中 → 要求累计角度足够才能退漂小喷
+	if state == State.DRIFT:
+		if drift_accum_angle_deg < drift_min_angle_to_boost:
+			# 角度不够，不触发
+			emit_signal("boost_triggered", "insufficient")  # 用于UI闪烁提示失败
+			return
+		if charge < mini_boost_cost:
+			emit_signal("boost_triggered", "insufficient")
+			return
+		charge -= mini_boost_cost
+		_end_drift(true)
+		_start_boost("mini", mini_boost_power, mini_boost_time)
+		return
+
+	# 情况 B：非漂移 → 双喷窗口或普通小喷(需要已有足够集气)
 	if now - last_mini_end_time <= double_boost_window and charge >= mini_boost_cost:
 		charge -= mini_boost_cost
 		_start_boost("double", double_boost_power, double_boost_time)
 		return
-	# 普通小喷：需要足够集气
-	if charge >= mini_boost_cost:
-		charge -= mini_boost_cost
-		_start_boost("mini", mini_boost_power, mini_boost_time)
 
 
 func _try_nitro() -> void:
@@ -372,11 +421,9 @@ func _start_boost(type_name: String, power: float, duration: float) -> void:
 	is_boosting = true
 	emit_signal("boost_triggered", type_name)
 
-	# 镜头震动强度
 	var shake := {"mini": 0.3, "double": 0.55, "nitro": 0.85}
 	emit_signal("camera_shake_requested", shake.get(type_name, 0.3), duration)
 
-	# 特效
 	if fx_node and fx_node.has_method("play_boost"):
 		fx_node.play_boost(type_name, duration)
 
@@ -394,7 +441,7 @@ func _update_boost_timer(delta: float) -> void:
 
 
 # ============================================================
-#  撞墙扣气
+#  撞墙
 # ============================================================
 func _on_body_entered(_body: Node) -> void:
 	if state != State.DRIFT:
