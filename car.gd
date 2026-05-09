@@ -29,8 +29,9 @@ extends RigidBody3D
 @export var drift_yaw_offset_tuck: float = 18.0
 @export var drift_yaw_offset_side: float = 35.0
 @export var side_drift_threshold: float = 1.2
-@export var drift_min_angle_to_boost: float = 25.0  ## 漂移累计角度 >= 多少度才能退漂小喷
+@export var drift_min_angle_to_boost: float = 15.0  ## 退漂小喷最低累积角度(度)
 @export var drift_max_duration: float = 5.0          ## 漂移最长时间 (防一直漂)
+@export var drift_break_speed_ratio: float = 0.5     ## 速度低于 drift_min_speed * 此值时自动断漂
 
 # ---------------- 集气公式参数 ----------------
 @export_group("Charge Formula")
@@ -215,10 +216,14 @@ func _attach_fx() -> void:
 
 
 func _attach_drift_fx() -> void:
-	if drift_fx_node and car_mesh:
-		car_mesh.add_child(drift_fx_node)
-		if drift_fx_node.has_method("set_car"):
-			drift_fx_node.set_car(self)
+	if not drift_fx_node:
+		print("[Car] drift_fx_node 是 null, 跳过挂接")
+		return
+	# 挂在场景根(不是 CarMesh 下), 由 DriftFX 自己跟踪车身位置
+	get_tree().current_scene.add_child(drift_fx_node)
+	if drift_fx_node.has_method("set_car"):
+		drift_fx_node.set_car(self)
+	print("[Car] DriftFX 已挂载到场景根, 有 CarMesh 子节点吗? ", has_node("CarMesh"))
 
 
 func _spawn_hud() -> void:
@@ -450,6 +455,9 @@ func _try_start_drift() -> void:
 	drift_accum_angle_deg = 0.0
 	drift_elapsed = 0.0
 	emit_signal("drift_started", drift_mode)
+	if drift_fx_node and drift_fx_node.has_method("set_drifting"):
+		drift_fx_node.set_drifting(true)
+	print("[Car] 进入漂移 mode=", drift_mode, " fx=", drift_fx_node != null)
 
 
 func _end_drift(success_boost: bool) -> void:
@@ -472,6 +480,11 @@ func _check_drift_timeout(delta: float) -> void:
 	drift_elapsed += delta
 	if drift_elapsed >= drift_max_duration:
 		_end_drift(false)
+		return
+	# 速度不够自动断漂
+	if linear_velocity.length() < drift_min_speed * drift_break_speed_ratio:
+		_end_drift(false)
+		print("[Car] 自动断漂: 速度过低")
 
 
 # ============================================================
@@ -522,22 +535,38 @@ func _try_boost_w() -> void:
 	# 情况 A：在漂移中 → 要求累计角度足够才能退漂小喷
 	if state == State.DRIFT:
 		if drift_accum_angle_deg < drift_min_angle_to_boost:
-			# 角度不够，不触发
-			emit_signal("boost_triggered", "insufficient")  # 用于UI闪烁提示失败
+			print("[Car] 小喷失败: 角度不够 ", drift_accum_angle_deg, " < ", drift_min_angle_to_boost)
+			emit_signal("boost_triggered", "insufficient")
 			return
 		if charge < mini_boost_cost:
+			print("[Car] 小喷失败: 集气不够 ", charge, " < ", mini_boost_cost)
 			emit_signal("boost_triggered", "insufficient")
 			return
 		charge -= mini_boost_cost
 		_end_drift(true)
 		_start_boost("mini", mini_boost_power, mini_boost_time)
+		print("[Car] 小喷触发!")
 		return
 
-	# 情况 B：非漂移 → 双喷窗口或普通小喷(需要已有足够集气)
+	# 情况 B：正在喷射中 → 小喷尾巴接双喷(QQ飞车经典连喷)
+	if is_boosting and boost_type == "mini" and charge >= mini_boost_cost:
+		charge -= mini_boost_cost
+		_start_boost("double", double_boost_power, double_boost_time)
+		print("[Car] 双喷触发 (小喷中接续)!")
+		return
+
+	# 情况 C：小喷刚结束的窗口内 → 双喷
 	if now - last_mini_end_time <= double_boost_window and charge >= mini_boost_cost:
 		charge -= mini_boost_cost
 		_start_boost("double", double_boost_power, double_boost_time)
+		print("[Car] 双喷触发 (窗口内)!")
 		return
+
+	# 其它情况 (非漂移、非喷射、窗口外): 如果集气够也能直接小喷
+	if charge >= mini_boost_cost:
+		charge -= mini_boost_cost
+		_start_boost("mini", mini_boost_power, mini_boost_time)
+		print("[Car] 普通小喷 (静态集气触发)")
 
 
 func _try_nitro() -> void:
