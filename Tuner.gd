@@ -51,7 +51,9 @@ const PARAMS := [
 	["boost_speed_multiplier",    "喷射最高速倍率",     1.0,  3.0,   0.05],
 
 	["__group", "[b]视觉[/b]"],
-	["body_tilt",                 "过弯车身侧倾",       1.0,  80.0,  1.0],
+	["body_tilt",                 "过弯侧倾敏感度(越大越稳)",  5.0,  120.0, 1.0],
+	["body_tilt_max_deg",         "过弯最大侧倾角(度)",        0.0,  45.0,  0.5],
+	["head_yaw_deg",              "车头左右拧头幅度(度)",      0.0,  20.0,  0.5],
 ]
 
 const SAVE_PATH := "user://tune.cfg"

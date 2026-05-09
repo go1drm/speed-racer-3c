@@ -55,7 +55,8 @@ extends RigidBody3D
 
 # ---------------- 视觉 ----------------
 @export_group("Visual")
-@export var body_tilt: float = 28.0
+@export var body_tilt: float = 28.0                  ## 过弯侧倾对速度的敏感度(越大越迟钝)
+@export var body_tilt_max_deg: float = 12.0          ## 过弯车身最大侧倾角(度) - 防侧翻
 @export var sphere_offset: Vector3 = Vector3.DOWN
 
 # ---------------- 节点 ----------------
@@ -256,8 +257,9 @@ func _update_visuals(delta: float) -> void:
 	)
 	car_mesh.global_transform = car_mesh.global_transform.orthonormalized()
 
-	# 车身侧倾
-	var lean_base: float = -steer_input * linear_velocity.length() / body_tilt
+	# 车身侧倾（钳制在最大角度内，防止高速侧翻）
+	var max_lean_rad: float = deg_to_rad(body_tilt_max_deg)
+	var lean_base: float = clampf(-steer_input * linear_velocity.length() / body_tilt, -max_lean_rad, max_lean_rad)
 	var lean_drift: float = 0.0
 	if state == State.DRIFT:
 		lean_drift = deg_to_rad(drift_body_tilt) * drift_dir
@@ -268,7 +270,9 @@ func _update_visuals(delta: float) -> void:
 		var target_yaw: float = deg_to_rad(drift_yaw_offset) * drift_dir
 		body_mesh.rotation.y = lerp(body_mesh.rotation.y, target_yaw, 4.5 * delta)
 	else:
-		body_mesh.rotation.y = lerp(body_mesh.rotation.y, 0.0, 5.0 * delta)
+		# 正常行驶：按方向键时车头做轻微左右"拧头"摆动（QQ飞车风格）
+		var target_head_yaw: float = deg_to_rad(head_yaw_deg) * steer_input
+		body_mesh.rotation.y = lerp(body_mesh.rotation.y, target_head_yaw, 6.0 * delta)
 
 	# 沿地面法线对齐
 	if ground_ray.is_colliding():
