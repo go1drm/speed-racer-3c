@@ -1,0 +1,153 @@
+[gd_scene load_steps=4 format=3 uid="uid://dhud0qqcar01"]
+
+[ext_resource type="Script" path="res://HUD.gd" id="1_hud"]
+
+[sub_resource type="StyleBoxFlat" id="SBFlatBG"]
+bg_color = Color(0.08, 0.08, 0.1, 0.55)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="SBFlatFill"]
+bg_color = Color(1.0, 0.45, 0.1, 1)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
+
+[node name="HUD" type="CanvasLayer"]
+script = ExtResource("1_hud")
+car_path = NodePath("../Car")
+
+[node name="Root" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+; ============ 速度表（右下）============
+[node name="SpeedBox" type="VBoxContainer" parent="Root"]
+layout_mode = 1
+anchors_preset = 3
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -240.0
+offset_top = -140.0
+offset_right = -30.0
+offset_bottom = -30.0
+grow_horizontal = 0
+grow_vertical = 0
+alignment = 2
+
+[node name="SpeedLabel" type="Label" parent="Root/SpeedBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 84
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.8)
+theme_override_constants/outline_size = 6
+text = "0"
+horizontal_alignment = 2
+
+[node name="UnitLabel" type="Label" parent="Root/SpeedBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+theme_override_colors/font_color = Color(1, 0.85, 0.3, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.8)
+theme_override_constants/outline_size = 4
+text = "KM/H"
+horizontal_alignment = 2
+
+; ============ 蓄力槽（底部中间）============
+[node name="ChargeBox" type="VBoxContainer" parent="Root"]
+layout_mode = 1
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -180.0
+offset_top = -70.0
+offset_right = 180.0
+offset_bottom = -30.0
+grow_horizontal = 2
+grow_vertical = 0
+
+[node name="ChargeBar" type="ProgressBar" parent="Root/ChargeBox"]
+custom_minimum_size = Vector2(0, 20)
+layout_mode = 2
+theme_override_styles/background = SubResource("SBFlatBG")
+theme_override_styles/fill = SubResource("SBFlatFill")
+max_value = 100.0
+show_percentage = false
+
+[node name="ChargeLabel" type="Label" parent="Root/ChargeBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+theme_override_colors/font_color = Color(1, 1, 1, 0.85)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.8)
+theme_override_constants/outline_size = 3
+text = "0 / 100"
+horizontal_alignment = 1
+
+; ============ 漂移提示（上方居中）============
+[node name="DriftLabel" type="Label" parent="Root"]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -200.0
+offset_top = 60.0
+offset_right = 200.0
+offset_bottom = 120.0
+grow_horizontal = 2
+theme_override_font_sizes/font_size = 42
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.9)
+theme_override_constants/outline_size = 6
+text = ""
+horizontal_alignment = 1
+
+; ============ 喷射提示（上方居中，偏下）============
+[node name="BoostLabel" type="Label" parent="Root"]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -250.0
+offset_top = 130.0
+offset_right = 250.0
+offset_bottom = 200.0
+grow_horizontal = 2
+theme_override_font_sizes/font_size = 58
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.9)
+theme_override_constants/outline_size = 8
+text = ""
+horizontal_alignment = 1
+
+; ============ 操作提示（左下）============
+[node name="HelpLabel" type="Label" parent="Root"]
+layout_mode = 1
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 20.0
+offset_top = -160.0
+offset_right = 340.0
+offset_bottom = -20.0
+grow_vertical = 0
+theme_override_font_sizes/font_size = 16
+theme_override_colors/font_color = Color(1, 1, 1, 0.75)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.8)
+theme_override_constants/outline_size = 3
+text = "W/S  加速 / 刹车
+A/D  转向
+Shift  漂移（进弯后按住）
+Space  氮气（蓄满 100）
+
+小喷：漂移后自动触发
+双喷：小喷结束 0.35s 内再漂"
