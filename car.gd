@@ -88,6 +88,44 @@ extends RigidBody3D
 @export var slope_wall_bounce_absorb: float = 0.75    ## 撞斜面墙时吸收多少速度(0=完全弹, 1=完全停)
 @export var slope_wall_push_back: float = 4.0         ## 撞斜面墙时沿法线方向推开多少(m/s)
 
+# ============================================================
+#  V2 丝滑物理模型 (炸弹猫重制版)
+# ============================================================
+# 设计哲学: 一切"突变"都用曲线插值, 一切摩擦都沿惯性反向, 漂移是 0~1 平滑状态
+# ============================================================
+@export_group("V2 - Engine Power")
+@export var use_v2_physics: bool = true                ## 总开关: 启用 V2 动力/摩擦/漂移模型
+@export var engine_force_max: float = 90.0             ## 引擎最大推力(低速时的峰值力)
+@export var engine_force_curve: Curve                   ## 速度比(0~1) → 推力倍率, 典型: 低速高, 接近顶速低
+@export var brake_force_max_v2: float = 110.0          ## 刹车最大力
+@export var brake_force_curve: Curve                    ## 速度比 → 刹车力倍率
+@export var engine_idle_drag: float = 4.0              ## 松油门时引擎拖曳力(沿前进方向反向, 模拟引擎刹车)
+
+@export_group("V2 - Friction Normal")
+@export var friction_long_normal: float = 2.5          ## 正常状态前后方向基础摩擦(滚阻)
+@export var friction_lat_normal: float = 14.0          ## 正常状态侧向基础抓地摩擦
+@export var friction_air_drag: float = 0.05            ## 空气阻力系数(与速度平方成正比, 决定顶速手感)
+@export var friction_long_speed_curve_normal: Curve    ## 速度比 → 前后摩擦倍率
+@export var friction_lat_speed_curve_normal: Curve     ## 速度比 → 侧向抓地倍率(典型: 高速抓地↓)
+
+@export_group("V2 - Friction Drift")
+@export var friction_long_drift: float = 1.2           ## 漂移时前后摩擦基础值(滑得更远)
+@export var friction_lat_drift: float = 2.5            ## 漂移时侧向抓地基础值(低→允许甩)
+@export var friction_long_speed_curve_drift: Curve
+@export var friction_lat_speed_curve_drift: Curve
+@export var drift_extra_decel: float = 6.0             ## 漂移时额外整体减速力(沿惯性反向, 让漂移有能耗感)
+
+@export_group("V2 - Drift Dynamics")
+@export var drift_engage_duration: float = 0.18        ## 入漂 drift_intensity 0→1 过渡秒数
+@export var drift_disengage_duration: float = 0.28     ## 退漂 1→0 过渡秒数
+@export var drift_engage_curve: Curve                   ## 入漂 drift_intensity 变化曲线 (0→1 输入, 0→1 输出)
+@export var drift_disengage_curve: Curve                ## 退漂 drift_intensity 变化曲线
+@export var drift_head_yaw_curve: Curve                 ## 漂移期间车头 yaw 偏移随"漂移已持续归一化时间"变化(0~1 → 强度倍率)
+@export var drift_body_tilt_curve: Curve                ## 车身侧倾随漂移时间的变化倍率
+@export var drift_head_yaw_duration_ref: float = 2.0   ## 车头曲线采样时用的时间基准(漂移 X 秒后采样点到曲线末端)
+@export var drift_steer_mult_v2: float = 1.6           ## 漂移时转向速度倍率(与 drift_intensity 插值)
+@export var drift_accel_mult_v2: float = 0.55          ## 漂移时油门有效推力倍率
+
 # ---------------- 节点 ----------------
 @onready var car_mesh: Node3D = get_node_or_null("CarMesh")
 @onready var body_mesh: Node3D = get_node_or_null("CarMesh/suv2")
@@ -148,6 +186,10 @@ var _prev_forward_xz: Vector2 = Vector2.ZERO   # 上一帧车头水平投影方�
 var _low_speed_grace_left: float = 0.0   # 宽限剩余秒数, >0 表示正在判断中
 var _grace_start_angle: float = 0.0       # 进入宽限期时的累计角度(用于判挽救)
 
+# V2 漂移强度(0~1 平滑过渡, 驱动摩擦/视觉所有漂移表现)
+var drift_intensity: float = 0.0        # 0=纯直线, 1=完全漂移
+var _drift_intensity_vel: float = 0.0   # 用于平滑过渡的内部速率
+
 # 退漂窗口期: 窗口内按 W 才能放出本次漂移积累的小喷/双喷
 var boost_window_left: float = 0.0                # 窗口剩余秒数, 0 表示无窗口
 var boost_window_level: String = ""               # 窗口可释放等级 "mini" / "double"
@@ -181,6 +223,8 @@ var _initial_recorded: bool = false
 #  Lifecycle
 # ============================================================
 func _ready() -> void:
+	# 初始化 V2 默认曲线(玩家没设时给合理值)
+	_init_default_v2_curves()
 	# 如果关键节点缺失, 至少把 Tuner 和 HUD 起来, 方便诊断/调整
 	if not car_mesh or not body_mesh:
 		push_error("[Car] 关键节点缺失! 车辆控制禁用, 但会启动 Tuner/HUD 以便诊断。")
@@ -311,12 +355,17 @@ func _physics_process(delta: float) -> void:
 		return
 	_read_input()
 	_update_boost_timer(delta)
+	_update_drift_intensity(delta)    # V2: 平滑的 0~1 漂移强度
 
 	car_mesh.position = position + sphere_offset
 
 	if ground_ray and ground_ray.is_colliding():
-		_apply_drive_force(delta)
-		_apply_lateral_friction(delta)
+		if use_v2_physics:
+			_apply_v2_engine_and_brake(delta)
+			_apply_v2_friction(delta)
+		else:
+			_apply_drive_force(delta)
+			_apply_lateral_friction(delta)
 		_apply_ground_stick(delta)
 
 	_update_drift_charge(delta)
@@ -426,6 +475,211 @@ func _apply_drive_force(_delta: float) -> void:
 		apply_central_force(vel_dir * boost_power * mass)
 
 
+# ============================================================
+#  V2 丝滑物理模型 —— 炸弹猫重制版
+#  三件套:
+#   1) _update_drift_intensity: 漂移强度 0~1 平滑过渡
+#   2) _apply_v2_engine_and_brake: 带曲线的引擎/刹车动力系统
+#   3) _apply_v2_friction: 速度分解 + 曲线化的 3 层摩擦
+# ============================================================
+
+func _update_drift_intensity(delta: float) -> void:
+	# 目标强度: DRIFT 状态 → 1.0; 否则 → 0.0
+	var target: float = 1.0 if state == State.DRIFT else 0.0
+	if absf(drift_intensity - target) < 0.001:
+		drift_intensity = target
+		return
+	var dur: float
+	var curve: Curve
+	if target > drift_intensity:
+		dur = maxf(drift_engage_duration, 0.001)
+		curve = drift_engage_curve
+	else:
+		dur = maxf(drift_disengage_duration, 0.001)
+		curve = drift_disengage_curve
+	# 线性推进内部时间, 用曲线把进度映射成最终 intensity
+	var step: float = delta / dur
+	if target > drift_intensity:
+		# 入漂: 进度从 drift_intensity 推到 1
+		# 用当前 intensity 作为曲线采样输入的基础, 曲线能改变响应形状
+		var t: float = drift_intensity + step
+		t = clampf(t, 0.0, 1.0)
+		drift_intensity = _sample_curve_safe(curve, t, t)
+	else:
+		# 退漂: 进度从 drift_intensity 推到 0
+		var t2: float = drift_intensity - step
+		t2 = clampf(t2, 0.0, 1.0)
+		drift_intensity = _sample_curve_safe(curve, t2, t2)
+
+
+func _sample_curve_safe(c: Curve, t: float, fallback: float) -> float:
+	if c == null or c.point_count <= 1:
+		return fallback
+	return c.sample(clampf(t, 0.0, 1.0))
+
+
+func _init_default_v2_curves() -> void:
+	# 引擎推力: 低速 1.4(起步爽) → 顶速 0.3(逼近上限乏力)
+	if engine_force_curve == null:
+		var c := Curve.new()
+		c.add_point(Vector2(0.0, 1.4))
+		c.add_point(Vector2(0.5, 1.0))
+		c.add_point(Vector2(1.0, 0.3))
+		engine_force_curve = c
+	# 刹车: 高速更强(动能大需要大刹车), 低速弱(防瞬停)
+	if brake_force_curve == null:
+		var c2 := Curve.new()
+		c2.add_point(Vector2(0.0, 0.6))
+		c2.add_point(Vector2(0.4, 1.0))
+		c2.add_point(Vector2(1.0, 1.2))
+		brake_force_curve = c2
+	# 正常前后摩擦: 恒定 1.0
+	if friction_long_speed_curve_normal == null:
+		var c3 := Curve.new()
+		c3.add_point(Vector2(0.0, 1.0)); c3.add_point(Vector2(1.0, 1.0))
+		friction_long_speed_curve_normal = c3
+	# 正常侧向抓地: 低速满格, 高速轻微衰减(让高速转向自然难一点)
+	if friction_lat_speed_curve_normal == null:
+		var c4 := Curve.new()
+		c4.add_point(Vector2(0.0, 1.1))
+		c4.add_point(Vector2(0.6, 1.0))
+		c4.add_point(Vector2(1.0, 0.75))
+		friction_lat_speed_curve_normal = c4
+	# 漂移前后摩擦: 恒定 1.0
+	if friction_long_speed_curve_drift == null:
+		var c5 := Curve.new()
+		c5.add_point(Vector2(0.0, 1.0)); c5.add_point(Vector2(1.0, 1.0))
+		friction_long_speed_curve_drift = c5
+	# 漂移侧向抓地: 低速很低(甩得开), 中速稍涨(可控), 高速微弱(长甩)
+	if friction_lat_speed_curve_drift == null:
+		var c6 := Curve.new()
+		c6.add_point(Vector2(0.0, 0.8))
+		c6.add_point(Vector2(0.5, 1.2))
+		c6.add_point(Vector2(1.0, 1.0))
+		friction_lat_speed_curve_drift = c6
+	# 入漂: ease-out(起始快, 末端缓)
+	if drift_engage_curve == null:
+		var c7 := Curve.new()
+		c7.add_point(Vector2(0.0, 0.0))
+		c7.add_point(Vector2(0.3, 0.7))
+		c7.add_point(Vector2(1.0, 1.0))
+		drift_engage_curve = c7
+	# 退漂: ease-in(开始稳, 末端快)
+	if drift_disengage_curve == null:
+		var c8 := Curve.new()
+		c8.add_point(Vector2(0.0, 0.0))
+		c8.add_point(Vector2(0.7, 0.3))
+		c8.add_point(Vector2(1.0, 1.0))
+		drift_disengage_curve = c8
+	# 车头 yaw 时间曲线: 入漂车头快速偏到位, 中段微幅晃动, 末段稳住
+	if drift_head_yaw_curve == null:
+		var c9 := Curve.new()
+		c9.add_point(Vector2(0.0, 0.9))
+		c9.add_point(Vector2(0.3, 1.1))
+		c9.add_point(Vector2(0.6, 0.95))
+		c9.add_point(Vector2(1.0, 1.0))
+		drift_head_yaw_curve = c9
+	# 车身侧倾时间曲线: 入漂略微过冲, 后稳定
+	if drift_body_tilt_curve == null:
+		var c10 := Curve.new()
+		c10.add_point(Vector2(0.0, 0.7))
+		c10.add_point(Vector2(0.25, 1.15))
+		c10.add_point(Vector2(1.0, 1.0))
+		drift_body_tilt_curve = c10
+
+
+# ============================================================
+#  V2 - 引擎动力 + 刹车(带曲线)
+# ============================================================
+func _apply_v2_engine_and_brake(_delta: float) -> void:
+	var forward: Vector3 = -car_mesh.global_transform.basis.z
+	var v_horiz: Vector3 = linear_velocity
+	v_horiz.y = 0.0
+	var current_speed: float = v_horiz.length()
+	var long_speed: float = v_horiz.dot(forward)
+
+	# 速度归一化 (用 max_speed 做基准, 即便喷射时超速也只是 > 1)
+	var ref_speed: float = maxf(max_speed, 1.0)
+	var speed_ratio: float = clampf(current_speed / ref_speed, 0.0, 1.2)
+
+	# 油门
+	if throttle_input > 0.01:
+		var engine_k: float = _sample_curve_safe(engine_force_curve, speed_ratio, 1.0)
+		# 漂移强度越大, 油门效率越低(插值)
+		var eff_mult: float = lerpf(1.0, drift_accel_mult_v2, drift_intensity)
+		# 考虑顶速软封顶: 接近顶速时自然不再加速
+		var speed_cap: float = max_speed * (boost_speed_multiplier if is_boosting else 1.0)
+		if state == State.DRIFT and drift_max_speed > 0.0:
+			speed_cap = minf(speed_cap, drift_max_speed)
+		if long_speed < speed_cap:
+			apply_central_force(forward * engine_force_max * engine_k * throttle_input * eff_mult * mass)
+	elif throttle_input < -0.01:
+		# 刹车: 沿惯性反向, 力度按当前速度比用曲线
+		var brake_k: float = _sample_curve_safe(brake_force_curve, speed_ratio, 1.0)
+		if current_speed > 0.3:
+			var brake_dir: Vector3 = -v_horiz.normalized()
+			apply_central_force(brake_dir * brake_force_max_v2 * brake_k * absf(throttle_input) * mass)
+	else:
+		# 松油门: 引擎拖曳(沿前进方向反向)
+		if absf(long_speed) > 0.1:
+			apply_central_force(-forward * signf(long_speed) * engine_idle_drag * mass)
+
+	# 漂移超速软封顶(保留旧机制)
+	if state == State.DRIFT and drift_max_speed > 0.0 and current_speed > drift_max_speed:
+		var over_ratio: float = (current_speed - drift_max_speed) / drift_max_speed
+		over_ratio = minf(over_ratio, 1.5)
+		apply_central_force(-v_horiz.normalized() * drift_speed_brake_strength * over_ratio * mass)
+
+	# 喷射推力沿惯性方向
+	if is_boosting:
+		var vel_dir: Vector3 = v_horiz
+		if vel_dir.length() > 1.0:
+			vel_dir = vel_dir.normalized()
+		else:
+			vel_dir = forward
+		apply_central_force(vel_dir * boost_power * mass)
+
+
+# ============================================================
+#  V2 - 摩擦: 速度分解 + 曲线调制
+#  所有摩擦沿"该速度分量反方向"施加, 即惯性反向 ✓
+# ============================================================
+func _apply_v2_friction(delta: float) -> void:
+	var forward: Vector3 = -car_mesh.global_transform.basis.z
+	var right: Vector3 = car_mesh.global_transform.basis.x
+	var v: Vector3 = linear_velocity
+	v.y = 0.0
+	var total_speed: float = v.length()
+	var ref_speed: float = maxf(max_speed, 1.0)
+	var speed_ratio: float = clampf(total_speed / ref_speed, 0.0, 1.2)
+
+	var v_long: float = v.dot(forward)
+	var v_lat: float = v.dot(right)
+
+	# NORMAL 与 DRIFT 两套参数按 drift_intensity 插值
+	var long_k_normal: float = friction_long_normal * _sample_curve_safe(friction_long_speed_curve_normal, speed_ratio, 1.0)
+	var long_k_drift: float  = friction_long_drift  * _sample_curve_safe(friction_long_speed_curve_drift,  speed_ratio, 1.0)
+	var lat_k_normal: float  = friction_lat_normal  * _sample_curve_safe(friction_lat_speed_curve_normal,  speed_ratio, 1.0)
+	var lat_k_drift: float   = friction_lat_drift   * _sample_curve_safe(friction_lat_speed_curve_drift,   speed_ratio, 1.0)
+
+	var long_k: float = lerpf(long_k_normal, long_k_drift, drift_intensity)
+	var lat_k: float  = lerpf(lat_k_normal,  lat_k_drift,  drift_intensity)
+
+	# 沿各自速度分量反方向施加冲量
+	var long_impulse: Vector3 = -forward * v_long * long_k * delta
+	var lat_impulse: Vector3  = -right   * v_lat  * lat_k  * delta
+	apply_central_impulse((long_impulse + lat_impulse) * mass)
+
+	# 空气阻力(与速度平方成正比, 沿惯性反向)
+	if total_speed > 0.5 and friction_air_drag > 0.0:
+		var air_force: Vector3 = -v.normalized() * friction_air_drag * total_speed * total_speed * mass
+		apply_central_force(air_force)
+
+	# 漂移额外能耗(整体沿惯性反向, 强度与 drift_intensity 成正比)
+	if drift_intensity > 0.01 and total_speed > 0.5:
+		apply_central_force(-v.normalized() * drift_extra_decel * drift_intensity * mass)
+
+
 func _apply_lateral_friction(delta: float) -> void:
 	# ============================================================
 	# 正确的摩擦力模型: 把速度分解到车头 long(前后) / lat(侧向) 两轴
@@ -502,7 +756,12 @@ func _update_visuals(delta: float) -> void:
 		over = clampf(over, 0.0, 1.0)
 		speed_factor = lerpf(1.0, turn_speed_high_speed_mult, over)
 
-	var turn_mult: float = drift_steer_mult if state == State.DRIFT else speed_factor
+	# 转向倍率: V2 用 drift_intensity 插值, 旧路径保持 state 判断
+	var turn_mult: float
+	if use_v2_physics:
+		turn_mult = lerpf(speed_factor, drift_steer_mult_v2, drift_intensity)
+	else:
+		turn_mult = drift_steer_mult if state == State.DRIFT else speed_factor
 	var turn_rad: float = deg_to_rad(steering_deg) * steer_input * turn_mult
 
 	var new_basis: Basis = car_mesh.global_transform.basis.rotated(
@@ -513,22 +772,26 @@ func _update_visuals(delta: float) -> void:
 	)
 	car_mesh.global_transform = car_mesh.global_transform.orthonormalized()
 
-	# 车身侧倾（钳制在最大角度内，防止高速侧翻）
+	# ============ V2 车身侧倾(带 drift_intensity 插值 + 时间曲线) ============
 	var max_lean_rad: float = deg_to_rad(body_tilt_max_deg)
 	var lean_base: float = clampf(-steer_input * linear_velocity.length() / body_tilt, -max_lean_rad, max_lean_rad)
 	var lean_drift: float = 0.0
-	if state == State.DRIFT:
-		lean_drift = deg_to_rad(drift_body_tilt) * drift_dir
+	# 漂移时间归一化(用 drift_head_yaw_duration_ref 作为曲线完成点)
+	var drift_t_norm: float = clampf(drift_elapsed / maxf(drift_head_yaw_duration_ref, 0.1), 0.0, 1.0)
+	var tilt_time_k: float = _sample_curve_safe(drift_body_tilt_curve, drift_t_norm, 1.0)
+	# 平滑过渡: drift_intensity(0~1) × 时间曲线 × 配置角度 × 漂移方向
+	lean_drift = deg_to_rad(drift_body_tilt) * drift_dir * drift_intensity * tilt_time_k
 	body_mesh.rotation.z = lerp(body_mesh.rotation.z, lean_base + lean_drift, 6.0 * delta)
 
-	# 车头 yaw 偏移
-	if state == State.DRIFT:
-		var target_yaw: float = deg_to_rad(drift_yaw_offset) * drift_dir
-		body_mesh.rotation.y = lerp(body_mesh.rotation.y, target_yaw, 4.5 * delta)
-	else:
-		# 正常行驶：按方向键时车头做轻微左右"拧头"摆动（QQ飞车风格）
-		var target_head_yaw: float = deg_to_rad(head_yaw_deg) * steer_input
-		body_mesh.rotation.y = lerp(body_mesh.rotation.y, target_head_yaw, 6.0 * delta)
+	# ============ V2 车头 yaw (漂移时偏转 + 时间曲线动态晃动) ============
+	# 非漂移的"拧头"基础量
+	var base_head_yaw: float = deg_to_rad(head_yaw_deg) * steer_input
+	# 漂移偏转量: 基础 × drift_intensity × 时间曲线(可以让车头在漂移中段更甩)
+	var yaw_time_k: float = _sample_curve_safe(drift_head_yaw_curve, drift_t_norm, 1.0)
+	var drift_yaw_rad: float = deg_to_rad(drift_yaw_offset) * drift_dir * drift_intensity * yaw_time_k
+	# 两者插值合并(drift_intensity=0 时全用 base, =1 时全用 drift)
+	var target_head_yaw: float = lerpf(base_head_yaw, drift_yaw_rad, drift_intensity)
+	body_mesh.rotation.y = lerp(body_mesh.rotation.y, target_head_yaw, 6.0 * delta)
 
 	# 沿地面法线对齐
 	if ground_ray.is_colliding():

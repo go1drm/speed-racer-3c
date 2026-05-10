@@ -140,6 +140,44 @@ const PARAMS := [
 		"撞斜面时沿法线速度被吸收的比例, 1=完全停下。", ""],
 	["slope_wall_push_back",      "撞斜面反推速度",     0.0,  20.0,  0.5,
 		"撞墙后沿法线方向额外推开的速度, 防止卡墙。", ""],
+
+	["__group", "[b]V2·动力(曲线化)[/b]"],
+	["use_v2_physics",            "启用V2物理模型",     0,    1,     1,
+		"1=启用丝滑新模型(推荐); 0=回退到旧物理(兼容)。", ""],
+	["engine_force_max",          "引擎最大推力",       10.0, 300.0, 1.0,
+		"引擎峰值推力. 实际推力 = 此值 × 引擎曲线在当前速度比的采样 × 油门.", "engine_force_curve"],
+	["brake_force_max_v2",        "刹车最大力",         10.0, 300.0, 1.0,
+		"刹车峰值力, 配合刹车曲线实现高速刹车更强的真实感.", "brake_force_curve"],
+	["engine_idle_drag",          "松油门引擎拖曳",     0.0,  20.0,  0.1,
+		"松油门时沿前进方向反向施加的力, 模拟引擎刹车/滚阻.", ""],
+
+	["__group", "[b]V2·摩擦 正常[/b]"],
+	["friction_long_normal",      "前后向摩擦基础",     0.0,  20.0,  0.1,
+		"正常行驶时车身前后方向的摩擦系数. 作用在 v_long 反向, 让车自然减速.", "friction_long_speed_curve_normal"],
+	["friction_lat_normal",       "侧向抓地基础",       0.0,  30.0,  0.1,
+		"正常行驶侧向抓地力(抗侧滑). 作用在 v_lat 反向, 越大过弯越稳.", "friction_lat_speed_curve_normal"],
+	["friction_air_drag",         "空气阻力系数",       0.0,  0.5,   0.005,
+		"与速度平方成正比的总阻力(沿惯性反向), 决定顶速手感. 0=关闭.", ""],
+
+	["__group", "[b]V2·摩擦 漂移[/b]"],
+	["friction_long_drift",       "漂移前后摩擦基础",   0.0,  20.0,  0.1,
+		"漂移时前后向摩擦(通常比正常低, 让车滑得更远).", "friction_long_speed_curve_drift"],
+	["friction_lat_drift",        "漂移侧向抓地基础",   0.0,  15.0,  0.1,
+		"漂移时侧向抓地(需要远小于正常值, 否则甩不出去).", "friction_lat_speed_curve_drift"],
+	["drift_extra_decel",         "漂移额外能耗",       0.0,  20.0,  0.1,
+		"漂移时额外沿惯性反向施加的整体减速力(模拟轮胎打滑功耗). 随 drift_intensity 插值.", ""],
+
+	["__group", "[b]V2·漂移动态[/b]"],
+	["drift_engage_duration",     "入漂过渡时长(秒)",   0.0,  1.5,   0.01,
+		"从直行切到漂移, drift_intensity 从 0 到 1 的过渡时间. 小=灵敏, 大=柔和.", "drift_engage_curve"],
+	["drift_disengage_duration",  "退漂过渡时长(秒)",   0.0,  1.5,   0.01,
+		"退漂时 drift_intensity 从 1 回到 0 的时间.", "drift_disengage_curve"],
+	["drift_head_yaw_duration_ref","车头曲线时间基准(秒)", 0.2, 6.0,  0.1,
+		"车头 yaw/侧倾曲线的 X 轴基准秒数. 漂移持续此秒数后曲线采样点到达 1.0.", "drift_head_yaw_curve"],
+	["drift_steer_mult_v2",       "漂移转向倍率",       1.0,  4.0,   0.05,
+		"漂移时转向速度相对正常的倍率, 数值越大漂移中越容易拉角度.", ""],
+	["drift_accel_mult_v2",       "漂移油门效率",       0.0,  1.5,   0.05,
+		"漂移时油门实际有效比例. 会与 drift_intensity 插值应用.", ""],
 ]
 
 const FX_PARAMS := [
@@ -190,6 +228,17 @@ const CURVE_PROPS := {
 	"mini_zoom_curve":    {"target": "cam"},
 	"double_zoom_curve":  {"target": "cam"},
 	"nitro_zoom_curve":   {"target": "cam"},
+	# V2 曲线
+	"engine_force_curve":                 {"target": "car"},
+	"brake_force_curve":                  {"target": "car"},
+	"friction_long_speed_curve_normal":   {"target": "car"},
+	"friction_lat_speed_curve_normal":    {"target": "car"},
+	"friction_long_speed_curve_drift":    {"target": "car"},
+	"friction_lat_speed_curve_drift":     {"target": "car"},
+	"drift_engage_curve":                 {"target": "car"},
+	"drift_disengage_curve":              {"target": "car"},
+	"drift_head_yaw_curve":               {"target": "car"},
+	"drift_body_tilt_curve":              {"target": "car"},
 }
 
 const SAVE_PATH := "user://tune.cfg"
@@ -256,13 +305,29 @@ func _bind_car() -> void:
 				_rows[prop].slider.set_value_no_signal(float(v))
 				_rows[prop].spin.set_value_no_signal(float(v))
 
-	# 加载所有曲线: 用预设 LINEAR_FULL 兜底
+	# 加载所有曲线: 优先复用目标对象已有曲线(如 car.gd V2 默认值), 否则用 LINEAR_FULL 兜底
 	for cprop in CURVE_PROPS.keys():
-		var c: Curve = _build_preset_curve("LINEAR_FULL")
+		var existing: Curve = _read_curve_from_target(cprop)
+		var c: Curve = existing if existing != null and existing.point_count > 1 else _build_preset_curve("LINEAR_FULL")
 		_curves[cprop] = c
 		_apply_curve_to_target(cprop, c)
 
 	_load_from_file()
+
+
+func _read_curve_from_target(curve_prop: String) -> Curve:
+	var meta = CURVE_PROPS.get(curve_prop, {})
+	var target_name: String = meta.get("target", "car")
+	var target: Object = car
+	if target_name == "cam":
+		target = _get_camera()
+	elif target_name == "fx":
+		target = _get_drift_fx()
+	if target and curve_prop in target:
+		var v = target.get(curve_prop)
+		if v is Curve:
+			return v
+	return null
 
 
 # ============================================================
