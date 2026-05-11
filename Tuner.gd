@@ -15,15 +15,13 @@ var _curves: Dictionary = {}        # curve_prop -> Curve 对象
 var _panel: PanelContainer
 
 # 参数定义: [prop, label, min, max, step, tooltip, curve_prop_or_empty]
-# curve_prop_or_empty: 如果非空, 表示该参数(如喷射时长)对应有一条曲线参数(如 mini_boost_curve)可调
+# curve_prop_or_empty: 如果非空, 表示该参数关联一条曲线(可点 🎨 编辑)
 const PARAMS := [
 	["__group", "[b]基础移动[/b]"],
-	["max_speed",                 "最高速 (m/s)",       10.0, 150.0, 1.0,
-		"车辆能达到的最高速度(米/秒)。喷射时会临时突破此上限。", ""],
-	["acceleration",              "加速度",             10.0, 200.0, 1.0,
-		"踩油门时施加在车辆上的推进力。越大起步越猛, 但容易甩尾。", ""],
-	["brake_force",               "刹车力",             10.0, 200.0, 1.0,
-		"踩刹车时施加的反向力, 越大越急停。", ""],
+	["max_speed",                 "巡航极速 (m/s)",     10.0, 200.0, 0.5,
+		"无喷射时车辆能达到的最高速度。引擎曲线 X=1 对应到这个值。", ""],
+	["top_speed_boosted",         "喷射极速 (m/s)",     10.0, 300.0, 0.5,
+		"小喷/双喷/氮气期间车辆能达到的最高速度。喷射时引擎曲线 X=1 对应到这个值, 让喷射阶段也是从 0 推到 1, 同样有'越接近顶速越乏力'的曲线感。", ""],
 	["steering_deg",              "前轮转角(度)",       5.0,  60.0,  0.5,
 		"前轮视觉转角, 同时也是车头朝向的转向幅度上限。", ""],
 	["turn_speed",                "车头响应速度",       0.5,  8.0,   0.1,
@@ -32,50 +30,78 @@ const PARAMS := [
 		"高速时转向速度会衰减到这个倍率, 防止高速过弯打滑甩尾。", ""],
 	["high_speed_threshold",      "高速衰减阈值(m/s)",  5.0,  80.0,  1.0,
 		"超过此速度后开始应用'高速转向衰减倍率'。", ""],
-	["ground_friction",           "地面侧向抗滑摩擦",   0.5,  15.0,  0.1,
-		"正常行驶时轮胎侧向抗侧滑力。沿'车身侧向速度分量的反方向'施加, 越大越难甩尾。", ""],
-	["natural_decel",             "滚动摩擦(松油门)",   0.0,  10.0,  0.1,
-		"松开油门/刹车时的滚动摩擦, 沿'车头前后方向速度分量的反方向'施加, 不踩油门时车会自然减速。", ""],
 
-	["__group", "[b]漂移[/b]"],
-	["drift_friction",            "漂移侧向抗滑摩擦",   0.0,  5.0,   0.05,
-		"漂移时的侧向抗侧滑力, 远小于正常值让车能甩起来。沿'车身侧向速度反向'施加。", ""],
-	["drift_steer_mult",          "漂移转向增幅",       1.0,  3.5,   0.05,
-		"漂移时车头响应速度的倍率, 让漂移可以更快拉角度。", ""],
+	["__group", "[b]动力(曲线化)[/b]"],
+	["engine_force_max",          "引擎最大推力",       10.0, 300.0, 1.0,
+		"引擎峰值推力. 实际推力 = 此值 × 引擎曲线在当前速度比的采样 × 油门. 调大=加速更猛.", "engine_force_curve"],
+	["brake_force_max",           "刹车最大力",         10.0, 300.0, 1.0,
+		"刹车峰值力, 配合刹车曲线实现高速刹车更强的真实感.", "brake_force_curve"],
+	["engine_idle_drag",          "松油门引擎拖曳",     0.0,  20.0,  0.1,
+		"松油门时沿前进方向反向施加的力, 模拟引擎刹车/滚阻.", ""],
+
+	["__group", "[b]摩擦·正常状态[/b]"],
+	["friction_long_normal",      "前后向摩擦",         0.0,  20.0,  0.1,
+		"正常行驶前后方向摩擦系数(等效力 = k × 速度). 影响低速松油门减速感.", "friction_long_speed_curve_normal"],
+	["friction_lat_normal",       "侧向抓地",           0.0,  30.0,  0.1,
+		"正常行驶侧向抓地力(抗侧滑). 越大过弯越稳.", "friction_lat_speed_curve_normal"],
+	["friction_air_drag",         "空气阻力系数",       0.0,  0.5,   0.005,
+		"与速度平方成正比的总阻力(沿惯性反向), 决定顶速手感. 调大→更难达到极速.", ""],
+
+	["__group", "[b]摩擦·漂移状态[/b]"],
+	["friction_long_drift",       "漂移前后摩擦",       0.0,  20.0,  0.1,
+		"漂移时前后向摩擦(通常比正常低, 让车滑得更远).", "friction_long_speed_curve_drift"],
+	["friction_lat_drift",        "漂移侧向抓地",       0.0,  15.0,  0.1,
+		"漂移时侧向抓地(需要远小于正常值, 否则甩不出去).", "friction_lat_speed_curve_drift"],
+	["drift_extra_decel",         "漂移额外能耗",       0.0,  20.0,  0.1,
+		"漂移时额外沿惯性反向施加的整体减速力(模拟轮胎打滑功耗).", ""],
+
+	["__group", "[b]漂移触发与限制[/b]"],
 	["drift_min_speed",           "最低入漂车速",       0.0,  30.0,  0.5,
 		"低于此速度无法触发漂移。", ""],
+	["drift_min_angle_to_boost",  "小喷资格累积角(度)", 0.0,  120.0, 1.0,
+		"漂移期间车头转过此累计角度后, 退漂可触发小喷。", ""],
+	["drift_max_duration",        "漂移最长持续(秒)",   0.0,  30.0,  0.5,
+		"漂移最长持续秒数。0 = 不限时(只要速度足够就一直漂)。", ""],
+	["drift_break_speed_ratio",   "低速断漂阈值倍率",   0.0,  1.0,   0.05,
+		"漂移时速度低于(最低入漂车速 × 此值)会触发低速宽限期。", ""],
+	["drift_low_speed_grace_time","低速宽限秒数",       0.0,  2.0,   0.05,
+		"低速触发后给玩家多少秒'挽救'机会, 期间猛打方向继续漂可避免断漂。", ""],
+	["drift_grace_save_angle",    "宽限期挽救所需角度", 0.0,  60.0,  0.5,
+		"宽限期内车头再转过此角度即视为挽救成功, 取消断漂。", ""],
+	["drift_max_speed",           "漂移最高速度(m/s)",  0.0,  100.0, 0.5,
+		"漂移时速度软上限。超过此值会施加反向刹车力。0 = 不限速。", ""],
+	["drift_speed_brake_strength","漂移超速刹车强度",   0.0,  60.0,  0.5,
+		"漂移超过最高速度时反向刹车力的强度。", ""],
+	["drift_counter_steer_break_time", "反打断漂秒数",  0.05, 1.5,   0.05,
+		"漂移中持续反向打方向超过此时长会自动退漂。", ""],
+	["drift_auto_exit_enabled",   "车正自动退漂",       0,    1,     1,
+		"1=车头摆正且无侧向速度时自动退出漂移; 0=只手动 Q/低速/超时退漂。", ""],
+	["drift_auto_exit_lat_speed", "自动退漂侧速阈值",   0.0,  10.0,  0.1,
+		"侧向速度小于此值视为'无侧滑'(m/s)。", ""],
+	["drift_auto_exit_angle_deg", "自动退漂角度阈值(度)", 0.0, 30.0,  0.5,
+		"车头方向与运动方向夹角小于此值视为'摆正'。", ""],
+	["drift_auto_exit_time",      "自动退漂去抖时长(秒)", 0.0, 1.0,   0.01,
+		"满足'摆正+无侧滑'条件持续此秒数后才真正退漂。", ""],
+
+	["__group", "[b]漂移动态(曲线化)[/b]"],
+	["drift_engage_duration",     "入漂过渡时长(秒)",   0.0,  1.5,   0.01,
+		"从直行切到漂移, drift_intensity 从 0 到 1 的过渡时间. 小=灵敏, 大=柔和.", "drift_engage_curve"],
+	["drift_disengage_duration",  "退漂过渡时长(秒)",   0.0,  1.5,   0.01,
+		"退漂时 drift_intensity 从 1 回到 0 的时间.", "drift_disengage_curve"],
+	["drift_head_yaw_duration_ref","车头曲线时间基准(秒)", 0.2, 6.0,  0.1,
+		"车头 yaw/侧倾曲线的 X 轴基准秒数. 漂移持续此秒数后曲线采样到达 1.0.", "drift_head_yaw_curve"],
+	["drift_steer_mult",          "漂移转向倍率",       1.0,  4.0,   0.05,
+		"漂移时转向速度相对正常的倍率, 数值越大漂移中越容易拉角度.", ""],
+	["drift_accel_mult",          "漂移油门效率",       0.0,  1.5,   0.05,
+		"漂移时油门实际有效比例. 会与 drift_intensity 插值应用.", ""],
 	["drift_body_tilt",           "漂移车身侧倾(度)",   0.0,  60.0,  1.0,
-		"漂移时车身往内侧倾斜的最大角度, 仅视觉效果。", ""],
+		"漂移时车身往内侧倾斜的最大角度, 仅视觉效果。", "drift_body_tilt_curve"],
 	["drift_yaw_offset_tuck",     "甩尾yaw偏移(度)",    0.0,  60.0,  1.0,
 		"甩尾型漂移车头相对运动方向的偏转角度。", ""],
 	["drift_yaw_offset_side",     "侧身yaw偏移(度)",    0.0,  80.0,  1.0,
 		"侧身型漂移(反打入漂)车头相对运动方向的偏转, 比甩尾更夸张。", ""],
 	["side_drift_threshold",      "侧身触发侧速阈值",   0.0,  8.0,   0.1,
 		"反打入漂时, 横向速度超过此值则进入侧身漂(否则甩尾漂)。", ""],
-	["drift_min_angle_to_boost",  "小喷资格累积角(度)",   0.0,  120.0, 1.0,
-		"漂移期间车头转过此累计角度后, 退漂可触发小喷。", ""],
-	["drift_min_angle_to_double", "(已废弃)双喷累积角(度)",   0.0,  180.0, 1.0,
-		"已废弃: 现在双喷靠'小喷期间按住 Q 蓄能'触发。", ""],
-	["drift_max_duration",        "漂移最长持续(秒, 0=不限)",   0.0,  30.0,  0.5,
-		"漂移最长持续秒数, 超时强制断漂。设为 0 = 不限时(只要速度足够就一直漂)。", ""],
-	["drift_break_speed_ratio",   "低速断漂阈值倍率",   0.0,  1.0,   0.05,
-		"漂移时速度低于(最低入漂车速 × 此值)会触发低速宽限期。", ""],
-	["drift_low_speed_grace_time","低速断漂宽限秒数",   0.0,  2.0,   0.05,
-		"触发低速后给玩家多少秒'挽救'机会, 期间猛打方向继续漂可避免断漂。0=立即断漂(旧行为)。", ""],
-	["drift_grace_save_angle",    "宽限期挽救所需角度", 0.0,  60.0,  0.5,
-		"宽限期内车头再转过此角度即视为挽救成功, 取消断漂。", ""],
-	["drift_accel_mult",          "漂移加速倍率",       0.0,  1.5,   0.05,
-		"漂移时油门加速效果的倍率, <1 表示漂移会让加速变慢。", ""],
-	["drift_passive_decel",       "(旧)漂移前后向阻力", 0.0,  30.0,  0.5,
-		"旧参数, 现已与'漂移惯性阻力'合并(取较大值生效)。建议用下方新参数。", ""],
-	["drift_inertial_decel",      "漂移惯性阻力(能耗)", 0.0,  30.0,  0.5,
-		"漂移时沿惯性方向反向施加的总阻力, 等价于'总能耗摩擦'。作用在车身前后向速度反向, 让漂移明显减速。", ""],
-	["drift_max_speed",           "漂移最高速度(m/s)",  0.0,  100.0, 0.5,
-		"漂移时速度软上限。超过此值会施加反向刹车力。0 = 不限速(允许漂移期间继续加速到正常最高速)。", ""],
-	["drift_speed_brake_strength","漂移超速刹车强度",   0.0,  60.0,  0.5,
-		"漂移超过最高速度时反向刹车力的强度。越大刹得越急, 让漂移更明显减速。", ""],
-	["drift_counter_steer_break_time", "反打断漂秒数",  0.05, 1.5,   0.05,
-		"漂移中持续反向打方向超过此时长会自动退漂。", ""],
 
 	["__group", "[b]集气公式[/b]"],
 	["charge_nitro_full",         "一格氮气=多少集气",  20.0, 300.0, 5.0,
@@ -94,14 +120,10 @@ const PARAMS := [
 		"1=集气满立刻得到一格氮气可立即用; 0=漂移结束才结算(平衡向)。", ""],
 
 	["__group", "[b]喷射[/b]"],
-	["mini_boost_cost",           "小喷消耗(已废弃)",   5.0,  100.0, 1.0,
-		"已废弃, 保留兼容。", ""],
 	["mini_boost_power",          "小喷推进力",         5.0,  100.0, 1.0,
 		"小喷的基础推进力, 实时力 = 此值 × 力度曲线在当前进度的采样。", "mini_boost_curve"],
 	["mini_boost_time",           "小喷持续(秒)",       0.1,  3.0,   0.05,
 		"小喷持续时长。", ""],
-	["double_boost_window",       "双喷窗口(秒)",       0.05, 2.0,   0.05,
-		"(已废弃: 旧版退漂双喷窗口) 现已被双喷蓄能机制取代。", ""],
 	["double_boost_power",        "双喷推进力",         10.0, 150.0, 1.0,
 		"双喷基础推进力, 可绑定力度曲线。", "double_boost_curve"],
 	["double_boost_time",         "双喷持续(秒)",       0.1,  3.0,   0.05,
@@ -114,8 +136,6 @@ const PARAMS := [
 		"氮气基础推进力, 可绑定力度曲线。", "nitro_boost_curve"],
 	["nitro_time",                "氮气持续(秒)",       0.5,  6.0,   0.1,
 		"氮气持续时长。", ""],
-	["boost_speed_multiplier",    "喷射最高速倍率",     1.0,  3.0,   0.05,
-		"喷射期间车辆最高速被临时放大的倍率。", ""],
 
 	["__group", "[b]视觉[/b]"],
 	["body_tilt",                 "过弯侧倾敏感度",     5.0,  120.0, 1.0,
@@ -135,49 +155,11 @@ const PARAMS := [
 	["slope_as_wall_enabled",     "斜面视为墙",         0,    1,     1,
 		"1=陡斜面会被当作墙壁吸收速度+反推; 0=允许爬坡。", ""],
 	["slope_wall_angle_deg",      "斜面墙阈值(度)",     20.0, 85.0,  1.0,
-		"法线与竖直方向夹角 ≥ 此值视为墙壁。值越小越严格(更多缓坡都视为墙)。", ""],
+		"法线与竖直方向夹角 ≥ 此值视为墙壁。值越小越严格。", ""],
 	["slope_wall_bounce_absorb",  "撞斜面吸收速度比例", 0.0,  1.0,   0.05,
 		"撞斜面时沿法线速度被吸收的比例, 1=完全停下。", ""],
 	["slope_wall_push_back",      "撞斜面反推速度",     0.0,  20.0,  0.5,
 		"撞墙后沿法线方向额外推开的速度, 防止卡墙。", ""],
-
-	["__group", "[b]V2·动力(曲线化)[/b]"],
-	["use_v2_physics",            "启用V2物理模型",     0,    1,     1,
-		"1=启用丝滑新模型(推荐); 0=回退到旧物理(兼容)。", ""],
-	["engine_force_max",          "引擎最大推力",       10.0, 300.0, 1.0,
-		"引擎峰值推力. 实际推力 = 此值 × 引擎曲线在当前速度比的采样 × 油门.", "engine_force_curve"],
-	["brake_force_max_v2",        "刹车最大力",         10.0, 300.0, 1.0,
-		"刹车峰值力, 配合刹车曲线实现高速刹车更强的真实感.", "brake_force_curve"],
-	["engine_idle_drag",          "松油门引擎拖曳",     0.0,  20.0,  0.1,
-		"松油门时沿前进方向反向施加的力, 模拟引擎刹车/滚阻.", ""],
-
-	["__group", "[b]V2·摩擦 正常[/b]"],
-	["friction_long_normal",      "前后向摩擦基础",     0.0,  20.0,  0.1,
-		"正常行驶时车身前后方向的摩擦系数. 作用在 v_long 反向, 让车自然减速.", "friction_long_speed_curve_normal"],
-	["friction_lat_normal",       "侧向抓地基础",       0.0,  30.0,  0.1,
-		"正常行驶侧向抓地力(抗侧滑). 作用在 v_lat 反向, 越大过弯越稳.", "friction_lat_speed_curve_normal"],
-	["friction_air_drag",         "空气阻力系数",       0.0,  0.5,   0.005,
-		"与速度平方成正比的总阻力(沿惯性反向), 决定顶速手感. 0=关闭.", ""],
-
-	["__group", "[b]V2·摩擦 漂移[/b]"],
-	["friction_long_drift",       "漂移前后摩擦基础",   0.0,  20.0,  0.1,
-		"漂移时前后向摩擦(通常比正常低, 让车滑得更远).", "friction_long_speed_curve_drift"],
-	["friction_lat_drift",        "漂移侧向抓地基础",   0.0,  15.0,  0.1,
-		"漂移时侧向抓地(需要远小于正常值, 否则甩不出去).", "friction_lat_speed_curve_drift"],
-	["drift_extra_decel",         "漂移额外能耗",       0.0,  20.0,  0.1,
-		"漂移时额外沿惯性反向施加的整体减速力(模拟轮胎打滑功耗). 随 drift_intensity 插值.", ""],
-
-	["__group", "[b]V2·漂移动态[/b]"],
-	["drift_engage_duration",     "入漂过渡时长(秒)",   0.0,  1.5,   0.01,
-		"从直行切到漂移, drift_intensity 从 0 到 1 的过渡时间. 小=灵敏, 大=柔和.", "drift_engage_curve"],
-	["drift_disengage_duration",  "退漂过渡时长(秒)",   0.0,  1.5,   0.01,
-		"退漂时 drift_intensity 从 1 回到 0 的时间.", "drift_disengage_curve"],
-	["drift_head_yaw_duration_ref","车头曲线时间基准(秒)", 0.2, 6.0,  0.1,
-		"车头 yaw/侧倾曲线的 X 轴基准秒数. 漂移持续此秒数后曲线采样点到达 1.0.", "drift_head_yaw_curve"],
-	["drift_steer_mult_v2",       "漂移转向倍率",       1.0,  4.0,   0.05,
-		"漂移时转向速度相对正常的倍率, 数值越大漂移中越容易拉角度.", ""],
-	["drift_accel_mult_v2",       "漂移油门效率",       0.0,  1.5,   0.05,
-		"漂移时油门实际有效比例. 会与 drift_intensity 插值应用.", ""],
 ]
 
 const FX_PARAMS := [
@@ -962,7 +944,7 @@ func _load_from_file() -> void:
 	var err := cfg.load(SAVE_PATH)
 	if err != OK:
 		return
-	# 范围
+	# 范围(必须先加载范围, 才能用新范围去校验数值合法性)
 	if cfg.has_section("range"):
 		for prop in cfg.get_section_keys("range"):
 			if not _rows.has(prop):
@@ -974,15 +956,28 @@ func _load_from_file() -> void:
 			row.min = float(arr[0]); row.max = float(arr[1]); row.step = float(arr[2])
 			row.slider.min_value = row.min; row.slider.max_value = row.max; row.slider.step = row.step
 			row.spin.min_value = row.min; row.spin.max_value = row.max; row.spin.step = row.step
-	# 数值
+	# 数值: 只加载当前 PARAMS 中存在的 prop, 越界值放宽到 clamp 而不是丢弃
+	# (高压线: 永远不要丢弃用户保存的值! 哪怕越界也尽量回填, 提示一下就行)
 	if cfg.has_section("tune"):
 		for prop in cfg.get_section_keys("tune"):
+			if not _rows.has(prop):
+				continue   # 已废弃的旧参数, 忽略
 			var v = cfg.get_value("tune", prop)
-			var kind: String = _rows[prop].get("kind", "car") if _rows.has(prop) else "car"
-			_dispatch_apply(kind, prop, float(v))
-			if _rows.has(prop):
-				_rows[prop].slider.set_value_no_signal(float(v))
-				_rows[prop].spin.set_value_no_signal(float(v))
+			var fv: float = float(v)
+			var row = _rows[prop]
+			# 越界时自动放宽 row 范围, 把用户调过的值放进去
+			if fv < row.min:
+				push_warning("[Tuner] %s 加载值 %.3f 低于当前最小 %.3f, 自动放宽下限" % [prop, fv, row.min])
+				row.min = fv
+				row.slider.min_value = fv; row.spin.min_value = fv
+			if fv > row.max:
+				push_warning("[Tuner] %s 加载值 %.3f 高于当前最大 %.3f, 自动放宽上限" % [prop, fv, row.max])
+				row.max = fv
+				row.slider.max_value = fv; row.spin.max_value = fv
+			var kind: String = row.get("kind", "car")
+			_dispatch_apply(kind, prop, fv)
+			row.slider.set_value_no_signal(fv)
+			row.spin.set_value_no_signal(fv)
 	# 曲线
 	if cfg.has_section("curves"):
 		for cprop in cfg.get_section_keys("curves"):

@@ -228,12 +228,11 @@ func _on_drift_charge_level_changed(level: String) -> void:
 # 双喷蓄能进度 (小喷期间按住 Q): progress 0~1, 灯色从黄渐变到粉
 func _on_double_charge_progress(progress: float) -> void:
 	if progress <= 0.0:
-		# 重置回纯小喷黄(若仍在小喷)
-		if boost_lamp_icon:
-			_lamp_base_color = LAMP_MINI_COLOR
-			boost_lamp_icon.modulate = LAMP_MINI_COLOR
-		if boost_lamp_label:
-			boost_lamp_label.text = ""
+		# 蓄能取消: 回到当前真实状态对应的灯色, 不要强行点黄灯
+		if _car_is_mini_boosting():
+			_set_boost_lamp_on(LAMP_MINI_COLOR, "")
+		else:
+			_set_boost_lamp_off()
 		return
 	# 颜色从黄(mini)插值到粉(double)
 	var col: Color = LAMP_MINI_COLOR.lerp(LAMP_DOUBLE_COLOR, progress)
@@ -253,11 +252,18 @@ func _on_double_charge_ready() -> void:
 	_boost_timer = 1.5
 
 
-# 双喷资格失效(超时/已释放)
+# 双喷资格失效(超时/已释放/入漂清空 等)
+# 不论之前灯是什么状态, 双喷一旦失效就熄灯; 如果还在小喷中就退回小喷黄
 func _on_double_charge_lost() -> void:
-	# 如果还在小喷过程中, 灯回到黄色提示状态
-	# 否则熄灭(由其他状态接管)
-	if boost_lamp_label and boost_lamp_label.text.begins_with("W"):
-		# 已经按 W 释放过了, 不处理
-		return
-	_set_boost_lamp_off()
+	if _car_is_mini_boosting():
+		# 仍在小喷, 灯回到小喷黄
+		_set_boost_lamp_on(LAMP_MINI_COLOR, "")
+	else:
+		_set_boost_lamp_off()
+
+
+func _car_is_mini_boosting() -> bool:
+	if car_path.is_empty() or not has_node(car_path):
+		return false
+	var c: Node = get_node(car_path)
+	return c.get("is_boosting") and c.get("boost_type") == "mini"
