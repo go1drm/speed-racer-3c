@@ -38,6 +38,12 @@ const PARAMS := [
 		"刹车峰值力, 配合刹车曲线实现高速刹车更强的真实感.", "brake_force_curve"],
 	["engine_idle_drag",          "松油门引擎拖曳",     0.0,  20.0,  0.1,
 		"松油门时沿前进方向反向施加的力, 模拟引擎刹车/滚阻.", ""],
+	["reverse_threshold",         "刹车→倒车切换阈值",  0.0,  10.0,  0.1,
+		"车头方向速度低于此值时, 按下刹车键切换为倒车模式. 推荐 1.5.", ""],
+	["reverse_force_mult",        "倒车推力倍率",       0.0,  2.0,   0.05,
+		"倒车推力相对前进推力的倍率. 0.5=倒车力是前进的一半.", ""],
+	["reverse_max_speed",         "倒车最高速度(m/s)",  1.0,  40.0,  0.5,
+		"倒车时 long_speed 不能低于 -此值, 防止倒车太快.", ""],
 
 	["__group", "[b]摩擦·正常状态[/b]"],
 	["friction_long_normal",      "前后向摩擦",         0.0,  20.0,  0.1,
@@ -71,7 +77,7 @@ const PARAMS := [
 	["drift_max_speed",           "漂移最高速度(m/s)",  0.0,  100.0, 0.5,
 		"漂移时速度软上限。超过此值会施加反向刹车力。0 = 不限速。", ""],
 	["drift_speed_brake_strength","漂移超速刹车强度",   0.0,  60.0,  0.5,
-		"漂移超过最高速度时反向刹车力的强度。", ""],
+		"漂移超过最高速度时反向刹车力的强度. 实际施加 = 此值 × 超速比例 × 时间曲线(随漂移持续时间变化).", "drift_speed_brake_curve"],
 	["drift_counter_steer_break_time", "反打断漂秒数",  0.05, 1.5,   0.05,
 		"漂移中持续反向打方向超过此时长会自动退漂。", ""],
 	["drift_auto_exit_enabled",   "车正自动退漂",       0,    1,     1,
@@ -82,6 +88,9 @@ const PARAMS := [
 		"车头方向与运动方向夹角小于此值视为'摆正'。", ""],
 	["drift_auto_exit_time",      "自动退漂去抖时长(秒)", 0.0, 1.0,   0.01,
 		"满足'摆正+无侧滑'条件持续此秒数后才真正退漂。", ""],
+	["drift_auto_exit_protect_time","自动退漂保护期(秒)",  0.0, 1.5,   0.01,
+		"刚入漂的多少秒内不启用自动退漂. 防止入漂瞬间车头还没甩出来就被误判摆正而退漂.", ""],
+
 
 	["__group", "[b]漂移动态(曲线化)[/b]"],
 	["drift_engage_duration",     "入漂过渡时长(秒)",   0.0,  1.5,   0.01,
@@ -94,6 +103,20 @@ const PARAMS := [
 		"漂移时转向速度相对正常的倍率, 数值越大漂移中越容易拉角度.", ""],
 	["drift_accel_mult",          "漂移油门效率",       0.0,  1.5,   0.05,
 		"漂移时油门实际有效比例. 会与 drift_intensity 插值应用.", ""],
+	["drift_counter_steer_mult",  "反打转向缩减倍率",   0.0,  1.0,   0.05,
+		"漂移中反打方向(左漂右打或右漂左打)时的转向倍率. 0.35=反打时角速度只剩 35%, 1.0=不缩减.", ""],
+	["drift_exit_boost_duration", "退漂爆发期时长(秒)", 0.0,  2.0,   0.05,
+		"入漂/退漂瞬间触发的推力爆发期时长. 0=禁用.", ""],
+	["drift_exit_boost_mult",     "退漂爆发期推力倍率", 1.0,  3.0,   0.05,
+		"爆发期开始时的推力倍率, 之后线性衰减回 1.0. 1.5=起步瞬间推力 x1.5.", ""],
+	["post_drift_steer_cooldown", "退漂转向冷却时长(秒)", 0.0, 1.5,   0.01,
+		"退漂瞬间转向倍率被衰减, 在此秒数内线性回到 100%. 防止'漂移压制解除→车头突然超灵敏甩飞'. 0.35 推荐.", ""],
+	["post_drift_steer_mult",     "退漂转向冷却起始倍率", 0.0,  1.0,   0.05,
+		"退漂瞬间转向倍率. 0.5=只剩 50% 然后平滑回到 100%. 越小越稳, 越大越灵敏.", ""],
+	["drift_counter_lean_mult",   "反打侧倾衰减目标",   0.0,  1.0,   0.05,
+		"漂移反打时车身侧倾衰减到的最低倍率. 0=完全回正(正打入漂的逆播放), 1=反打不影响侧倾. 推荐 0~0.2.", ""],
+	["drift_counter_lean_smooth", "反打回正过渡速度",   1.0,  20.0,  0.5,
+		"反打/松开时车身侧倾的恢复过渡平滑速度. 越大反应越快越锐利, 越小越柔和. 推荐 4~8.", ""],
 	["drift_body_tilt",           "漂移车身侧倾(度)",   0.0,  60.0,  1.0,
 		"漂移时车身往内侧倾斜的最大角度, 仅视觉效果。", "drift_body_tilt_curve"],
 	["drift_yaw_offset_tuck",     "甩尾yaw偏移(度)",    0.0,  60.0,  1.0,
@@ -102,6 +125,8 @@ const PARAMS := [
 		"侧身型漂移(反打入漂)车头相对运动方向的偏转, 比甩尾更夸张。", ""],
 	["side_drift_threshold",      "侧身触发侧速阈值",   0.0,  8.0,   0.1,
 		"反打入漂时, 横向速度超过此值则进入侧身漂(否则甩尾漂)。", ""],
+	["drift_input_grace_window",  "Q 输入宽限期(秒)",   0.0,  0.5,   0.01,
+		"按下 Q 后这么久内只要方向键就位就立即入漂. QQ飞车手感: 玩家先按 Q 再补方向键也能漂.", ""],
 
 	["__group", "[b]集气公式[/b]"],
 	["charge_nitro_full",         "一格氮气=多少集气",  20.0, 300.0, 5.0,
@@ -118,6 +143,8 @@ const PARAMS := [
 		"最多能囤积多少格氮气。", ""],
 	["instant_nitro_settle",      "集气满立即结算氮气", 0,    1,     1,
 		"1=集气满立刻得到一格氮气可立即用; 0=漂移结束才结算(平衡向)。", ""],
+	["wall_crash_shake",          "撞墙震屏",           0.0,  2.0,   0.05,
+		"撞墙时震屏强度。0=不震。", ""],
 
 	["__group", "[b]喷射[/b]"],
 	["mini_boost_power",          "小喷推进力",         5.0,  100.0, 1.0,
@@ -136,6 +163,32 @@ const PARAMS := [
 		"氮气基础推进力, 可绑定力度曲线。", "nitro_boost_curve"],
 	["nitro_time",                "氮气持续(秒)",       0.5,  6.0,   0.1,
 		"氮气持续时长。", ""],
+	["nitro_require_throttle",    "松手中断氮气",       0,    1,     1,
+		"1=松开前进键立即中断氮气(QQ飞车手感); 0=氮气按时间跑完无视油门。", ""],
+	["mini_boost_shake",          "小喷震屏",           0.0,  2.0,   0.05,
+		"小喷触发时震屏强度。0=不震。", ""],
+	["double_boost_shake",        "双喷震屏",           0.0,  2.0,   0.05,
+		"双喷触发时震屏强度。0=不震。", ""],
+	["nitro_boost_shake",         "氮气震屏",           0.0,  2.0,   0.05,
+		"氮气触发时震屏强度。0=不震。", ""],
+
+	["__group", "[b]叠喷(连喷)[/b]"],
+	["stack_link_window",         "连喷接力窗口(秒)",   0.0,  1.5,   0.05,
+		"前一段喷射结束后多少秒内开新喷算'接力'。窗口越大越容易接, 太大失去操作感。", ""],
+	["stack_breakthrough_top_mult", "突破极速倍率",     1.0,  2.0,   0.01,
+		"每次成功突破极速时, 极速被提升的倍率(乘法叠加)。1.18 = 突破后极速 ×1.18, 二段突破 ×1.18²≈1.39。", ""],
+	["stack_max_breakthrough",    "最大突破次数",       0,    5,     1,
+		"叠喷链中能突破极速的最大次数, 超过后再多接也不再加速。", ""],
+
+	["__group", "[b]漂移氮气(过弯增强)[/b]"],
+	["drift_nitro_max_speed_mult","漂移氮气极速倍率",   1.0,  3.0,   0.05,
+		"漂移中放氮气时, 漂移最高速度上限的提升倍率(默认 1.5 = 提升 50%)。", ""],
+	["drift_nitro_steer_mult",    "漂移氮气转向倍率",   1.0,  3.0,   0.05,
+		"漂移中放氮气时, 漂移转向倍率额外加强(过弯更急更猛)。", ""],
+	["drift_nitro_lat_grip_mult", "漂移氮气侧向抓地倍率", 0.5, 3.0,  0.05,
+		"漂移中放氮气时, 侧向抓地额外加成。>1 让车不甩飞更稳, <1 让车更滑。", ""],
+	["drift_nitro_body_tilt_mult","漂移氮气侧倾倍率",   0.5,  2.5,   0.05,
+		"漂移中放氮气时, 车身侧倾视觉额外倍率(纯视觉效果, 更夸张的过弯姿态)。", ""],
 
 	["__group", "[b]视觉[/b]"],
 	["body_tilt",                 "过弯侧倾敏感度",     5.0,  120.0, 1.0,
@@ -145,13 +198,27 @@ const PARAMS := [
 	["head_yaw_deg",              "车头左右拧头幅度(度)", 0.0,  20.0,  0.5,
 		"非漂移时按方向键车头会做轻微 yaw 摆动, 这是幅度。", ""],
 
-	["__group", "[b]地面物理(防弹跳)[/b]"],
-	["ground_stick_enabled",      "落地吸附开关",       0,    1,     1,
-		"1=接触地面时抑制微弹; 0=保留原始物理弹跳。", ""],
-	["ground_stick_vy_threshold", "上弹速度归零阈值",   0.0,  20.0,  0.1,
-		"接触地面时, 若 Y 速度向上小于此值则直接归零, 消除橡皮球效应。", ""],
-	["ground_stick_down_clamp",   "下坠速度上限",       0.0,  50.0,  0.5,
-		"0=不限; >0 时限制车辆下坠速度的绝对值。", ""],
+	["__group", "[b]地面物理(防弹+贴附)[/b]"],
+	["ground_stick_enabled",      "防弹+贴附总开关",    0,    1,     1,
+		"1=启用统一的防弹/贴附机制; 0=纯物理, 会有弹跳。", ""],
+	["plain_slope_threshold_deg", "平地/坡面切换(度)",  0.0,  30.0,  0.5,
+		"小于此坡度视为平地(走强防弹), 大于等于则视为坡面(走温和贴附)。8 度合理。", ""],
+	["plain_vy_zero_threshold",   "平地向上速度归零阈值", 0.0, 20.0, 0.1,
+		"平地上 Y 向上速度 < 此值时直接置 0, 消除橡皮球效应。5 推荐。", ""],
+	["plain_downforce",           "平地持续下压力",     0.0,  40.0,  0.5,
+		"平地上向下施加的力(N/kg), 主动消除三角网格微弹。8 推荐, 太大会'粘地板'。", ""],
+	["plain_downforce_vy_gate",   "下压力触发阈值",     0.0,  5.0,   0.05,
+		"只在 Y 速度 > 此值时施加下压力。0.3=轻微抬起就压(推荐), 0=永远压(会干扰爬坡助力), 2+=只压大弹跳。", ""],
+	["plain_vy_down_clamp",       "平地下坠速度上限",   0.0,  50.0,  0.5,
+		"0=不限; >0 时限制平地上下坠速度绝对值。防止从高空砸地又弹飞。", ""],
+	["slope_stick_force",         "坡面贴附力",         0.0,  40.0,  0.5,
+		"坡面上沿法线反向加力, 防止过坎/接缝飞车。8 推荐。", ""],
+	["slope_stick_max_vy",        "坡面贴附 Y 速度上限", 0.0,  10.0,  0.1,
+		"Y 速度绝对值小于此值才贴附, 保护真跳跃/空喷不被吸回。2.5 合理。", ""],
+	["slope_stick_max_deg",       "坡面贴附最大坡度(度)", 5.0, 90.0,  1.0,
+		"超过此坡度(峭壁)不再贴附, 避免拉住爬墙车。60 合理。", ""],
+
+	["__group", "[b]斜面当墙[/b]"],
 	["slope_as_wall_enabled",     "斜面视为墙",         0,    1,     1,
 		"1=陡斜面会被当作墙壁吸收速度+反推; 0=允许爬坡。", ""],
 	["slope_wall_angle_deg",      "斜面墙阈值(度)",     20.0, 85.0,  1.0,
@@ -160,7 +227,125 @@ const PARAMS := [
 		"撞斜面时沿法线速度被吸收的比例, 1=完全停下。", ""],
 	["slope_wall_push_back",      "撞斜面反推速度",     0.0,  20.0,  0.5,
 		"撞墙后沿法线方向额外推开的速度, 防止卡墙。", ""],
+	["slope_wall_shake",          "撞斜面震屏",         0.0,  2.0,   0.05,
+		"撞斜面墙时震屏强度。0=不震。", ""],
+	["wall_bounce_boost_enabled", "弹墙推力开关",       0,    1,     1,
+		"1=漂移撞墙时车的尾/侧撞墙会获得弹墙加速; 0=纯撞墙吸收.", ""],
+	["wall_bounce_rear_threshold","尾撞判定阈值",       0.0,  1.0,   0.05,
+		"接触法线沿车头方向投影 > 此值视为尾撞. 0.4 推荐.", ""],
+	["wall_bounce_side_threshold","侧撞判定阈值",       0.0,  1.0,   0.05,
+		"接触法线沿车右方向投影绝对值 > 此值视为侧撞. 0.6 推荐.", ""],
+	["wall_bounce_min_into_speed","触发最小撞墙速度",   0.0,  20.0,  0.1,
+		"撞墙速度小于此值不触发弹推, 防止蹭墙也飞.", ""],
+	["wall_bounce_forward_speed", "弹墙推力大小(m/s)",  0.0,  30.0,  0.5,
+		"沿车头方向叠加的速度. 6 推荐.", ""],
+	["wall_drift_lockout_time",   "撞墙断漂入漂CD(秒)", 0.0,  2.0,   0.05,
+		"漂移中撞墙立即断漂(本次无小喷), 此秒数内按 Q 无法重新入漂. 0.5 推荐.", ""],
+
+	["__group", "[b]坡道(推力/重力补偿)[/b]"],
+	["slope_align_thrust",        "推力沿坡面切向",     0,    1,     1,
+		"1=上坡时推力沿坡面向上, 不再'水平推'(推荐); 0=老的水平推力, 上坡掉速明显。", ""],
+	["slope_gravity_compensation","上坡重力补偿",       0.0,  1.5,   0.05,
+		"上坡时额外施力抵消重力沿坡面分量。0=无补偿(掉速明显), 0.85=抵消 85%(推荐), 1.0=完全抵消。下坡不补偿。", ""],
+	["slope_compensation_max_deg","补偿最大坡度(度)",   0.0,  90.0,  1.0,
+		"超过此坡度不再补偿, 防止峭壁也能往上冲。45 度合理。", ""],
+
+	["__group", "[b]上坡爬升助力[/b]"],
+	["uphill_assist_enabled",     "上坡助力开关",       0,    1,     1,
+		"1=上坡时给额外推力, 克服推力曲线高速段衰减带来的爬坡乏力; 0=禁用(只靠引擎曲线和重力补偿)。", ""],
+	["uphill_assist_force",       "助力基础强度",       0.0,  60.0,  0.5,
+		"上坡助力的基础推力(直接加到引擎上, 单位与引擎峰值推力同). 推荐 4~10. 这个值会再乘坡度曲线 × 速度曲线 × 油门 × 喷射倍率。", ""],
+	["uphill_assist_min_deg",     "触发最小坡度(度)",   0.0,  30.0,  0.5,
+		"小于此坡度不施加助力, 避免平地有'莫名加速'。4 度合理。", ""],
+	["uphill_assist_max_deg",     "助力最大坡度(度)",   5.0,  90.0,  1.0,
+		"助力曲线 X=1 对应的坡度. 超过此角度时助力不再增加。", "uphill_assist_slope_curve"],
+	["uphill_assist_require_throttle","需要踩油门",     0,    1,     1,
+		"1=只在踩油门时给助力(QQ飞车默认); 0=松油门也给(防溜车下坡)。", ""],
+	["uphill_assist_boost_mult",  "喷射期间助力倍率",   0.5,  3.0,   0.05,
+		"喷射状态下助力额外乘这个值. 1.0=不变, 1.5=喷射上坡更猛。", "uphill_assist_speed_curve"],
+
+
+	["__group", "[b]空喷 / 落地喷[/b]"],
+	["air_boost_enabled",         "空喷开关",           0,    1,     1,
+		"1=空中按 W 缓存意图, 落地瞬间触发加速喷; 0=禁用。", ""],
+	["air_boost_min_air_time",    "空喷最小腾空(秒)",   0.0,  1.5,   0.01,
+		"离地不足这么久时, 落地不会触发空喷(防止小颠簸误触发)。0.18 推荐。", ""],
+	["air_boost_intent_window",   "空喷意图窗口(秒)",   0.1,  5.0,   0.05,
+		"空中按下 W 后, 多长时间内落地都算空喷有效。1.5 推荐, 太短会按了没用。", ""],
+	["air_boost_power",           "空喷推进力",         5.0,  150.0, 1.0,
+		"空喷基础推力 × 力度曲线在当前进度的采样。", "air_boost_curve"],
+	["air_boost_time",            "空喷持续(秒)",       0.1,  3.0,   0.05,
+		"空喷持续秒数。", ""],
+	["air_landing_speed_recover", "落地水平速度补偿",   0.0,  1.0,   0.05,
+		"飞行中空气阻力会损耗水平速度, 落地把它拉回。0=不补偿, 1=完全保留起飞前速度, 0.85 推荐。", ""],
+	["air_boost_shake",           "空喷震屏强度",       0.0,  2.0,   0.05,
+		"空喷释放瞬间的震屏强度, 0 = 不震。", ""],
+	["air_boost_overrides_window","空喷覆盖窗口逻辑",   0,    1,     1,
+		"1=空中按 W 只缓存空喷, 不再走漂移/双喷/小喷窗口判定(推荐); 0=允许同帧叠加。", ""],
+	["landing_boost_enabled",     "落地喷开关",         0,    1,     1,
+		"1=飞行足够久后, 稳定落地开启按 W 窗口手动触发(不自动); 0=禁用。", ""],
+	["landing_boost_min_air_time","落地喷最小腾空(秒)", 0.0,  3.0,   0.05,
+		"必须飞这么久才能触发落地喷。0.8 推荐, 比空喷门槛高。", ""],
+	["landing_boost_power",       "落地喷推进力",       5.0,  120.0, 1.0,
+		"落地喷基础推力。", "landing_boost_curve"],
+	["landing_boost_time",        "落地喷持续(秒)",     0.1,  2.0,   0.05,
+		"落地喷持续秒数。", ""],
+	["landing_boost_press_window","落地喷按键窗口(秒)", 0.1,  2.0,   0.05,
+		"稳定落地后, 玩家可按 W 触发落地喷的时间窗口。0.5 推荐, 太短会错过。", ""],
+	["landing_stable_time",       "落地稳定判定(秒)",   0.0,  0.5,   0.005,
+		"连续接地此秒数才视为'真正落地'并开放按键窗口, 避免刚蹭一下就触发。0.08 推荐。", ""],
+	["landing_stable_max_vy",     "落地稳定 Y 速度上限", 0.0, 20.0, 0.2,
+		"Y 速度绝对值超过此值就不算'稳定'(还在砸地过程中)。4 合理。", ""],
+	["landing_boost_stacks_with_air", "落地喷叠加空喷(兼容)", 0, 1, 1,
+		"旧参数, 按键触发模式下一般不用。", ""],
+	["landing_boost_shake",       "落地喷震屏强度",     0.0,  2.0,   0.05,
+		"落地喷触发时震屏强度。", ""],
+	["landing_impact_absorb",     "落地冲击吸收",       0.0,  1.0,   0.05,
+		"落地瞬间 Y 方向冲击吸收比例。0=保留下落动能造成弹跳, 1=完全吸收平稳落地, 0.85 推荐。", ""],
 ]
+
+# 仅当 CarMesh 节点上挂了支持调参的脚本(如 YuqilinTuning) 时才显示
+const CAR_MESH_PARAMS := [
+	["fbx_scale",                 "玉麒麟整体缩放",            0.001, 5.0,  0.001,
+		"玉麒麟 FBX 整体缩放. FBX 原始 ≈ 3×5×3m, 0.025 让车变成约 7.5×12×7.5cm; 1.0 = 原始尺寸.", ""],
+	["fbx_rot_y_deg",             "玉麒麟 Y 轴旋转(度)",       -180.0, 180.0, 1.0,
+		"车头朝向修正. 0 = FBX 默认; 180 = 车头翻转(QQ飞车端游 FBX 通常需要 180 才能让车头朝 -Z).", ""],
+	["fbx_offset_y",              "玉麒麟 Y 偏移(米)",         -3.0, 3.0,  0.01,
+		"上下平移车身, 用于让车底贴 RigidBody 球体顶端. + = 车上移.", ""],
+]
+
+# BoostFX 强度参数(应用到所有 BoostFX 实例, 玉麒麟 5 个 tailpipe 都同步)
+const BOOST_FX_PARAMS := [
+	["fx_global_amount_mult",     "喷射特效全局强度",          0.1,  3.0, 0.05,
+		"全部喷射特效粒子量倍率(空喷/落地喷/小喷/双喷/氮气). 0.5=减半, 1.0=默认, 太大可能掉帧.", ""],
+	["nitro_amount_base",         "氮气基础粒子数",            10,   400, 5,
+		"氮气基础粒子数量(0 突破时). 越大越浓.", ""],
+	["nitro_amount_mult_0",       "氮气量·0突破倍率",          0.5,  3.0, 0.05,
+		"未突破极速时的粒子量倍率.", ""],
+	["nitro_amount_mult_1",       "氮气量·1突破倍率(金)",      0.5,  3.0, 0.05,
+		"突破1次(金色氮气)时的粒子量倍率.", ""],
+	["nitro_amount_mult_2",       "氮气量·2突破倍率(红)",      0.5,  3.0, 0.05,
+		"突破2次(红色氮气)时的粒子量倍率.", ""],
+	["nitro_scale_mult_0",        "氮气尺寸·0突破",            0.3,  3.0, 0.05,
+		"未突破时粒子大小倍率.", ""],
+	["nitro_scale_mult_1",        "氮气尺寸·1突破(金)",        0.3,  3.0, 0.05,
+		"突破1次时粒子大小倍率.", ""],
+	["nitro_scale_mult_2",        "氮气尺寸·2突破(红)",        0.3,  3.0, 0.05,
+		"突破2次时粒子大小倍率.", ""],
+	["nitro_light_energy_mult_0", "氮气光强·0突破",            0.0,  4.0, 0.05,
+		"未突破时灯光强度倍率.", ""],
+	["nitro_light_energy_mult_1", "氮气光强·1突破(金)",        0.0,  4.0, 0.05,
+		"突破1次时灯光强度倍率.", ""],
+	["nitro_light_energy_mult_2", "氮气光强·2突破(红)",        0.0,  4.0, 0.05,
+		"突破2次时灯光强度倍率.", ""],
+	["nitro_velocity_mult_0",     "氮气速度·0突破",            0.3,  3.0, 0.05,
+		"未突破时粒子速度倍率.", ""],
+	["nitro_velocity_mult_1",     "氮气速度·1突破(金)",        0.3,  3.0, 0.05,
+		"突破1次时粒子速度倍率.", ""],
+	["nitro_velocity_mult_2",     "氮气速度·2突破(红)",        0.3,  3.0, 0.05,
+		"突破2次时粒子速度倍率.", ""],
+]
+
 
 const FX_PARAMS := [
 	["permanent_marks",           "胎印永久",                  0, 1, 1,
@@ -176,30 +361,56 @@ const FX_PARAMS := [
 ]
 
 const CAM_PARAMS := [
-	["lerp_speed",                "镜头跟随速度",              0.5,  15.0, 0.1,
-		"相机插值速度, 越大越紧贴车辆。", ""],
+	["lerp_speed",                "镜头跟随速度",              0.5,  30.0, 0.1,
+		"相机插值速度, 越大越紧贴车辆. 高速下若值太小, 相机会被车甩开造成'拉远'感.", ""],
+	["max_follow_lag",            "最大滞后距离",              0.0,  30.0, 0.1,
+		"相机到车的最大允许距离. 超出立即拉回, 防止高速被甩开. 0 = 不限制.", ""],
+	["base_fov_override",         "基础 FOV 覆盖值",           30.0, 120.0,0.5,
+		"配合'启用FOV覆盖'使用, 强制把相机 FOV 设成这个值. 越小越像长焦(压缩感), 越大越广角(速度感).", ""],
+	["use_base_fov_override",     "启用FOV覆盖",               0,    1,    1,
+		"1=用'基础 FOV 覆盖值'强制设定 FOV; 0=沿用场景/玩家在编辑器设的 FOV.", ""],
+	["offset.x",                  "基础偏移 X (左右)",         -20.0, 20.0, 0.1,
+		"相机基础偏移 X 分量(本地坐标). >0 车辆本地右方.", ""],
+	["offset.y",                  "基础偏移 Y (上下)",         -10.0, 20.0, 0.1,
+		"相机基础偏移 Y 分量. >0 车辆上方.", ""],
+	["offset.z",                  "基础偏移 Z (前后)",         -10.0, 20.0, 0.1,
+		"相机基础偏移 Z 分量. >0 车辆后方(通常跟随相机用正值).", ""],
+	["nitro_zoom_offset.x",       "氮气拉远 X",                -10.0, 10.0, 0.05,
+		"氮气拉远向量 X 分量, 在 offset 基础上额外叠加.", ""],
+	["nitro_zoom_offset.y",       "氮气拉远 Y",                -10.0, 10.0, 0.05,
+		"氮气拉远向量 Y 分量, 通常轻微抬高.", ""],
+	["nitro_zoom_offset.z",       "氮气拉远 Z",                -10.0, 10.0, 0.05,
+		"氮气拉远向量 Z 分量, 通常正值把镜头推后.", ""],
 	["nitro_zoom_duration",       "氮气拉远持续(秒)",          0.0,  6.0,  0.1,
-		"氮气期间镜头拉远效果持续时间。", ""],
+		"氮气期间镜头拉远效果持续时间.", ""],
 	["nitro_fov_boost",           "氮气FOV增量(度)",           0.0,  30.0, 0.5,
-		"氮气期间 FOV 临时增加多少度, 增强速度感。", "nitro_zoom_curve"],
+		"氮气期间 FOV 临时增加多少度, 增强速度感.", "nitro_zoom_curve"],
 	["double_zoom_scale",         "双喷拉远倍率",              0.0,  2.0,  0.05,
-		"双喷拉远偏移 = 氮气偏移 × 此值。", "double_zoom_curve"],
+		"双喷拉远偏移 = 氮气偏移 × 此值.", "double_zoom_curve"],
 	["double_zoom_duration",      "双喷拉远持续(秒)",          0.0,  3.0,  0.05,
-		"双喷期间镜头拉远持续秒数。", ""],
+		"双喷期间镜头拉远持续秒数.", ""],
 	["double_fov_boost",          "双喷FOV增量(度)",           0.0,  20.0, 0.5,
-		"双喷期间 FOV 增加量。", ""],
+		"双喷期间 FOV 增加量.", ""],
 	["mini_zoom_scale",           "小喷拉远倍率(0=不拉)",      0.0,  1.5,  0.05,
-		"小喷拉远偏移 = 氮气偏移 × 此值, 0 表示小喷不拉远。", "mini_zoom_curve"],
+		"小喷拉远偏移 = 氮气偏移 × 此值, 0 表示小喷不拉远.", "mini_zoom_curve"],
 	["mini_zoom_duration",        "小喷拉远持续(秒)",          0.0,  2.0,  0.05,
-		"小喷期间镜头拉远持续秒数。", ""],
+		"小喷期间镜头拉远持续秒数.", ""],
 	["mini_fov_boost",            "小喷FOV增量(度)",           0.0,  15.0, 0.5,
-		"小喷期间 FOV 增加量。", ""],
+		"小喷期间 FOV 增加量.", ""],
 	["zoom_lerp_speed",           "拉远/FOV平滑速度",          0.5,  15.0, 0.1,
-		"镜头偏移和 FOV 变化的平滑速度, 越大变化越突兀。", ""],
+		"镜头偏移和 FOV 变化的平滑速度, 越大变化越突兀.", ""],
 	["shake_y_factor",            "震动 Y 衰减系数",            0.0,  2.0,  0.05,
-		"垂直方向震动相对水平的衰减比例。", ""],
+		"垂直方向震动相对水平的衰减比例.", ""],
 	["shake_z_factor",            "震动 Z 衰减系数",            0.0,  2.0,  0.05,
-		"前后方向震动相对水平的衰减比例。", ""],
+		"前后方向震动相对水平的衰减比例.", ""],
+	["y_stabilizer_enabled",      "Y 稳定器开关",              0,    1,    1,
+		"1=过滤平地微抖引起的相机抖动(推荐); 0=相机 Y 完全跟车.", ""],
+	["y_deadzone",                "Y 死区(米)",                0.0,  1.0,  0.01,
+		"相机与车 Y 差距小于此值时相机不动. 0.15 推荐, 大=稳但大起伏响应慢, 小=灵敏但还抖.", ""],
+	["y_follow_speed_mult",       "Y 跟随速度倍率",            0.0,  2.0,  0.05,
+		"死区外 Y 方向 lerp 速度的倍率(相对水平). 0.35 推荐, 越小越慢追 Y 变化.", ""],
+	["y_force_follow_vy",         "Y 强制跟随速度阈值",        0.0,  20.0, 0.1,
+		"车 Y 速度绝对值超过此值时立即完全跟随(起跳/落地). 3.0 推荐.", ""],
 ]
 
 # 曲线属性默认范围(都是 0..1 → 0..1+)
@@ -221,6 +432,11 @@ const CURVE_PROPS := {
 	"drift_disengage_curve":              {"target": "car"},
 	"drift_head_yaw_curve":               {"target": "car"},
 	"drift_body_tilt_curve":              {"target": "car"},
+	"drift_speed_brake_curve":            {"target": "car"},
+	"air_boost_curve":                    {"target": "car"},
+	"landing_boost_curve":                {"target": "car"},
+	"uphill_assist_slope_curve":          {"target": "car"},
+	"uphill_assist_speed_curve":          {"target": "car"},
 }
 
 const SAVE_PATH := "user://tune.cfg"
@@ -253,9 +469,9 @@ func _bind_car() -> void:
 		if p[0] == "__group":
 			continue
 		var prop: String = p[0]
-		if not prop in car:
+		if not _has_prop(car, prop):
 			continue
-		var v = car.get(prop)
+		var v = _read_prop(car, prop)
 		_defaults[prop] = v
 		if _rows.has(prop):
 			_rows[prop].slider.set_value_no_signal(float(v))
@@ -266,9 +482,9 @@ func _bind_car() -> void:
 	if fx:
 		for p in FX_PARAMS:
 			var prop: String = p[0]
-			if not prop in fx:
+			if not _has_prop(fx, prop):
 				continue
-			var v = fx.get(prop)
+			var v = _read_prop(fx, prop)
 			_defaults[prop] = v
 			if _rows.has(prop):
 				_rows[prop].slider.set_value_no_signal(float(v))
@@ -279,9 +495,35 @@ func _bind_car() -> void:
 	if cam:
 		for p in CAM_PARAMS:
 			var prop: String = p[0]
-			if not prop in cam:
+			if not _has_prop(cam, prop):
 				continue
-			var v = cam.get(prop)
+			var v = _read_prop(cam, prop)
+			_defaults[prop] = v
+			if _rows.has(prop):
+				_rows[prop].slider.set_value_no_signal(float(v))
+				_rows[prop].spin.set_value_no_signal(float(v))
+
+	# CarMesh 参数 (玉麒麟外观调参)
+	var car_mesh = _get_car_mesh()
+	if car_mesh:
+		for p in CAR_MESH_PARAMS:
+			var prop: String = p[0]
+			if not _has_prop(car_mesh, prop):
+				continue
+			var v = _read_prop(car_mesh, prop)
+			_defaults[prop] = v
+			if _rows.has(prop):
+				_rows[prop].slider.set_value_no_signal(float(v))
+				_rows[prop].spin.set_value_no_signal(float(v))
+
+	# BoostFX 参数 (从第一个 BoostFX 读初始值)
+	var bfx = _get_boost_fx_first()
+	if bfx:
+		for p in BOOST_FX_PARAMS:
+			var prop: String = p[0]
+			if not _has_prop(bfx, prop):
+				continue
+			var v = _read_prop(bfx, prop)
 			_defaults[prop] = v
 			if _rows.has(prop):
 				_rows[prop].slider.set_value_no_signal(float(v))
@@ -324,6 +566,32 @@ func _get_drift_fx() -> Node:
 	return null
 
 
+# 获取所有 BoostFX 实例 (玉麒麟有 5 个 tailpipe → 5 个; SUV 是 1 个)
+func _get_boost_fx_all() -> Array:
+	var out: Array = []
+	if car == null:
+		return out
+	_collect_boost_fx_recursive(car, out)
+	return out
+
+
+func _collect_boost_fx_recursive(node: Node, out: Array) -> void:
+	for c in node.get_children():
+		var s: Script = c.get_script() as Script
+		if s != null and str(s.resource_path).ends_with("BoostFX.gd"):
+			out.append(c)
+		else:
+			_collect_boost_fx_recursive(c, out)
+
+
+# 返回第一个 BoostFX, 用于读取初始值
+func _get_boost_fx_first() -> Node:
+	var arr := _get_boost_fx_all()
+	if arr.is_empty():
+		return null
+	return arr[0]
+
+
 func _get_camera() -> Node:
 	var scene := get_tree().current_scene
 	if scene == null:
@@ -344,8 +612,54 @@ func _find_camera_recursive(node: Node) -> Node:
 # ============================================================
 #  应用值
 # ============================================================
+func _read_prop(target: Object, prop: String):
+	# 支持 "vec.x" 形式读取 Vector3 分量
+	if target == null:
+		return null
+	if "." in prop:
+		var parts: PackedStringArray = prop.split(".")
+		if parts.size() == 2 and parts[0] in target:
+			var vec = target.get(parts[0])
+			if vec is Vector3:
+				match parts[1]:
+					"x": return vec.x
+					"y": return vec.y
+					"z": return vec.z
+		return null
+	if prop in target:
+		return target.get(prop)
+	return null
+
+
+func _has_prop(target: Object, prop: String) -> bool:
+	if target == null:
+		return false
+	if "." in prop:
+		var parts: PackedStringArray = prop.split(".")
+		return parts.size() == 2 and parts[0] in target and (target.get(parts[0]) is Vector3)
+	return prop in target
+
+
 func _apply_to(target: Object, prop: String, v: float) -> void:
-	if not target or not prop in target:
+	if not target:
+		return
+	# 支持 Vector3 分量访问: "offset.x" / "nitro_zoom_offset.y" 等
+	if "." in prop:
+		var parts: PackedStringArray = prop.split(".")
+		if parts.size() == 2:
+			var base_prop: String = parts[0]
+			var comp: String = parts[1]
+			if base_prop in target:
+				var vec = target.get(base_prop)
+				if vec is Vector3:
+					match comp:
+						"x": vec.x = v
+						"y": vec.y = v
+						"z": vec.z = v
+					target.set(base_prop, vec)
+					return
+		return
+	if not prop in target:
 		return
 	var current = target.get(prop)
 	if typeof(current) == TYPE_INT:
@@ -362,8 +676,21 @@ func _dispatch_apply(kind: String, prop: String, v: float) -> void:
 			_apply_to(_get_drift_fx(), prop, v)
 		"cam":
 			_apply_to(_get_camera(), prop, v)
+		"car_mesh":
+			_apply_to(_get_car_mesh(), prop, v)
+		"boost_fx":
+			# 应用到所有 BoostFX (玉麒麟 5 个 tailpipe 都同步)
+			for fx in _get_boost_fx_all():
+				_apply_to(fx, prop, v)
 		_:
 			_apply_to(car, prop, v)
+
+
+func _get_car_mesh() -> Node:
+	# 返回 car 节点下的 CarMesh (可能是 YuqilinMesh 等带 export 调参属性的脚本)
+	if car == null:
+		return null
+	return car.get_node_or_null("CarMesh")
 
 
 func _apply_curve_to_target(curve_prop: String, curve: Curve) -> void:
@@ -383,67 +710,165 @@ func _apply_curve_to_target(curve_prop: String, curve: Curve) -> void:
 # ============================================================
 func _build_ui() -> void:
 	_panel = PanelContainer.new()
+	# 左侧 1/3 屏幕宽
 	_panel.set_anchors_preset(Control.PRESET_LEFT_WIDE)
-	_panel.offset_left = 10
-	_panel.offset_top = 10
-	_panel.offset_right = 470
-	_panel.offset_bottom = -10
+	var vp_w: float = float(get_viewport().get_visible_rect().size.x)
+	if vp_w <= 0.0:
+		vp_w = 1280.0
+	var panel_w: int = int(clampf(vp_w / 3.0, 340.0, 520.0))
+	_panel.offset_left = 8
+	_panel.offset_top = 8
+	_panel.offset_right = 8 + panel_w
+	_panel.offset_bottom = -8
 	_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	# 监听视口大小变化, 动态调整宽度
+	get_viewport().size_changed.connect(_on_viewport_resize)
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.08, 0.08, 0.1, 0.92)
 	sb.corner_radius_top_left = 8
 	sb.corner_radius_top_right = 8
 	sb.corner_radius_bottom_left = 8
 	sb.corner_radius_bottom_right = 8
-	sb.content_margin_left = 10
-	sb.content_margin_right = 10
-	sb.content_margin_top = 8
-	sb.content_margin_bottom = 8
+	sb.content_margin_left = 8
+	sb.content_margin_right = 8
+	sb.content_margin_top = 6
+	sb.content_margin_bottom = 6
 	_panel.add_theme_stylebox_override("panel", sb)
 	add_child(_panel)
 
 	var root := VBoxContainer.new()
-	root.add_theme_constant_override("separation", 4)
+	root.add_theme_constant_override("separation", 3)
 	_panel.add_child(root)
 
 	var title := Label.new()
-	title.text = "🔧 调参面板  (TAB 切换 · 点击参数名改范围 · 🎨 编辑曲线)"
-	title.add_theme_font_size_override("font_size", 16)
+	title.text = "🔧 调参  (TAB 切换显示)"
+	title.add_theme_font_size_override("font_size", 12)
 	title.add_theme_color_override("font_color", Color(1, 0.85, 0.3))
-	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	root.add_child(title)
 
 	# 工具栏
 	var tools := HBoxContainer.new()
-	tools.add_theme_constant_override("separation", 6)
+	tools.add_theme_constant_override("separation", 4)
 	root.add_child(tools)
-	var btn_reset := Button.new(); btn_reset.text = "重置默认"; btn_reset.pressed.connect(_on_reset); tools.add_child(btn_reset)
-	var btn_save := Button.new(); btn_save.text = "保存"; btn_save.pressed.connect(_on_save); tools.add_child(btn_save)
-	var btn_load := Button.new(); btn_load.text = "加载"; btn_load.pressed.connect(_on_load); tools.add_child(btn_load)
+	var btn_reset := Button.new(); btn_reset.text = "重置"; btn_reset.add_theme_font_size_override("font_size", 11); btn_reset.pressed.connect(_on_reset); tools.add_child(btn_reset)
+	var btn_save := Button.new(); btn_save.text = "保存"; btn_save.add_theme_font_size_override("font_size", 11); btn_save.pressed.connect(_on_save); tools.add_child(btn_save)
+	var btn_load := Button.new(); btn_load.text = "加载"; btn_load.add_theme_font_size_override("font_size", 11); btn_load.pressed.connect(_on_load); tools.add_child(btn_load)
+
+	# === 竖排 tab: 左侧 ItemList 做侧边栏, 右侧 VBox 装参数页 ===
+	var body := HBoxContainer.new()
+	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	body.add_theme_constant_override("separation", 4)
+	root.add_child(body)
+
+	_tab_list = ItemList.new()
+	_tab_list.custom_minimum_size = Vector2(90, 0)
+	_tab_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_tab_list.add_theme_font_size_override("font_size", 11)
+	_tab_list.allow_reselect = true
+	body.add_child(_tab_list)
+
+	# 右侧: 一个 ScrollContainer, 里面根据当前 tab 显示对应 VBox
+	_tab_content_holder = Panel.new()
+	_tab_content_holder.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_tab_content_holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	body.add_child(_tab_content_holder)
+	var holder_vb := VBoxContainer.new()
+	holder_vb.set_anchors_preset(Control.PRESET_FULL_RECT)
+	holder_vb.offset_left = 2
+	holder_vb.offset_right = -2
+	holder_vb.offset_top = 2
+	holder_vb.offset_bottom = -2
+	_tab_content_holder.add_child(holder_vb)
 
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.custom_minimum_size = Vector2(440, 540)
-	root.add_child(scroll)
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	holder_vb.add_child(scroll)
 
-	var list := VBoxContainer.new()
-	list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	list.add_theme_constant_override("separation", 2)
-	scroll.add_child(list)
+	var pages_root := VBoxContainer.new()
+	pages_root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(pages_root)
+	_pages_root = pages_root
 
+	# 解析 PARAMS: 用 __group 切片, 每组一个页
+	var current_list: VBoxContainer = null
+	var current_tab_name: String = ""
 	for p in PARAMS:
 		if p[0] == "__group":
-			_add_group_header(list, p[1])
-			continue
-		_add_param_row(list, p, "car")
+			current_tab_name = _strip_bbcode(p[1])
+			current_list = _create_tab_page(current_tab_name)
+		else:
+			if current_list == null:
+				current_tab_name = "其他"
+				current_list = _create_tab_page(current_tab_name)
+			_add_param_row(current_list, p, "car")
 
-	_add_group_header(list, "[b]漂移特效[/b]")
+	# FX / CAM 各自一个 Tab
+	var fx_list: VBoxContainer = _create_tab_page("漂移特效")
 	for p in FX_PARAMS:
-		_add_param_row(list, p, "fx")
+		_add_param_row(fx_list, p, "fx")
 
-	_add_group_header(list, "[b]镜头(氮气/双喷拉远)[/b]")
+	var cam_list: VBoxContainer = _create_tab_page("镜头")
 	for p in CAM_PARAMS:
-		_add_param_row(list, p, "cam")
+		_add_param_row(cam_list, p, "cam")
+
+	# 玉麒麟外观调参 Tab (只对挂了 YuqilinTuning 脚本的 CarMesh 生效, 否则参数不会被应用)
+	var car_mesh_list: VBoxContainer = _create_tab_page("玉麒麟外观")
+	for p in CAR_MESH_PARAMS:
+		_add_param_row(car_mesh_list, p, "car_mesh")
+
+	# 喷射特效强度 Tab (BoostFX)
+	var bfx_list: VBoxContainer = _create_tab_page("喷射特效强度")
+	for p in BOOST_FX_PARAMS:
+		_add_param_row(bfx_list, p, "boost_fx")
+
+	# 默认选中第一个 tab
+	if _tab_list.item_count > 0:
+		_tab_list.select(0)
+		_on_tab_selected(0)
+	_tab_list.item_selected.connect(_on_tab_selected)
+
+
+# 竖排 tab 相关状态
+var _tab_list: ItemList
+var _tab_content_holder: Panel
+var _pages_root: VBoxContainer
+var _tab_pages: Array[VBoxContainer] = []
+
+
+func _on_viewport_resize() -> void:
+	if _panel == null:
+		return
+	var vp_w: float = float(get_viewport().get_visible_rect().size.x)
+	if vp_w <= 0.0:
+		return
+	var panel_w: int = int(clampf(vp_w / 3.0, 340.0, 520.0))
+	_panel.offset_right = 8 + panel_w
+
+
+func _create_tab_page(tab_name: String) -> VBoxContainer:
+	_tab_list.add_item(tab_name)
+	var page := VBoxContainer.new()
+	page.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	page.add_theme_constant_override("separation", 2)
+	page.visible = false
+	_pages_root.add_child(page)
+	_tab_pages.append(page)
+	return page
+
+
+func _on_tab_selected(idx: int) -> void:
+	for i in range(_tab_pages.size()):
+		_tab_pages[i].visible = (i == idx)
+
+
+# 简单去除 [b][/b] 等 bbcode 标签, 用于 Tab 标题
+func _strip_bbcode(s: String) -> String:
+	var out: String = s
+	out = out.replace("[b]", "").replace("[/b]", "")
+	out = out.replace("[i]", "").replace("[/i]", "")
+	return out
 
 
 func _add_group_header(parent: Node, title_text: String) -> void:
@@ -469,7 +894,7 @@ func _add_param_row(parent: Node, p: Array, kind: String) -> void:
 	var curve_prop: String = p[6] if p.size() > 6 else ""
 
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
+	row.add_theme_constant_override("separation", 3)
 	parent.add_child(row)
 
 	# 参数名(可点击修改范围)
@@ -477,8 +902,9 @@ func _add_param_row(parent: Node, p: Array, kind: String) -> void:
 	name_btn.text = label_text
 	name_btn.flat = true
 	name_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	name_btn.custom_minimum_size = Vector2(170, 0)
-	name_btn.add_theme_font_size_override("font_size", 12)
+	name_btn.custom_minimum_size = Vector2(120, 0)
+	name_btn.clip_text = true
+	name_btn.add_theme_font_size_override("font_size", 11)
 	name_btn.add_theme_color_override("font_color", Color(0.9, 0.9, 0.95))
 	name_btn.tooltip_text = tooltip
 	name_btn.pressed.connect(func(): _open_range_editor(prop))
@@ -488,7 +914,7 @@ func _add_param_row(parent: Node, p: Array, kind: String) -> void:
 	slider.min_value = vmin
 	slider.max_value = vmax
 	slider.step = step
-	slider.custom_minimum_size = Vector2(120, 20)
+	slider.custom_minimum_size = Vector2(80, 18)
 	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	slider.tooltip_text = tooltip
 	row.add_child(slider)
@@ -497,8 +923,12 @@ func _add_param_row(parent: Node, p: Array, kind: String) -> void:
 	spin.min_value = vmin
 	spin.max_value = vmax
 	spin.step = step
-	spin.custom_minimum_size = Vector2(70, 0)
+	spin.custom_minimum_size = Vector2(58, 0)
 	spin.tooltip_text = tooltip
+	# 调窄 SpinBox 里的数值显示区域
+	var line_edit: LineEdit = spin.get_line_edit()
+	if line_edit:
+		line_edit.add_theme_font_size_override("font_size", 11)
 	row.add_child(spin)
 
 	# 曲线编辑按钮(仅对绑定 curve_prop 的参数显示)
@@ -507,7 +937,8 @@ func _add_param_row(parent: Node, p: Array, kind: String) -> void:
 		curve_btn = Button.new()
 		curve_btn.text = "🎨"
 		curve_btn.tooltip_text = "编辑曲线: " + curve_prop
-		curve_btn.custom_minimum_size = Vector2(28, 0)
+		curve_btn.custom_minimum_size = Vector2(24, 0)
+		curve_btn.add_theme_font_size_override("font_size", 11)
 		curve_btn.pressed.connect(func(): _open_curve_editor(curve_prop))
 		row.add_child(curve_btn)
 
@@ -911,6 +1342,8 @@ func _on_save() -> void:
 	var cfg := ConfigFile.new()
 	var fx = _get_drift_fx()
 	var cam = _get_camera()
+	var cmesh = _get_car_mesh()
+	var bfx = _get_boost_fx_first()
 	for prop in _rows.keys():
 		var row = _rows[prop]
 		var kind: String = row.get("kind", "car")
@@ -918,9 +1351,11 @@ func _on_save() -> void:
 		match kind:
 			"fx": src = fx
 			"cam": src = cam
+			"car_mesh": src = cmesh
+			"boost_fx": src = bfx
 			_: src = car
-		if src and prop in src:
-			cfg.set_value("tune", prop, src.get(prop))
+		if _has_prop(src, prop):
+			cfg.set_value("tune", prop, _read_prop(src, prop))
 		# 同时保存范围
 		cfg.set_value("range", prop, [row.min, row.max, row.step])
 	# 保存曲线: 序列化点列表

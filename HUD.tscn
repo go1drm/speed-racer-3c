@@ -24,10 +24,20 @@ border_width_top = 2
 border_width_right = 2
 border_width_bottom = 2
 border_color = Color(0.35, 0.35, 0.42, 0.85)
-corner_radius_top_left = 10
-corner_radius_top_right = 10
-corner_radius_bottom_right = 10
-corner_radius_bottom_left = 10
+corner_radius_top_left = 32
+corner_radius_top_right = 32
+corner_radius_bottom_right = 32
+corner_radius_bottom_left = 32
+
+[sub_resource type="StyleBoxFlat" id="SBLampCore"]
+bg_color = Color(0.35, 0.35, 0.4, 1)
+corner_radius_top_left = 32
+corner_radius_top_right = 32
+corner_radius_bottom_right = 32
+corner_radius_bottom_left = 32
+shadow_color = Color(0.35, 0.35, 0.4, 0)
+shadow_size = 0
+shadow_offset = Vector2(0, 0)
 
 [node name="HUD" type="CanvasLayer"]
 script = ExtResource("1_hud")
@@ -109,31 +119,44 @@ layout_mode = 2
 size_flags_vertical = 4
 color = Color(0.22, 0.22, 0.28, 0.85)
 
-; ============ 小喷指示灯（氮气槽右侧）============
+; ============ 小喷指示灯（圆形, 氮气槽右侧）============
 [node name="BoostLamp" type="PanelContainer" parent="Root/ChargeBox/NitroRow"]
-custom_minimum_size = Vector2(56, 56)
+custom_minimum_size = Vector2(64, 64)
 layout_mode = 2
 size_flags_vertical = 4
 theme_override_styles/panel = SubResource("SBFlatBoostBG")
 
-[node name="FlameIcon" type="TextureRect" parent="Root/ChargeBox/NitroRow/BoostLamp"]
+[node name="LampCore" type="PanelContainer" parent="Root/ChargeBox/NitroRow/BoostLamp"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_styles/panel = SubResource("SBLampCore")
+modulate = Color(1, 1, 1, 1)
+
+[node name="FlameIcon" type="TextureRect" parent="Root/ChargeBox/NitroRow/BoostLamp/LampCore"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 texture = ExtResource("2_flame")
 expand_mode = 1
 stretch_mode = 5
-modulate = Color(0.35, 0.35, 0.4, 1)
+modulate = Color(1, 1, 1, 0)
+visible = false
 
-[node name="BoostLampLabel" type="Label" parent="Root/ChargeBox/NitroRow/BoostLamp"]
-layout_mode = 2
-theme_override_font_sizes/font_size = 14
-theme_override_colors/font_color = Color(1, 1, 1, 0.9)
+[node name="BoostLampLabel" type="Label" parent="Root/ChargeBox/NitroRow/BoostLamp/LampCore"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_font_sizes/font_size = 22
+theme_override_colors/font_color = Color(1, 1, 1, 0.95)
 theme_override_colors/font_outline_color = Color(0, 0, 0, 0.95)
-theme_override_constants/outline_size = 4
+theme_override_constants/outline_size = 5
 text = "W"
 horizontal_alignment = 1
-vertical_alignment = 2
+vertical_alignment = 1
 
 [node name="ChargeBar" type="ProgressBar" parent="Root/ChargeBox"]
 custom_minimum_size = Vector2(0, 18)

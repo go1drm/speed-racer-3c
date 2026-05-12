@@ -1,69 +1,69 @@
-[gd_scene load_steps=17 format=3 uid="uid://bfxboost01car"]
+[gd_scene load_steps=23 format=3 uid="uid://bfxboost01car"]
 
 [ext_resource type="Script" path="res://BoostFX.gd" id="1_fx"]
 
-; ========== 共享发射器形状（一个小点朝后方喷）==========
+; ========== 共享发射器形状（缩小到排气管 2 倍 ≈ 0.2m）==========
 [sub_resource type="SphereMesh" id="MeshMini"]
-radius = 0.18
-height = 0.36
+radius = 0.05
+height = 0.1
 
 [sub_resource type="SphereMesh" id="MeshDouble"]
-radius = 0.24
-height = 0.48
+radius = 0.07
+height = 0.14
 
 [sub_resource type="SphereMesh" id="MeshNitro"]
-radius = 0.35
-height = 0.7
+radius = 0.09
+height = 0.18
 
-; ========== 小喷 材质：橙黄 · 短促 ==========
+; ========== 小喷 材质：蓝 · 短促 ==========
 [sub_resource type="StandardMaterial3D" id="MatMini"]
 shading_mode = 0
 vertex_color_use_as_albedo = true
-albedo_color = Color(1.0, 0.75, 0.2, 1)
+albedo_color = Color(0.4, 0.8, 1.0, 1)
 emission_enabled = true
-emission = Color(1.0, 0.6, 0.1, 1)
+emission = Color(0.3, 0.7, 1.0, 1)
 emission_energy_multiplier = 3.0
 blend_mode = 1
 cull_mode = 2
 
 [sub_resource type="ParticleProcessMaterial" id="ProcMini"]
 emission_shape = 1
-emission_sphere_radius = 0.1
+emission_sphere_radius = 0.03
 direction = Vector3(0, 0, 1)
-spread = 8.0
-initial_velocity_min = 12.0
-initial_velocity_max = 18.0
+spread = 6.0
+initial_velocity_min = 5.0
+initial_velocity_max = 8.0
 gravity = Vector3(0, 0, 0)
-scale_min = 0.6
-scale_max = 1.2
+scale_min = 0.5
+scale_max = 1.0
 scale_curve = null
-color = Color(1.0, 0.75, 0.2, 1)
+color = Color(0.4, 0.8, 1.0, 1)
 hue_variation_min = -0.03
 hue_variation_max = 0.05
 
-; ========== 双喷 材质：金红双层 · 更亮 ==========
+; ========== 双喷 材质：亮蓝 · 更亮 ==========
 [sub_resource type="StandardMaterial3D" id="MatDouble"]
 shading_mode = 0
 vertex_color_use_as_albedo = true
-albedo_color = Color(1.0, 0.35, 0.45, 1)
+albedo_color = Color(0.4, 0.8, 1.0, 1)
 emission_enabled = true
-emission = Color(1.0, 0.2, 0.3, 1)
+emission = Color(0.3, 0.7, 1.0, 1)
 emission_energy_multiplier = 5.0
 blend_mode = 1
 cull_mode = 2
 
 [sub_resource type="ParticleProcessMaterial" id="ProcDouble"]
 emission_shape = 1
-emission_sphere_radius = 0.15
+emission_sphere_radius = 0.04
 direction = Vector3(0, 0, 1)
-spread = 14.0
-initial_velocity_min = 16.0
-initial_velocity_max = 24.0
+spread = 10.0
+initial_velocity_min = 7.0
+initial_velocity_max = 11.0
 gravity = Vector3(0, 0, 0)
-scale_min = 0.9
-scale_max = 1.7
-color = Color(1.0, 0.35, 0.45, 1)
-hue_variation_min = -0.1
+scale_min = 0.6
+scale_max = 1.2
+color = Color(0.4, 0.8, 1.0, 1)
+hue_variation_min = -0.05
 hue_variation_max = 0.05
 
 ; ========== 氮气 材质：青蓝 · 长尾焰 · 发光强 ==========
@@ -79,17 +79,82 @@ cull_mode = 2
 
 [sub_resource type="ParticleProcessMaterial" id="ProcNitro"]
 emission_shape = 1
-emission_sphere_radius = 0.2
+emission_sphere_radius = 0.05
 direction = Vector3(0, 0, 1)
-spread = 6.0
-initial_velocity_min = 28.0
-initial_velocity_max = 38.0
+spread = 5.0
+initial_velocity_min = 10.0
+initial_velocity_max = 14.0
 gravity = Vector3(0, 0, 0)
-scale_min = 1.3
-scale_max = 2.2
+scale_min = 0.7
+scale_max = 1.2
 color = Color(0.3, 0.85, 1.0, 1)
 hue_variation_min = -0.05
 hue_variation_max = 0.05
+
+; ========== 空喷 材质: 紫红色 · 爆发 · 四散 ==========
+[sub_resource type="SphereMesh" id="MeshAir"]
+radius = 0.1
+height = 0.2
+
+[sub_resource type="StandardMaterial3D" id="MatAir"]
+shading_mode = 0
+vertex_color_use_as_albedo = true
+albedo_color = Color(1.0, 0.4, 0.9, 1)
+emission_enabled = true
+emission = Color(1.0, 0.3, 0.8, 1)
+emission_energy_multiplier = 9.0
+blend_mode = 1
+cull_mode = 2
+
+[sub_resource type="ParticleProcessMaterial" id="ProcAir"]
+emission_shape = 1
+emission_sphere_radius = 0.08
+direction = Vector3(0, 0, 1)
+spread = 25.0
+initial_velocity_min = 12.0
+initial_velocity_max = 20.0
+gravity = Vector3(0, 2, 0)
+scale_min = 0.8
+scale_max = 1.6
+color = Color(1.0, 0.4, 0.9, 1)
+hue_variation_min = -0.08
+hue_variation_max = 0.05
+turbulence_enabled = true
+turbulence_noise_strength = 2.0
+turbulence_noise_scale = 1.5
+
+; ========== 落地喷 材质: 青绿色 · 烟雾+地面圆环 ==========
+[sub_resource type="SphereMesh" id="MeshLanding"]
+radius = 0.12
+height = 0.24
+
+[sub_resource type="StandardMaterial3D" id="MatLanding"]
+shading_mode = 0
+vertex_color_use_as_albedo = true
+albedo_color = Color(0.5, 1.0, 0.7, 1)
+emission_enabled = true
+emission = Color(0.3, 1.0, 0.5, 1)
+emission_energy_multiplier = 6.0
+blend_mode = 1
+cull_mode = 2
+
+[sub_resource type="ParticleProcessMaterial" id="ProcLanding"]
+emission_shape = 3
+emission_ring_axis = Vector3(0, 1, 0)
+emission_ring_radius = 0.8
+emission_ring_inner_radius = 0.2
+emission_ring_height = 0.1
+direction = Vector3(0, 1, 0)
+spread = 35.0
+initial_velocity_min = 6.0
+initial_velocity_max = 10.0
+gravity = Vector3(0, -3, 0)
+scale_min = 0.7
+scale_max = 1.3
+color = Color(0.5, 1.0, 0.7, 1)
+hue_variation_min = -0.05
+hue_variation_max = 0.05
+
 
 ; ========== 节点树 ==========
 [node name="BoostFX" type="Node3D"]
@@ -121,6 +186,40 @@ emitting = false
 process_material = SubResource("ProcNitro")
 draw_pass_1 = SubResource("MeshNitro")
 material_override = SubResource("MatNitro")
+
+[node name="AirFX" type="GPUParticles3D" parent="."]
+cast_shadow = 0
+amount = 160
+lifetime = 0.55
+emitting = false
+one_shot = false
+explosiveness = 0.6
+process_material = SubResource("ProcAir")
+draw_pass_1 = SubResource("MeshAir")
+material_override = SubResource("MatAir")
+
+[node name="AirLight" type="OmniLight3D" parent="."]
+visible = false
+light_color = Color(1.0, 0.5, 0.9, 1)
+light_energy = 5.0
+omni_range = 5.0
+
+[node name="LandingFX" type="GPUParticles3D" parent="."]
+cast_shadow = 0
+amount = 120
+lifetime = 0.7
+emitting = false
+one_shot = false
+explosiveness = 0.7
+process_material = SubResource("ProcLanding")
+draw_pass_1 = SubResource("MeshLanding")
+material_override = SubResource("MatLanding")
+
+[node name="LandingLight" type="OmniLight3D" parent="."]
+visible = false
+light_color = Color(0.5, 1.0, 0.7, 1)
+light_energy = 3.5
+omni_range = 4.0
 
 [node name="NitroLight" type="OmniLight3D" parent="."]
 visible = false

@@ -1,0 +1,63 @@
+[gd_scene load_steps=5 format=3 uid="uid://dyuqilin00mesh"]
+
+; ============================================================
+;  玉麒麟车壳
+;  · suv2 = body_mesh, car.gd 在它身上做 head yaw + 侧倾 (会改 rotation)
+;  · FBXCar = FBX 实例, 由 YuqilinTuning 控制其 scale/Y旋转/Y偏移
+;  · tailpipe_X 挂在 FBXCar 下 → 跟随车头朝向自动旋转, 喷射特效位置正确
+;  · 轮子 wheel_* 挂在 suv2 下 → car.gd 能用 suv2/wheel_frontXxx 路径找到
+; ============================================================
+
+[ext_resource type="PackedScene" uid="uid://cyw3d43cine1x" path="res://assets/custom_cars/1_玉麒麟/00084_S至尊·瑞兽（麒麟）1-2/HNCar_10045_PBR.FBX" id="1_fbx"]
+[ext_resource type="Script" path="res://YuqilinPaint.gd" id="2_paint"]
+[ext_resource type="Script" path="res://YuqilinTuning.gd" id="3_tuning"]
+
+[node name="YuqilinMesh" type="Node3D"]
+script = ExtResource("3_tuning")
+
+[node name="suv2" type="Node3D" parent="."]
+
+; FBX 车身本体 - YuqilinTuning 会在 _ready 里设置它的 transform
+[node name="FBXCar" parent="suv2" instance=ExtResource("1_fbx")]
+
+; 自动给 FBX 套上 PBR 贴图
+[node name="Painter" type="Node" parent="suv2/FBXCar"]
+script = ExtResource("2_paint")
+
+; ============================================================
+;  排气管挂点 (对应 kart_effect.lua 的 tailpipe_1/2/05/06/07)
+;  挂在 FBXCar 下 → 跟随 fbx_rot_y_deg 旋转
+;  位置以 FBX 原始坐标系为参考(车头朝 +Z, 所以 tailpipe 在 -Z 方向才是车尾)
+;  注意: 这些坐标基于 FBX 原始尺寸 ≈ 3×5×3m
+;  在 Tuner 里用 0.025 缩放后, 实际位置自动跟着缩
+; ============================================================
+[node name="tailpipe_1" type="Node3D" parent="suv2/FBXCar"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.7, 0.6, -2.2)
+
+[node name="tailpipe_2" type="Node3D" parent="suv2/FBXCar"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.7, 0.6, -2.2)
+
+[node name="tailpipe_05" type="Node3D" parent="suv2/FBXCar"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.4, -2.3)
+
+[node name="tailpipe_06" type="Node3D" parent="suv2/FBXCar"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.4, 0.9, -2.1)
+
+[node name="tailpipe_07" type="Node3D" parent="suv2/FBXCar"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.4, 0.9, -2.1)
+
+; ============================================================
+;  轮子节点 (挂在 suv2 直接下面, 与 DriftFX/car.gd 路径兼容)
+;  位置先按米估计, 实际尺寸由 fbx_scale 不影响这些(它们只受 suv2 影响)
+; ============================================================
+[node name="wheel_frontLeft" type="Node3D" parent="suv2"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.85, 0.4, -1.15)
+
+[node name="wheel_frontRight" type="Node3D" parent="suv2"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.85, 0.4, -1.15)
+
+[node name="wheel_backLeft" type="Node3D" parent="suv2"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.85, 0.4, 1.25)
+
+[node name="wheel_backRight" type="Node3D" parent="suv2"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.85, 0.4, 1.25)

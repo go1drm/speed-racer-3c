@@ -5,8 +5,18 @@ extends Camera3D
 
 # ---------------- 跟随 ----------------
 @export_group("Follow")
+## 相机插值速度, 越大越紧贴车(也越生硬). 过小 + 高速 = 车跑出屏幕
 @export var lerp_speed: float = 3.0
+## 基础偏移(相对车辆本地坐标). Z+ = 车后方, Y+ = 车上方
 @export var offset: Vector3 = Vector3.ZERO
+## 相机到车的最大允许距离. 超出立即 clamp 回来, 防止高速时被远远甩开
+## 0 = 不限制(老行为)
+@export var max_follow_lag: float = 8.0
+## 基础 FOV(度)
+@export var base_fov_override: float = 75.0
+## 是否在 _ready 用 base_fov_override 覆盖场景初始 FOV
+@export var use_base_fov_override: bool = false
+
 @export var target: Node
 
 # ---------------- 氮气/双喷镜头 ----------------
@@ -30,6 +40,18 @@ extends Camera3D
 @export var shake_y_factor: float = 0.7                          ## 震动 Y 分量衰减(相对 X)
 @export var shake_z_factor: float = 0.3                          ## 震动 Z 分量衰减(相对 X)
 
+# ---------------- Y 轴稳定(平地抖动过滤) ----------------
+@export_group("Y Stabilizer")
+## 启用 Y 轴稳定器: 过滤平地上微小起伏造成的相机抖动
+@export var y_stabilizer_enabled: bool = true
+## Y 偏差死区(米): 相机 Y 与目标 Y 的差距小于此值时不跟随. 0.15 推荐
+## 大 = 稳相机但大起伏响应慢; 小 = 灵敏但还会抖
+@export var y_deadzone: float = 0.15
+## Y 跟随速度乘数: 在 deadzone 外, Y 方向的 lerp 速度倍率(相对水平). 小=更慢追 Y
+@export var y_follow_speed_mult: float = 0.35
+## 强制跟随 Y 的速度阈值(m/s): Y 速度超过此值(起跳/落地) 立即完全跟随. 3.0 推荐
+@export var y_force_follow_vy: float = 3.0
+
 var _shake_timer: float = 0.0
 var _shake_intensity: float = 0.0
 var _shake_duration: float = 0.0
@@ -46,8 +68,14 @@ var _base_fov: float = 75.0
 var _fov_target_boost: float = 0.0
 var _fov_current_boost: float = 0.0
 
+# Y 稳定: 维护一个平滑的"视觉 Y 目标", 同样做死区过滤
+var _stable_look_y: float = 0.0
+var _stable_look_y_inited: bool = false
+
 
 func _ready() -> void:
+	if use_base_fov_override:
+		fov = base_fov_override
 	_base_fov = fov
 	# 自动连接车上的震动请求
 	if target and target.get_parent() and target.get_parent().has_signal("camera_shake_requested"):
@@ -84,8 +112,45 @@ func _physics_process(delta: float) -> void:
 
 	var effective_offset: Vector3 = offset + _zoom_extra
 	var target_pos: Transform3D = target.global_transform.translated_local(effective_offset)
-	global_transform = global_transform.interpolate_with(target_pos, lerp_speed * delta)
-	look_at(target.global_position, Vector3.UP)
+
+	if y_stabilizer_enabled:
+		# 分离 XZ 和 Y: XZ 正常跟随, Y 做死区 + 速度感知过滤
+		var target_origin: Vector3 = target_pos.origin
+		var cur_origin: Vector3 = global_position
+		# XZ: 正常 lerp
+		var new_xz_t: float = lerp_speed * delta
+		var new_pos: Vector3 = cur_origin
+		new_pos.x = lerpf(cur_origin.x, target_origin.x, new_xz_t)
+		new_pos.z = lerpf(cur_origin.z, target_origin.z, new_xz_t)
+		# Y: 看车的 Y 速度, 平地微抖时不动
+		var car_vy: float = 0.0
+		if target.get_parent() and "linear_velocity" in target.get_parent():
+			car_vy = absf(target.get_parent().linear_velocity.y)
+		var dy: float = target_origin.y - cur_origin.y
+		if absf(car_vy) > y_force_follow_vy:
+			# 起跳/落地: 立即完全跟随
+			new_pos.y = lerpf(cur_origin.y, target_origin.y, new_xz_t)
+		elif absf(dy) > y_deadzone:
+			# 超出死区: 慢速追赶
+			new_pos.y = lerpf(cur_origin.y, target_origin.y, new_xz_t * y_follow_speed_mult)
+		else:
+			# 死区内: 相机 Y 不动
+			new_pos.y = cur_origin.y
+		global_position = new_pos
+		# basis (旋转) 单独插值, 用 XZ 速度
+		global_transform.basis = global_transform.basis.slerp(target_pos.basis, new_xz_t)
+	else:
+		global_transform = global_transform.interpolate_with(target_pos, lerp_speed * delta)
+
+	# 最大滞后距离限制: 高速行驶时防止相机被甩开造成"拉远"
+	if max_follow_lag > 0.0:
+		var to_target: Vector3 = target_pos.origin - global_position
+		var dist: float = to_target.length()
+		if dist > max_follow_lag:
+			# 把相机直接拉回 max_follow_lag 范围内
+			global_position = target_pos.origin - to_target.normalized() * max_follow_lag
+
+	look_at(_stable_look_target(), Vector3.UP)
 
 	# 应用震动（在 look_at 之后叠加小偏移）
 	if _shake_timer > 0.0:
@@ -98,6 +163,28 @@ func _physics_process(delta: float) -> void:
 			randf_range(-amp, amp) * shake_z_factor
 		)
 		global_position += shake_offset
+
+
+func _stable_look_target() -> Vector3:
+	# 返回一个 Y 经过稳定的 look_at 目标点. XZ 用车实际位置, Y 用平滑+死区后的值
+	var tp: Vector3 = target.global_position
+	if not y_stabilizer_enabled:
+		return tp
+	if not _stable_look_y_inited:
+		_stable_look_y = tp.y
+		_stable_look_y_inited = true
+	var car_vy: float = 0.0
+	if target.get_parent() and "linear_velocity" in target.get_parent():
+		car_vy = absf(target.get_parent().linear_velocity.y)
+	var dy: float = tp.y - _stable_look_y
+	if absf(car_vy) > y_force_follow_vy:
+		# 起跳/落地: 立即跟随
+		_stable_look_y = tp.y
+	elif absf(dy) > y_deadzone:
+		# 超出死区: 慢速追
+		_stable_look_y = lerpf(_stable_look_y, tp.y, 0.25)
+	# 死区内: 保持不变
+	return Vector3(tp.x, _stable_look_y, tp.z)
 
 
 func _on_shake(intensity: float, duration: float) -> void:

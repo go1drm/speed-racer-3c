@@ -1,0 +1,85 @@
+version: 2
+shadername: Car_Light_Normal_Skined
+params:
+  _TintColor:
+    name: _TintColor
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 1
+        g: 0
+        b: 0
+        a: 1
+  _MainTexT:
+    name: _MainTexT
+    paramtype: 5
+    value:
+      dimension: 1
+      filename: textures\NCar_10046_Light.dds
+      wrapmode: 1
+      filtermode: 2
+      enablemipmap: false
+      anisolevel: 0
+      sRGB: false
+  _colorScale:
+    name: _colorScale
+    paramtype: 2
+    value: 1
+  _IsReverse:
+    name: _IsReverse
+    paramtype: 2
+    value: 1
+  _MainTex_ST:
+    name: _MainTex_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _fadeStrength:
+    name: _fadeStrength
+    paramtype: 2
+    value: 1
+  _frontAmount:
+    name: _frontAmount
+    paramtype: 2
+    value: 0
+  _AlphaTex_ST:
+    name: _AlphaTex_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _AlphaTexT:
+    name: _AlphaTexT
+    paramtype: 5
+    value:
+      dimension: 1
+      filename: textures\NCar_10046_Light_M.dds
+      wrapmode: 1
+      filtermode: 2
+      enablemipmap: false
+      anisolevel: 0
+      sRGB: false
+RenderStateInfos:
+  - Name: P0
+    RenderStateFlag: 844425055920182
+    DepthBias: 0
+    StencilRef: 1
+    StencilMask: 268435455
+    FogDensity: 0
+    FogStart: 0
+    FogEnd: 0
+    FogColor:
+      r: 1
+      g: 1
+      b: 1
+renderQueue: 3000

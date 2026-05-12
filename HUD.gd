@@ -11,26 +11,59 @@ extends CanvasLayer
 @onready var nitro_slot_1: ColorRect = $Root/ChargeBox/NitroRow/Slot1
 @onready var nitro_slot_2: ColorRect = $Root/ChargeBox/NitroRow/Slot2
 @onready var boost_lamp: PanelContainer = $Root/ChargeBox/NitroRow/BoostLamp
-@onready var boost_lamp_icon: TextureRect = $Root/ChargeBox/NitroRow/BoostLamp/FlameIcon
-@onready var boost_lamp_label: Label = $Root/ChargeBox/NitroRow/BoostLamp/BoostLampLabel
+@onready var boost_lamp_core: PanelContainer = $Root/ChargeBox/NitroRow/BoostLamp/LampCore
+@onready var boost_lamp_icon: TextureRect = $Root/ChargeBox/NitroRow/BoostLamp/LampCore/FlameIcon
+@onready var boost_lamp_label: Label = $Root/ChargeBox/NitroRow/BoostLamp/LampCore/BoostLampLabel
 @onready var drift_label: Label = $Root/DriftLabel
 @onready var boost_label: Label = $Root/BoostLabel
 @onready var crash_label: Label = $Root/CrashLabel
 
+# ---------------- 弹字保留时长 ----------------
+@export_group("Popup Timing")
+## 弹字完整保留秒数(满 alpha 不衰减)
+@export var popup_hold_time: float = 1.4
+## 弹字渐隐秒数
+@export var popup_fade_time: float = 0.6
+## 漂移提示完整保留秒数
+@export var drift_hold_time: float = 1.0
+## 漂移提示渐隐秒数
+@export var drift_fade_time: float = 0.4
+## 撞墙提示完整保留秒数
+@export var crash_hold_time: float = 0.8
+## 撞墙提示渐隐秒数
+@export var crash_fade_time: float = 0.5
+
+# ---------------- 颜色 ----------------
 const COLOR_EMPTY := Color(0.22, 0.22, 0.28, 0.85)
 const COLOR_NITRO := Color(0.25, 0.9, 1.0, 1.0)
 const LAMP_OFF_COLOR := Color(0.35, 0.35, 0.4, 1.0)         # 灭灯: 灰
-const LAMP_MINI_COLOR := Color(1.0, 0.85, 0.25, 1.0)        # 小喷可用: 金黄
-const LAMP_DOUBLE_COLOR := Color(1.0, 0.4, 0.6, 1.0)        # 双喷可用: 粉红
+const LAMP_MINI_COLOR := Color(0.3, 0.7, 1.0, 1.0)          # 小喷可用: 蓝
+const LAMP_DOUBLE_COLOR := Color(0.45, 0.85, 1.0, 1.0)      # 双喷可用: 浅蓝(与小喷区分)
+# 小喷/双喷弹字色 (蓝)
+const W_COLOR_BLUE := Color(0.4, 0.8, 1.0, 1.0)
+# 氮气三档颜色 (0=蓝 / 1=金 / 2=红)
+const NITRO_COLOR_BLUE := Color(0.25, 0.85, 1.0, 1.0)
+const NITRO_COLOR_GOLD := Color(1.0, 0.85, 0.25, 1.0)
+const NITRO_COLOR_RED := Color(1.0, 0.3, 0.25, 1.0)
 
-var _drift_timer: float = 0.0
-var _boost_timer: float = 0.0
-var _crash_timer: float = 0.0
+# ---------------- 弹字 timers (hold + fade) ----------------
+# drift / boost / crash 各有: _hold_left(满 alpha 倒计时), _fade_left(渐隐倒计时)
+var _drift_hold_left: float = 0.0
+var _drift_fade_left: float = 0.0
+var _boost_hold_left: float = 0.0
+var _boost_fade_left: float = 0.0
+var _crash_hold_left: float = 0.0
+var _crash_fade_left: float = 0.0
 
 # 小喷灯状态
 var _lamp_active: bool = false
 var _lamp_pulse_t: float = 0.0
 var _lamp_base_color: Color = LAMP_OFF_COLOR
+
+# 当前氮气颜色变体(由 car 通过 nitro_variant_changed 信号同步)
+var _current_nitro_variant: String = "blue"
+# combo 字保护: 这个时刻之前 boost_triggered 不覆盖 boost_label
+var _combo_protect_until: float = 0.0
 
 
 func _ready() -> void:
@@ -65,28 +98,82 @@ func _connect_to_car() -> void:
 		car.connect("double_charge_progress", _on_double_charge_progress)
 		car.connect("double_charge_ready", _on_double_charge_ready)
 		car.connect("double_charge_lost", _on_double_charge_lost)
+	if car.has_signal("combo_triggered"):
+		car.connect("combo_triggered", _on_combo_triggered)
+	if car.has_signal("nitro_variant_changed"):
+		car.connect("nitro_variant_changed", _on_nitro_variant_changed)
+	if car.has_signal("air_boost_triggered"):
+		car.connect("air_boost_triggered", _on_air_boost_triggered)
+	if car.has_signal("air_boost_armed"):
+		car.connect("air_boost_armed", _on_air_boost_armed)
+	if car.has_signal("landing_boost_triggered"):
+		car.connect("landing_boost_triggered", _on_landing_boost_triggered)
+
+
+# ============================================================
+#  弹字 hold + fade 工具函数
+#  调用 _show_popup_X(...) 重置 hold 和 fade 计时, 抢占现有显示内容
+# ============================================================
+func _show_boost_popup(text: String, color: Color, hold: float = -1.0, fade: float = -1.0) -> void:
+	boost_label.text = text
+	boost_label.modulate = Color(color.r, color.g, color.b, 1.0)
+	_boost_hold_left = hold if hold >= 0.0 else popup_hold_time
+	_boost_fade_left = fade if fade >= 0.0 else popup_fade_time
+
+
+func _show_drift_popup(text: String, color: Color) -> void:
+	drift_label.text = text
+	drift_label.modulate = Color(color.r, color.g, color.b, 1.0)
+	_drift_hold_left = drift_hold_time
+	_drift_fade_left = drift_fade_time
+
+
+func _show_crash_popup(text: String, color: Color) -> void:
+	crash_label.text = text
+	crash_label.modulate = Color(color.r, color.g, color.b, 1.0)
+	_crash_hold_left = crash_hold_time
+	_crash_fade_left = crash_fade_time
 
 
 func _process(delta: float) -> void:
-	if _drift_timer > 0.0:
-		_drift_timer -= delta
-		drift_label.modulate.a = clampf(_drift_timer, 0.0, 1.0)
-	if _boost_timer > 0.0:
-		_boost_timer -= delta
-		boost_label.modulate.a = clampf(_boost_timer / 1.2, 0.0, 1.0)
-	if _crash_timer > 0.0:
-		_crash_timer -= delta
-		crash_label.modulate.a = clampf(_crash_timer, 0.0, 1.0)
-	# 小喷灯亮起时做呼吸脉冲
+	# 漂移弹字: hold 阶段保持满 alpha, hold 结束进入 fade 阶段渐隐
+	if _drift_hold_left > 0.0:
+		_drift_hold_left -= delta
+		drift_label.modulate.a = 1.0
+	elif _drift_fade_left > 0.0:
+		_drift_fade_left -= delta
+		drift_label.modulate.a = clampf(_drift_fade_left / maxf(drift_fade_time, 0.001), 0.0, 1.0)
+	# 喷射/combo 弹字
+	if _boost_hold_left > 0.0:
+		_boost_hold_left -= delta
+		boost_label.modulate.a = 1.0
+	elif _boost_fade_left > 0.0:
+		_boost_fade_left -= delta
+		boost_label.modulate.a = clampf(_boost_fade_left / maxf(popup_fade_time, 0.001), 0.0, 1.0)
+	# 撞墙弹字
+	if _crash_hold_left > 0.0:
+		_crash_hold_left -= delta
+		crash_label.modulate.a = 1.0
+	elif _crash_fade_left > 0.0:
+		_crash_fade_left -= delta
+		crash_label.modulate.a = clampf(_crash_fade_left / maxf(crash_fade_time, 0.001), 0.0, 1.0)
+	# 小喷灯亮起时做呼吸脉冲 + 心跳缩放(更明显)
 	if _lamp_active:
-		_lamp_pulse_t += delta * 6.0
-		var pulse: float = 0.75 + 0.25 * sin(_lamp_pulse_t)
-		boost_lamp_icon.modulate = Color(
-			_lamp_base_color.r,
-			_lamp_base_color.g,
-			_lamp_base_color.b,
-			pulse
-		)
+		_lamp_pulse_t += delta * 7.0
+		var pulse: float = 0.6 + 0.4 * sin(_lamp_pulse_t)   # 0.2 ~ 1.0
+		# 核心灯芯用高强度 modulate(HDR 感) + scale 心跳
+		var col := _lamp_base_color
+		# 亮度增强: r/g/b 乘 1.2~2.0 产生发光效果(利用 Godot modulate HDR)
+		var glow_k: float = 1.4 + 0.6 * pulse   # 1.4 ~ 2.0
+		if boost_lamp_core:
+			boost_lamp_core.modulate = Color(col.r * glow_k, col.g * glow_k, col.b * glow_k, 1.0)
+			# 心跳缩放: 0.92 ~ 1.08
+			var s: float = 0.92 + 0.16 * pulse
+			boost_lamp_core.scale = Vector2(s, s)
+			boost_lamp_core.pivot_offset = boost_lamp_core.size * 0.5
+		# Label 跟随亮度变化
+		if boost_lamp_label:
+			boost_lamp_label.modulate = Color(1, 1, 1, 0.8 + 0.2 * pulse)
 
 
 func _on_speed_changed(kmh: float) -> void:
@@ -127,36 +214,38 @@ func _on_drift_started(mode: String) -> void:
 	else:
 		txt = "DRIFT · 侧身"
 		col = Color(1.0, 0.3, 0.5)
-	drift_label.text = txt
-	drift_label.modulate = Color(col.r, col.g, col.b, 1.0)
-	_drift_timer = 1.2
+	_show_drift_popup(txt, col)
 
 
 func _on_drift_ended(_gained: float, _succeeded: bool = false) -> void:
-	_drift_timer = 0.2
+	# 退漂时让漂移提示快速渐隐(给后续 boost/combo 弹字让位)
+	_drift_hold_left = 0.0
+	_drift_fade_left = minf(_drift_fade_left, 0.2)
 
 
 func _on_boost_triggered(type_name: String) -> void:
 	print("[HUD] boost_triggered: ", type_name)
-	# insufficient 类型不显示任何提示, 静默忽略
-	if type_name == "insufficient":
+	# insufficient/blocked 等屏蔽类型不显示任何提示
+	if type_name == "insufficient" or type_name.begins_with("blocked_"):
 		return
-	var txt := ""
-	var col := Color.WHITE
-	match type_name:
-		"mini":
-			txt = "小  喷"
-			col = Color(1.0, 0.75, 0.2)
-		"double":
-			txt = "D O U B L E !"
-			col = Color(1.0, 0.35, 0.45)
-		"nitro":
-			txt = "N I T R O !!"
-			col = Color(0.25, 0.95, 1.0)
-	boost_label.text = txt
-	boost_label.modulate = Color(col.r, col.g, col.b, 1.0)
-	_boost_timer = 1.2
-	# 小喷触发: 灯保持黄色, 不再加额外提示文字(避免误导)
+	# combo 保护期内: 不覆盖 combo 弹字(但灯还是要切换)
+	var now: float = Time.get_ticks_msec() / 1000.0
+	var combo_protected: bool = now < _combo_protect_until
+	if not combo_protected:
+		var txt := ""
+		var col := Color.WHITE
+		match type_name:
+			"mini":
+				txt = "小  喷"
+				col = W_COLOR_BLUE
+			"double":
+				txt = "D O U B L E !"
+				col = W_COLOR_BLUE
+			"nitro":
+				txt = "N I T R O !!"
+				col = _nitro_color_for_variant(_current_nitro_variant)
+		_show_boost_popup(txt, col)
+	# 小喷触发: 灯保持蓝色, 不再加额外提示文字
 	if type_name == "mini":
 		_set_boost_lamp_on(LAMP_MINI_COLOR, "")
 	# 双喷或氮气结束: 熄灯
@@ -164,51 +253,94 @@ func _on_boost_triggered(type_name: String) -> void:
 		_set_boost_lamp_off()
 
 
+# combo 弹字: 只处理合法的两种叠喷 CWW / WCW
+# combo_name 只会是 "CW"(前缀, 不弹) / "CWW"(终结) / "WC"(前缀, 不弹) / "WCW"(终结)
+func _on_combo_triggered(combo_name: String, breakthrough_count: int) -> void:
+	# 只弹"完整叠喷"字, 中间前缀(CW / WC)不弹
+	if combo_name != "CWW" and combo_name != "WCW":
+		return
+	# 颜色按突破次数: CWW=2 次(红), WCW=1 次(金)
+	var col: Color
+	if breakthrough_count >= 2:
+		col = NITRO_COLOR_RED
+	elif breakthrough_count == 1:
+		col = NITRO_COLOR_GOLD
+	else:
+		col = W_COLOR_BLUE
+	var combo_hold: float = popup_hold_time + 0.4
+	_show_boost_popup("叠喷  " + combo_name, col, combo_hold, popup_fade_time)
+	_combo_protect_until = Time.get_ticks_msec() / 1000.0 + combo_hold + popup_fade_time * 0.5
+	print("[HUD] combo: %s 突破=%d" % [combo_name, breakthrough_count])
+
+
+func _on_nitro_variant_changed(variant: String) -> void:
+	_current_nitro_variant = variant
+
+
+func _nitro_color_for_variant(variant: String) -> Color:
+	match variant:
+		"gold": return NITRO_COLOR_GOLD
+		"red":  return NITRO_COLOR_RED
+		_:      return NITRO_COLOR_BLUE
+
+
 func _on_wall_crashed(lost_amount: float) -> void:
-	crash_label.text = "撞墙！集气 -%d" % int(lost_amount)
-	crash_label.modulate = Color(1.0, 0.3, 0.3, 1.0)
-	_crash_timer = 1.0
+	_show_crash_popup("撞墙！集气 -%d" % int(lost_amount), Color(1.0, 0.3, 0.3, 1.0))
+
+
+func _on_air_boost_armed() -> void:
+	# 空中按 W: 提示已锁定
+	_show_boost_popup("空喷锁定", Color(1.0, 0.9, 0.4, 1.0), 0.6, 0.3)
+
+
+func _on_air_boost_triggered(air_time: float) -> void:
+	_show_boost_popup("空喷！%.1fs 飞跃" % air_time, Color(1.0, 0.5, 0.95, 1.0))
+	_combo_protect_until = Time.get_ticks_msec() / 1000.0 + 0.4
+
+
+func _on_landing_boost_triggered(air_time: float) -> void:
+	_show_boost_popup("落地喷 +%.1fs" % air_time, Color(0.5, 1.0, 0.7, 1.0), 0.9, 0.4)
 
 
 func _on_boost_window_opened(level: String, _duration: float) -> void:
 	if level == "double":
-		boost_label.text = "按 W！双喷"
-		boost_label.modulate = Color(1.0, 0.4, 0.6, 1.0)
+		_show_boost_popup("按 W！双喷", LAMP_DOUBLE_COLOR)
 		_set_boost_lamp_on(LAMP_DOUBLE_COLOR, "W")
 	else:
-		boost_label.text = "按 W！小喷"
-		boost_label.modulate = Color(1.0, 0.85, 0.25, 1.0)
+		_show_boost_popup("按 W！小喷", LAMP_MINI_COLOR)
 		_set_boost_lamp_on(LAMP_MINI_COLOR, "W")
-	_boost_timer = 1.2  # 窗口期内一直显示
 
 
 func _on_boost_window_closed() -> void:
-	# 让提示快速消失(避免和喷射触发后的提示叠加)
-	if _boost_timer > 0.15:
-		_boost_timer = 0.15
+	# 让"按 W"提示快速渐隐, 把舞台让给 boost_triggered 弹字
+	_boost_hold_left = 0.0
+	_boost_fade_left = minf(_boost_fade_left, 0.15)
 	_set_boost_lamp_off()
 
 
 # ============================================================
-#  小喷指示灯
+#  小喷指示灯 (圆形, 通过 LampCore.modulate + scale 实现发光脉冲)
 # ============================================================
 func _set_boost_lamp_on(color: Color, label_text: String) -> void:
 	_lamp_active = true
 	_lamp_pulse_t = 0.0
 	_lamp_base_color = color
-	if boost_lamp_icon:
-		boost_lamp_icon.modulate = color
+	# LampCore 立即给满色(初始 modulate > 1 产生发光感)
+	if boost_lamp_core:
+		boost_lamp_core.modulate = Color(color.r * 1.8, color.g * 1.8, color.b * 1.8, 1.0)
 	if boost_lamp_label:
 		boost_lamp_label.text = label_text
-		boost_lamp_label.modulate = Color(color.r, color.g, color.b, 1.0)
+		boost_lamp_label.modulate = Color(1, 1, 1, 1)
 
 
 func _set_boost_lamp_off() -> void:
 	_lamp_active = false
 	_lamp_pulse_t = 0.0
 	_lamp_base_color = LAMP_OFF_COLOR
-	if boost_lamp_icon:
-		boost_lamp_icon.modulate = LAMP_OFF_COLOR
+	# 灯芯变回灰暗, scale 复位
+	if boost_lamp_core:
+		boost_lamp_core.modulate = LAMP_OFF_COLOR
+		boost_lamp_core.scale = Vector2.ONE
 	if boost_lamp_label:
 		boost_lamp_label.text = "W"
 		boost_lamp_label.modulate = Color(1, 1, 1, 0.55)
@@ -225,21 +357,21 @@ func _on_drift_charge_level_changed(level: String) -> void:
 			_set_boost_lamp_off()
 
 
-# 双喷蓄能进度 (小喷期间按住 Q): progress 0~1, 灯色从黄渐变到粉
+# 双喷蓄能进度: progress 0~1, 灯色从蓝渐变到浅蓝
 func _on_double_charge_progress(progress: float) -> void:
 	if progress <= 0.0:
-		# 蓄能取消: 回到当前真实状态对应的灯色, 不要强行点黄灯
+		# 蓄能取消: 回到当前真实状态对应的灯色
 		if _car_is_mini_boosting():
 			_set_boost_lamp_on(LAMP_MINI_COLOR, "")
 		else:
 			_set_boost_lamp_off()
 		return
-	# 颜色从黄(mini)插值到粉(double)
+	# 颜色从蓝(mini)插值到浅蓝(double)
 	var col: Color = LAMP_MINI_COLOR.lerp(LAMP_DOUBLE_COLOR, progress)
 	_lamp_active = true
 	_lamp_base_color = col
-	if boost_lamp_icon:
-		boost_lamp_icon.modulate = col
+	if boost_lamp_core:
+		boost_lamp_core.modulate = Color(col.r * 1.8, col.g * 1.8, col.b * 1.8, 1.0)
 	if boost_lamp_label:
 		boost_lamp_label.text = ""
 
@@ -247,16 +379,12 @@ func _on_double_charge_progress(progress: float) -> void:
 # 双喷蓄满: 提示"按 W"
 func _on_double_charge_ready() -> void:
 	_set_boost_lamp_on(LAMP_DOUBLE_COLOR, "W!")
-	boost_label.text = "按 W！双喷"
-	boost_label.modulate = Color(1.0, 0.4, 0.6, 1.0)
-	_boost_timer = 1.5
+	_show_boost_popup("按 W！双喷", LAMP_DOUBLE_COLOR)
 
 
 # 双喷资格失效(超时/已释放/入漂清空 等)
-# 不论之前灯是什么状态, 双喷一旦失效就熄灯; 如果还在小喷中就退回小喷黄
 func _on_double_charge_lost() -> void:
 	if _car_is_mini_boosting():
-		# 仍在小喷, 灯回到小喷黄
 		_set_boost_lamp_on(LAMP_MINI_COLOR, "")
 	else:
 		_set_boost_lamp_off()

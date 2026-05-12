@@ -1,0 +1,47 @@
+[gd_scene load_steps=8 format=3 uid="uid://dqinghuacimap01"]
+
+[ext_resource type="PackedScene" path="res://assets/custom_tracks/Qinghuaci_Pick.FBX" id="1_track_fbx"]
+[ext_resource type="PackedScene" uid="uid://cvh0fwg53wpus" path="res://car.tscn" id="2_car"]
+[ext_resource type="Script" path="res://Camera3D.gd" id="3_cam"]
+[ext_resource type="Script" path="res://TrackSetup.gd" id="4_setup"]
+
+[sub_resource type="ProceduralSkyMaterial" id="SkyMat"]
+sky_horizon_color = Color(0.5, 0.58, 0.7, 1)
+sky_top_color = Color(0.3, 0.5, 0.75, 1)
+ground_horizon_color = Color(0.5, 0.58, 0.7, 1)
+ground_bottom_color = Color(0.2, 0.22, 0.27, 1)
+
+[sub_resource type="Sky" id="Sky1"]
+sky_material = SubResource("SkyMat")
+
+[sub_resource type="Environment" id="Env1"]
+background_mode = 2
+sky = SubResource("Sky1")
+ambient_light_source = 3
+tonemap_mode = 2
+
+[node name="TrackQinghuaci" type="Node3D"]
+script = ExtResource("4_setup")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Env1")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(-0.866023, -0.433016, 0.250001, 0, 0.499998, 0.866027, -0.500003, 0.749999, -0.43301, 0, 0, 0)
+shadow_enabled = true
+
+[node name="Track" parent="." instance=ExtResource("1_track_fbx")]
+
+[node name="Car" parent="." instance=ExtResource("2_car")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 50, 0)
+
+[node name="Camera3D" type="Camera3D" parent="." node_paths=PackedStringArray("target")]
+transform = Transform3D(1, 0, 0, 0, 0.965926, 0.258819, 0, -0.258819, 0.965926, 0, 6.5, 10)
+current = true
+fov = 75.0
+script = ExtResource("3_cam")
+lerp_speed = 3.0
+max_follow_lag = 8.0
+target = NodePath("../Car/CarMesh")
+
+[editable path="Car"]

@@ -1,0 +1,191 @@
+version: 2
+shadername: PC_PBR_Car_Wheel_Linear
+params:
+  _ToneMappingB:
+    name: _ToneMappingB
+    paramtype: 2
+    value: 0.0299999993
+  _DirectSpecColor:
+    name: _DirectSpecColor
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 1
+        g: 1
+        b: 1
+        a: 1
+  _RMA_ST:
+    name: _RMA_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _Metallic:
+    name: _Metallic
+    paramtype: 2
+    value: 1
+  _ToneMappingD:
+    name: _ToneMappingD
+    paramtype: 2
+    value: 0.589999974
+  _SpecularAntiAliasingThreshold:
+    name: _SpecularAntiAliasingThreshold
+    paramtype: 2
+    value: 0.800000012
+  _EnvCubeRoughnessInter:
+    name: _EnvCubeRoughnessInter
+    paramtype: 2
+    value: 0
+  _EnvCubeContrast:
+    name: _EnvCubeContrast
+    paramtype: 2
+    value: 1
+  _ToneMappingA:
+    name: _ToneMappingA
+    paramtype: 2
+    value: 3.26999998
+  _EnvSpecularEdgeIndensity:
+    name: _EnvSpecularEdgeIndensity
+    paramtype: 2
+    value: 10
+  _Roughness:
+    name: _Roughness
+    paramtype: 2
+    value: 1
+  _AlbedoTex_ST:
+    name: _AlbedoTex_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _SpecularDir:
+    name: _SpecularDir
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 0.5
+        y: -0.600000024
+        z: -0.600000024
+        w: 1
+  _BaseLayerRoughness:
+    name: _BaseLayerRoughness
+    paramtype: 2
+    value: 0.5
+  _BaseReflectionInstensity:
+    name: _BaseReflectionInstensity
+    paramtype: 2
+    value: 1
+  _ToneMappingC:
+    name: _ToneMappingC
+    paramtype: 2
+    value: 1.82000005
+  _EnvGIIndensity:
+    name: _EnvGIIndensity
+    paramtype: 2
+    value: 1
+  _AlbedoTexT:
+    name: _AlbedoTexT
+    paramtype: 5
+    value:
+      dimension: 1
+      filename: textures\Wheel_10045_PBR.dds
+      wrapmode: 1
+      filtermode: 2
+      enablemipmap: false
+      anisolevel: 0
+      sRGB: false
+  _SpecularAntiAliasingScreenSpaceVariance:
+    name: _SpecularAntiAliasingScreenSpaceVariance
+    paramtype: 2
+    value: 1
+  _PreFilterEnvSpecularMap_ST:
+    name: _PreFilterEnvSpecularMap_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _RMAT:
+    name: _RMAT
+    paramtype: 5
+    value:
+      dimension: 1
+      filename: textures\Wheel_10045_RMA_PBR.dds
+      wrapmode: 1
+      filtermode: 2
+      enablemipmap: true
+      anisolevel: 0
+      sRGB: false
+  _ToneMappingE:
+    name: _ToneMappingE
+    paramtype: 2
+    value: 0.140000001
+  _PreFilterEnvSpecularMapT:
+    name: _PreFilterEnvSpecularMapT
+    paramtype: 5
+    value:
+      dimension: 2
+      filename: textures\CubeMap_PBR_HDR02.exr
+      wrapmode: 3
+      filtermode: 2
+      enablemipmap: true
+      anisolevel: 0
+      sRGB: false
+  _Normal_ST:
+    name: _Normal_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _Albedo:
+    name: _Albedo
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 1
+        g: 1
+        b: 1
+        a: 1
+  _NormalT:
+    name: _NormalT
+    paramtype: 5
+    value:
+      dimension: 1
+      filename: textures\Wheel_10045_Normal_PBR.png
+      wrapmode: 1
+      filtermode: 2
+      enablemipmap: true
+      anisolevel: 0
+      sRGB: false
+RenderStateInfos:
+  - Name: P0
+    RenderStateFlag: 281475639370674
+    DepthBias: 0
+    StencilRef: 1
+    StencilMask: 268435455
+    FogDensity: 0
+    FogStart: 0
+    FogEnd: 0
+    FogColor:
+      r: 1
+      g: 1
+      b: 1
+renderQueue: 2000

@@ -1,6 +1,7 @@
 [gd_scene format=3 uid="uid://o2pw746ej8d4"]
 
 [ext_resource type="PackedScene" uid="uid://dta0aubqubx5g" path="res://assets/track_2.glb" id="1_nhwcv"]
+[ext_resource type="PackedScene" uid="uid://cyw3d43cine1x" path="res://assets/custom_cars/1_玉麒麟/00084_S至尊·瑞兽（麒麟）1-2/HNCar_10045_PBR.FBX" id="2_8nfsw"]
 [ext_resource type="PackedScene" uid="uid://cvh0fwg53wpus" path="res://car.tscn" id="2_sl2w6"]
 [ext_resource type="Script" uid="uid://cvuwsasmbq25i" path="res://Camera3D.gd" id="3_r0uie"]
 
@@ -36,6 +37,9 @@ transform = Transform3D(28, 0, 0, 0, 28, 0, 0, 0, 28, 0, 0, 0)
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="mergedBlocks(Clone)/StaticBody3D" index="0" unique_id=1952536142]
 shape = SubResource("ConcavePolygonShape3D_slpey")
+
+[node name="HNCar_10045_PBR" parent="mergedBlocks(Clone)/StaticBody3D" index="1" unique_id=1906939421 instance=ExtResource("2_8nfsw")]
+transform = Transform3D(-1.0927851e-09, 0, -0.025, 0, 0.025, 0, 0.025, 0, -1.0927851e-09, -0.870423, -0.00030745374, 1.531732)
 
 [node name="Car" parent="." index="3" unique_id=706377068 instance=ExtResource("2_sl2w6")]
 transform = Transform3D(0.998097, 0, 0.0616583, 0, 1, 0, -0.0616584, 0, 0.998097, 0, 200, 85.05984)

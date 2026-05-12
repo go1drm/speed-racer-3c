@@ -1,0 +1,1305 @@
+version: 2
+shadername: PC_PBR_Car_Common_Skined
+params:
+  _CTransDistortionSpeed:
+    name: _CTransDistortionSpeed
+    paramtype: 2
+    value: 1
+  _element1_Swith_line1_move:
+    name: _element1_Swith_line1_move
+    paramtype: 2
+    value: 1.5
+  _Lava:
+    name: _Lava
+    paramtype: 2
+    value: 0
+  _FresnelColor:
+    name: _FresnelColor
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 0
+        g: 1
+        b: 0.681337595
+        a: 1
+  _FadeParamA:
+    name: _FadeParamA
+    paramtype: 2
+    value: 1
+  _FinalMixMulit:
+    name: _FinalMixMulit
+    paramtype: 2
+    value: 1.60000002
+  _Auxiliary_Paint:
+    name: _Auxiliary_Paint
+    paramtype: 2
+    value: 1
+  _RampColorTint:
+    name: _RampColorTint
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 1
+        g: 1
+        b: 1
+        a: 1
+  _SparkleNormalScale:
+    name: _SparkleNormalScale
+    paramtype: 2
+    value: 1
+  _Main_Paint:
+    name: _Main_Paint
+    paramtype: 2
+    value: 1
+  _DissolveThreshold:
+    name: _DissolveThreshold
+    paramtype: 2
+    value: 1
+  _FresnelMask:
+    name: _FresnelMask
+    paramtype: 2
+    value: 0.5
+  _Lava_AshTex_ST:
+    name: _Lava_AshTex_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _ParallaxTexTiling:
+    name: _ParallaxTexTiling
+    paramtype: 2
+    value: 11
+  _MaskTexT:
+    name: _MaskTexT
+    paramtype: 5
+    value:
+      dimension: 1
+      filename: textures\NCar_10045_Mask1_PBR_01.dds
+      wrapmode: 1
+      filtermode: 2
+      enablemipmap: true
+      anisolevel: 0
+      sRGB: false
+  _RMAMul:
+    name: _RMAMul
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 1
+        w: 0
+  _ShowDissolveDitherScale:
+    name: _ShowDissolveDitherScale
+    paramtype: 2
+    value: 1
+  _ToneMappingB:
+    name: _ToneMappingB
+    paramtype: 2
+    value: 0.0299999993
+  _EnableFXAdd:
+    name: _EnableFXAdd
+    paramtype: 2
+    value: 1
+  _FXAxis:
+    name: _FXAxis
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 0
+        z: 0
+        w: 0
+  _ParallaxHei2:
+    name: _ParallaxHei2
+    paramtype: 2
+    value: -0.25
+  _DiamondsTexOutLineMulit:
+    name: _DiamondsTexOutLineMulit
+    paramtype: 2
+    value: 5
+  _ParallaxTexTailTiling:
+    name: _ParallaxTexTailTiling
+    paramtype: 2
+    value: 0.0299999993
+  _PaintColor1:
+    name: _PaintColor1
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 1
+        g: 0.507894039
+        b: 0.101960778
+        a: 1
+  _CTransWidth:
+    name: _CTransWidth
+    paramtype: 2
+    value: 0.100000001
+  _BodyUVSpeed:
+    name: _BodyUVSpeed
+    paramtype: 2
+    value: 0.0500000007
+  _ParallaxDepthRGB:
+    name: _ParallaxDepthRGB
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 1
+        w: 0
+  _DirLightStrength:
+    name: _DirLightStrength
+    paramtype: 2
+    value: 1
+  _MaskThickness:
+    name: _MaskThickness
+    paramtype: 2
+    value: 1
+  _TranslucentColor:
+    name: _TranslucentColor
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 0.0453898124
+        g: 0.96226418
+        b: 0.247676894
+        a: 0
+  _IceMaskTexT:
+    name: _IceMaskTexT
+    paramtype: 5
+    value:
+      dimension: 1
+      filename: textures\NCar_10045_Thickness02_PBR.dds
+      wrapmode: 1
+      filtermode: 2
+      enablemipmap: false
+      anisolevel: 0
+      sRGB: false
+  _DiamondsTexOutColor:
+    name: _DiamondsTexOutColor
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 0.201851174
+        g: 0.402730972
+        b: 0.594339609
+        a: 1
+  _ClearCoatRoughness:
+    name: _ClearCoatRoughness
+    paramtype: 2
+    value: 1
+  _NormalMap_ST:
+    name: _NormalMap_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _EmissionColor:
+    name: _EmissionColor
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 0.0408508442
+        g: 0.160377383
+        b: 0.116913199
+        a: 0
+  _EmissionMap_ST:
+    name: _EmissionMap_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _NormalDistortion:
+    name: _NormalDistortion
+    paramtype: 2
+    value: 0.683000028
+  _AA:
+    name: _AA
+    paramtype: 2
+    value: 1
+  _FXMapWidth2:
+    name: _FXMapWidth2
+    paramtype: 2
+    value: 0.0700000003
+  _DiamondsTexOutLineSet:
+    name: _DiamondsTexOutLineSet
+    paramtype: 2
+    value: 1.5
+  _FillLightLobemix:
+    name: _FillLightLobemix
+    paramtype: 2
+    value: 0.5
+  _DirLightDir:
+    name: _DirLightDir
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 0.232999995
+        y: 0.407999992
+        z: 0.879999995
+        w: 0
+  _MainColor:
+    name: _MainColor
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 1
+        g: 1
+        b: 1
+        a: 1
+  _Emission:
+    name: _Emission
+    paramtype: 2
+    value: 1
+  _FXMinPos:
+    name: _FXMinPos
+    paramtype: 2
+    value: -5
+  _ParallaxDep2:
+    name: _ParallaxDep2
+    paramtype: 2
+    value: 0.150000006
+  _BodyEffectTiling:
+    name: _BodyEffectTiling
+    paramtype: 2
+    value: 1
+  _FillLightLobe1Tint:
+    name: _FillLightLobe1Tint
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 0.707547188
+        g: 1
+        b: 0.945981145
+        a: 1
+  _NoVOffset:
+    name: _NoVOffset
+    paramtype: 2
+    value: 0
+  _PaintColor2:
+    name: _PaintColor2
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 0.631372571
+        g: 0.30047816
+        b: 0.0549019501
+        a: 1
+  _Show_Dissolve:
+    name: _Show_Dissolve
+    paramtype: 2
+    value: 0
+  _Lava_UV_Distort_Indensity:
+    name: _Lava_UV_Distort_Indensity
+    paramtype: 2
+    value: 1
+  _EffectTexColorMulit:
+    name: _EffectTexColorMulit
+    paramtype: 2
+    value: 1.09000003
+  _ParallaxMulit:
+    name: _ParallaxMulit
+    paramtype: 2
+    value: 1.20000005
+  _FillLightDir:
+    name: _FillLightDir
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 1
+        w: 0
+  _MaskTex_ST:
+    name: _MaskTex_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _FinalPower:
+    name: _FinalPower
+    paramtype: 2
+    value: 2
+  _LavaColor1:
+    name: _LavaColor1
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 4
+        g: 0.100000001
+        b: 0.00999999978
+        a: 1
+  _UVNoiseTex_ST:
+    name: _UVNoiseTex_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _EffectTexOffsetV:
+    name: _EffectTexOffsetV
+    paramtype: 2
+    value: 0.0799999982
+  _SparkleNormalMapT:
+    name: _SparkleNormalMapT
+    paramtype: 5
+    value:
+      dimension: 1
+      filename: textures\CarFlakes_N_Mip_RGBA32.dds
+      wrapmode: 1
+      filtermode: 2
+      enablemipmap: false
+      anisolevel: 0
+      sRGB: false
+  _ClearCoatF0:
+    name: _ClearCoatF0
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 0
+        g: 0
+        b: 0
+        a: 1
+  _EmissionMapT:
+    name: _EmissionMapT
+    paramtype: 5
+    value:
+      dimension: 1
+      filename: textures\NCar_10045_Thickness02_PBR.dds
+      wrapmode: 1
+      filtermode: 2
+      enablemipmap: false
+      anisolevel: 0
+      sRGB: false
+  _ShowDissolveNoiseTiling:
+    name: _ShowDissolveNoiseTiling
+    paramtype: 2
+    value: 1
+  _element1_Swith_line1_scale:
+    name: _element1_Swith_line1_scale
+    paramtype: 2
+    value: 7.3499999
+  _ToneMappingD:
+    name: _ToneMappingD
+    paramtype: 2
+    value: 0.589999974
+  _FXMapSpeed:
+    name: _FXMapSpeed
+    paramtype: 2
+    value: 0.119999997
+  _SSS_Weight:
+    name: _SSS_Weight
+    paramtype: 2
+    value: 0.579999983
+  _EffectParallaxDepht:
+    name: _EffectParallaxDepht
+    paramtype: 2
+    value: 0.150000006
+  _SpecularAntiAliasingThreshold:
+    name: _SpecularAntiAliasingThreshold
+    paramtype: 2
+    value: 1
+  _Lava_ColorMaskValue:
+    name: _Lava_ColorMaskValue
+    paramtype: 2
+    value: 1.29999995
+  _FresnelParamA:
+    name: _FresnelParamA
+    paramtype: 2
+    value: 0.150000006
+  _SecondDiffuseRatio:
+    name: _SecondDiffuseRatio
+    paramtype: 2
+    value: 0
+  _Second_Diffuse:
+    name: _Second_Diffuse
+    paramtype: 2
+    value: 0
+  _ClearCoatColor:
+    name: _ClearCoatColor
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 0.449359238
+        g: 0.933962286
+        b: 0.833699584
+        a: 1
+  _Ramp_ST:
+    name: _Ramp_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _VertexDistortSpeed:
+    name: _VertexDistortSpeed
+    paramtype: 2
+    value: 10
+  _Lava_ColorMaskFactor:
+    name: _Lava_ColorMaskFactor
+    paramtype: 2
+    value: 0.5
+  _Clear_Coat:
+    name: _Clear_Coat
+    paramtype: 2
+    value: 1
+  _ThicknessMap_ST:
+    name: _ThicknessMap_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _ACESMapping:
+    name: _ACESMapping
+    paramtype: 2
+    value: 1
+  _UVDistort:
+    name: _UVDistort
+    paramtype: 2
+    value: 0.389999986
+  _DiamondsOutLineIntensity:
+    name: _DiamondsOutLineIntensity
+    paramtype: 2
+    value: 0
+  _SecondFresnelScale2:
+    name: _SecondFresnelScale2
+    paramtype: 2
+    value: 1
+  _DissolveClipToggle:
+    name: _DissolveClipToggle
+    paramtype: 2
+    value: 0
+  _FXBlendColor:
+    name: _FXBlendColor
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 0.0430000015
+        g: 0.114
+        b: 0.340999991
+        a: 1
+  _ParallaxDep1:
+    name: _ParallaxDep1
+    paramtype: 2
+    value: -0.200000003
+  _CTransThrehold:
+    name: _CTransThrehold
+    paramtype: 2
+    value: 0
+  _DissolveTexture_ST:
+    name: _DissolveTexture_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _FadeParamB:
+    name: _FadeParamB
+    paramtype: 2
+    value: -0.0700000003
+  _TailUVSpeed:
+    name: _TailUVSpeed
+    paramtype: 2
+    value: 0.0500000007
+  _RMASMapT:
+    name: _RMASMapT
+    paramtype: 5
+    value:
+      dimension: 1
+      filename: textures\NCar_10045_RMA_PBR_01.dds
+      wrapmode: 1
+      filtermode: 2
+      enablemipmap: true
+      anisolevel: 0
+      sRGB: false
+  _ShowDissolveColor:
+    name: _ShowDissolveColor
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 1
+        g: 0
+        b: 0
+        a: 0
+  _Noise01ScrollSpeed:
+    name: _Noise01ScrollSpeed
+    paramtype: 2
+    value: 0.25
+  _MaskDistance:
+    name: _MaskDistance
+    paramtype: 2
+    value: 1
+  _FlameArea:
+    name: _FlameArea
+    paramtype: 2
+    value: 0
+  _RMASMap_ST:
+    name: _RMASMap_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _NormalMapT:
+    name: _NormalMapT
+    paramtype: 5
+    value:
+      dimension: 1
+      filename: textures\NCar_10045_Normal_PBR.png
+      wrapmode: 1
+      filtermode: 2
+      enablemipmap: true
+      anisolevel: 0
+      sRGB: false
+  _MainTexT:
+    name: _MainTexT
+    paramtype: 5
+    value:
+      dimension: 1
+      filename: textures\NCar_10045_Paint_PBR_0001.dds
+      wrapmode: 1
+      filtermode: 2
+      enablemipmap: true
+      anisolevel: 0
+      sRGB: false
+  _CTransMaskTex_ST:
+    name: _CTransMaskTex_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _EnableFXMask:
+    name: _EnableFXMask
+    paramtype: 2
+    value: 1
+  _DistortSpeedV1:
+    name: _DistortSpeedV1
+    paramtype: 2
+    value: 9.99999975e-05
+  _SubFresnelScale2:
+    name: _SubFresnelScale2
+    paramtype: 2
+    value: 8.69999981
+  _CTransDistortionPower:
+    name: _CTransDistortionPower
+    paramtype: 2
+    value: 1
+  _ToneMappingA:
+    name: _ToneMappingA
+    paramtype: 2
+    value: 3.20000005
+  _FXMaxPos:
+    name: _FXMaxPos
+    paramtype: 2
+    value: 5
+  _PaintColorFresnelWidth:
+    name: _PaintColorFresnelWidth
+    paramtype: 2
+    value: 0.879999995
+  _PaintColor3:
+    name: _PaintColor3
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 0.330188692
+        g: 0.128854126
+        b: 0
+        a: 1
+  _ViceColor:
+    name: _ViceColor
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 1
+        g: 1
+        b: 1
+        a: 1
+  _EffectTex_ST:
+    name: _EffectTex_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _CubeMapMulit:
+    name: _CubeMapMulit
+    paramtype: 2
+    value: 0.200000003
+  _Need_SparkleTex:
+    name: _Need_SparkleTex
+    paramtype: 2
+    value: 0
+  _FillLightLobe1Roughness:
+    name: _FillLightLobe1Roughness
+    paramtype: 2
+    value: 0.5
+  _EnvSpecularEdgeIndensity:
+    name: _EnvSpecularEdgeIndensity
+    paramtype: 2
+    value: 10
+  _DissolveValueThreshold:
+    name: _DissolveValueThreshold
+    paramtype: 2
+    value: 0.100000001
+  _DissolveTiling:
+    name: _DissolveTiling
+    paramtype: 2
+    value: 1
+  _element1_Swith_line1_mul1:
+    name: _element1_Swith_line1_mul1
+    paramtype: 2
+    value: 1.13
+  _ThicknessMapT:
+    name: _ThicknessMapT
+    paramtype: 5
+    value:
+      dimension: 1
+      filename: textures\NCar_10045_Thickness02_PBR.dds
+      wrapmode: 1
+      filtermode: 2
+      enablemipmap: false
+      anisolevel: 0
+      sRGB: false
+  _DiamondBlendType:
+    name: _DiamondBlendType
+    paramtype: 2
+    value: 0
+  _Strength:
+    name: _Strength
+    paramtype: 2
+    value: 4.34000015
+  _FXMapWidth:
+    name: _FXMapWidth
+    paramtype: 2
+    value: 0.0799999982
+  _FlameProgression:
+    name: _FlameProgression
+    paramtype: 2
+    value: 2
+  _ParallaxHei1:
+    name: _ParallaxHei1
+    paramtype: 2
+    value: 0.25
+  _ParallaxTexBodyTiling:
+    name: _ParallaxTexBodyTiling
+    paramtype: 2
+    value: 0.0299999993
+  _FlameEffectIntensity:
+    name: _FlameEffectIntensity
+    paramtype: 2
+    value: 4
+  _SSS_BaseColor:
+    name: _SSS_BaseColor
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 0.32796365
+        g: 0.632075429
+        b: 0.576782346
+        a: 1
+  _FresnelParamB:
+    name: _FresnelParamB
+    paramtype: 2
+    value: -1.63999999
+  _FadeStrength:
+    name: _FadeStrength
+    paramtype: 2
+    value: -2
+  _IceMaskTex_ST:
+    name: _IceMaskTex_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _ParallaxTexInOut:
+    name: _ParallaxTexInOut
+    paramtype: 2
+    value: 0.5
+  _FillLightLobe2Roughness:
+    name: _FillLightLobe2Roughness
+    paramtype: 2
+    value: 0.5
+  _Noise01_ST:
+    name: _Noise01_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _IceTexT:
+    name: _IceTexT
+    paramtype: 5
+    value:
+      dimension: 1
+      filename: textures\NCar_10045_ice.dds
+      wrapmode: 1
+      filtermode: 2
+      enablemipmap: false
+      anisolevel: 0
+      sRGB: false
+  _ParallaxIndensity:
+    name: _ParallaxIndensity
+    paramtype: 2
+    value: 1
+  _Need_FillLight:
+    name: _Need_FillLight
+    paramtype: 2
+    value: 1
+  _DirLightSpecColor:
+    name: _DirLightSpecColor
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 0.754716992
+        g: 1
+        b: 0.824340224
+        a: 1
+  _Translucent:
+    name: _Translucent
+    paramtype: 2
+    value: 1
+  _DiamondsTexOutPow:
+    name: _DiamondsTexOutPow
+    paramtype: 2
+    value: 1
+  _DiamondMaskTex_ST:
+    name: _DiamondMaskTex_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _FillLightIntensity:
+    name: _FillLightIntensity
+    paramtype: 2
+    value: 1
+  _Attenuation:
+    name: _Attenuation
+    paramtype: 2
+    value: 3.97000003
+  _ToneMappingC:
+    name: _ToneMappingC
+    paramtype: 2
+    value: 1.60000002
+  _FXAddColor:
+    name: _FXAddColor
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 0.0700000003
+        g: 0.275000006
+        b: 0.477999985
+        a: 1
+  _Lava_Ash_TilingAndSpeed:
+    name: _Lava_Ash_TilingAndSpeed
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 1
+        w: 1
+  _MatCapIntensity:
+    name: _MatCapIntensity
+    paramtype: 2
+    value: 0
+  _CTransColor:
+    name: _CTransColor
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 1
+        g: 1
+        b: 1
+        a: 1
+  _FresnelStrength:
+    name: _FresnelStrength
+    paramtype: 2
+    value: 2
+  _FinalMixColor:
+    name: _FinalMixColor
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 0
+        g: 0.273584902
+        b: 0.212788299
+        a: 1
+  _TailEffectTiling:
+    name: _TailEffectTiling
+    paramtype: 2
+    value: 1
+  _DiamondMaskTexT:
+    name: _DiamondMaskTexT
+    paramtype: 5
+    value:
+      dimension: 1
+      filename: textures\NCar_10045_IceMask_PBR.dds
+      wrapmode: 1
+      filtermode: 2
+      enablemipmap: false
+      anisolevel: 0
+      sRGB: false
+  _FillLightLobe2Tint:
+    name: _FillLightLobe2Tint
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 1
+        g: 0.990101933
+        b: 0.801886797
+        a: 1
+  _Show_Dissolve_NoiseTex_ST:
+    name: _Show_Dissolve_NoiseTex_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _MaskTexture_ST:
+    name: _MaskTexture_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _Lava_FadeFactor:
+    name: _Lava_FadeFactor
+    paramtype: 2
+    value: 0
+  _ScreenIntensityLerp:
+    name: _ScreenIntensityLerp
+    paramtype: 2
+    value: 1.20000005
+  _IceTex_ST:
+    name: _IceTex_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _EffectTexOffsetU:
+    name: _EffectTexOffsetU
+    paramtype: 2
+    value: 0.0799999982
+  _DIRLIGHT:
+    name: _DIRLIGHT
+    paramtype: 2
+    value: 1
+  _MainTex_ST:
+    name: _MainTex_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _FXMask_ST:
+    name: _FXMask_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _Lava_UV_Distort_TilingAndSpeed:
+    name: _Lava_UV_Distort_TilingAndSpeed
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _DistortSpeedU1:
+    name: _DistortSpeedU1
+    paramtype: 2
+    value: 0.00079999998
+  _EffectParallaxMulit:
+    name: _EffectParallaxMulit
+    paramtype: 2
+    value: 0.5
+  _SparkleNormalMap_ST:
+    name: _SparkleNormalMap_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 80
+        y: 80
+        z: 0
+        w: 0
+  _ShowDissolveValueEdgeScale:
+    name: _ShowDissolveValueEdgeScale
+    paramtype: 2
+    value: 0.100000001
+  _EnableFXBlend:
+    name: _EnableFXBlend
+    paramtype: 2
+    value: 1
+  _ParallaxRef2:
+    name: _ParallaxRef2
+    paramtype: 2
+    value: 0.660000026
+  _SecondDiffuseTex_ST:
+    name: _SecondDiffuseTex_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _ClearCoatEnvIntensity:
+    name: _ClearCoatEnvIntensity
+    paramtype: 2
+    value: 0.239999995
+  _EnvGIIndensity:
+    name: _EnvGIIndensity
+    paramtype: 2
+    value: 1
+  _ViceTex_ST:
+    name: _ViceTex_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _SpecularAntiAliasingScreenSpaceVariance:
+    name: _SpecularAntiAliasingScreenSpaceVariance
+    paramtype: 2
+    value: 1
+  _VertexDistortDuration:
+    name: _VertexDistortDuration
+    paramtype: 2
+    value: 5
+  _EffectTexColor:
+    name: _EffectTexColor
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 0.0217158962
+        g: 0.575471699
+        b: 0.575471699
+        a: 1
+  _ShowDissolveSpeed:
+    name: _ShowDissolveSpeed
+    paramtype: 2
+    value: 0.0500000007
+  _ClipOffset:
+    name: _ClipOffset
+    paramtype: 2
+    value: 0
+  _VertexDistortIntensity:
+    name: _VertexDistortIntensity
+    paramtype: 2
+    value: 0.00999999978
+  _LavaColor2:
+    name: _LavaColor2
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 3
+        g: 0.5
+        b: 0.00999999978
+        a: 1
+  _MatCap_ST:
+    name: _MatCap_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _PreFilterEnvSpecularMap_ST:
+    name: _PreFilterEnvSpecularMap_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _ShowDissolveHeightEdgeScale:
+    name: _ShowDissolveHeightEdgeScale
+    paramtype: 2
+    value: 0.100000001
+  _Vertex_Animation:
+    name: _Vertex_Animation
+    paramtype: 2
+    value: 0
+  _ToneMappingE:
+    name: _ToneMappingE
+    paramtype: 2
+    value: 0.140000001
+  _FXMapSpeed2:
+    name: _FXMapSpeed2
+    paramtype: 2
+    value: 0.100000001
+  _SecondFresnelScale:
+    name: _SecondFresnelScale
+    paramtype: 2
+    value: 3.11999989
+  _PaintColorFresnelWidth2:
+    name: _PaintColorFresnelWidth2
+    paramtype: 2
+    value: 5.61000013
+  _PreFilterEnvSpecularMapT:
+    name: _PreFilterEnvSpecularMapT
+    paramtype: 5
+    value:
+      dimension: 2
+      filename: textures\CubeMap_PBR_HDR02.exr
+      wrapmode: 3
+      filtermode: 2
+      enablemipmap: true
+      anisolevel: 0
+      sRGB: false
+  _DissolveClipDir:
+    name: _DissolveClipDir
+    paramtype: 2
+    value: 0
+  _FlowLight:
+    name: _FlowLight
+    paramtype: 2
+    value: 0
+  _FlameAreaSoften:
+    name: _FlameAreaSoften
+    paramtype: 2
+    value: 2
+  _SparkleNormalScale_from:
+    name: _SparkleNormalScale_from
+    paramtype: 2
+    value: 1
+  _SecondPaintColor3:
+    name: _SecondPaintColor3
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 2.36251807
+        g: 2.47947431
+        b: 2.45620561
+        a: 1
+  _Noise01Tiling:
+    name: _Noise01Tiling
+    paramtype: 2
+    value: 1
+  _NoiseDistortionPower:
+    name: _NoiseDistortionPower
+    paramtype: 2
+    value: 1
+  _SSS_ScatterColor:
+    name: _SSS_ScatterColor
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 0.424528301
+        g: 1
+        b: 0.501708925
+        a: 1
+  _Ice:
+    name: _Ice
+    paramtype: 2
+    value: 1
+  _Need_Diamond:
+    name: _Need_Diamond
+    paramtype: 2
+    value: 0
+  _SecondPaintColor2:
+    name: _SecondPaintColor2
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 0.650943398
+        g: 1
+        b: 0.900269508
+        a: 1
+  _DirLightColor:
+    name: _DirLightColor
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 0.650943398
+        g: 1
+        b: 0.772143662
+        a: 1
+  _Color_Transform:
+    name: _Color_Transform
+    paramtype: 2
+    value: 0
+  _Adv_Dissolve:
+    name: _Adv_Dissolve
+    paramtype: 2
+    value: 0
+  _UVNoiseTexT:
+    name: _UVNoiseTexT
+    paramtype: 5
+    value:
+      dimension: 1
+      filename: textures\NCar_10045_Noise.dds
+      wrapmode: 1
+      filtermode: 2
+      enablemipmap: true
+      anisolevel: 0
+      sRGB: false
+  _SecondPaintColor1:
+    name: _SecondPaintColor1
+    paramtype: 4
+    value:
+      vectortype: 4
+      vectorvalue:
+        r: 0.424528301
+        g: 1
+        b: 0.649349391
+        a: 1
+  _CTransDistortionScale:
+    name: _CTransDistortionScale
+    paramtype: 2
+    value: 0.00999999978
+  _MinStrength:
+    name: _MinStrength
+    paramtype: 2
+    value: 0
+  _FXMap_ST:
+    name: _FXMap_ST
+    paramtype: 4
+    value:
+      vectortype: 3
+      vectorvalue:
+        x: 1
+        y: 1
+        z: 0
+        w: 0
+  _SSS_Intensity:
+    name: _SSS_Intensity
+    paramtype: 2
+    value: 1
+  _ParallaxRef1:
+    name: _ParallaxRef1
+    paramtype: 2
+    value: 0.0799999982
+  _SubFresnelScale:
+    name: _SubFresnelScale
+    paramtype: 2
+    value: 10
+keywords:
+  - _EMISSION_ON
+  - _AA_ON
+  - _ACESMAPPING_ON
+  - _AUXILIARYPAINT_ON
+  - _AUXILIARY_PAINT_ON
+  - _CLEAR_COAT_ON
+  - _DIRLIGHT_ON
+  - _ENABLEFXADD_ON
+  - _ENABLEFXBLEND_ON
+  - _ENABLEFXMASK_ON
+  - _MAIN_PAINT_ON
+  - _NEED_FILLLIGHT_ON
+  - _TRANSLUCENT_ON
+  - _ICE_ON
+renderQueue: 2000

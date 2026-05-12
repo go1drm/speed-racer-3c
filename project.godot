@@ -19,6 +19,15 @@ run/main_scene="res://track.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
 config/icon="res://icon.svg"
 
+[autoload]
+
+TrackSwitcher="*res://TrackSwitcher.gd"
+CarSwitcher="*res://CarSwitcher.gd"
+
+[debug]
+
+file_logging/enable_file_logging=true
+
 [display]
 
 window/dpi/allow_hidpi=false

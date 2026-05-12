@@ -1,42 +1,44 @@
-[gd_scene load_steps=8 format=3 uid="uid://cvh0fwg53wpus"]
+[gd_scene load_steps=6 format=3 uid="uid://cvh0fwg53wpus"]
 
-[ext_resource type="Script" uid="uid://cma37fpblrefh" path="res://car.gd" id="1_0cfhi"]
-[ext_resource type="Texture2D" uid="uid://c1f70054pofjm" path="res://assets/texture_09.png" id="1_rqohb"]
-[ext_resource type="PackedScene" uid="uid://b7to78d8cuybh" path="res://assets/GLTF format/suv.glb" id="2_wv6cm"]
+; ============================================================
+;  默认赛车 = 玉麒麟 (原 car_yuqilin.tscn 的内容)
+;  uid 保持不变, 所有场景(track.tscn / track_qinghuaci.tscn 等) 引用都不破
+;  旧 SUV 版本另存为 car_suv.tscn, F3 可切回
+; ============================================================
 
-[sub_resource type="PhysicsMaterial" id="PhysicsMaterial_dtpcx"]
-bounce = 0.1
+[ext_resource type="Script" path="res://car.gd" id="1_script"]
+[ext_resource type="PackedScene" uid="uid://dyuqilin00mesh" path="res://YuqilinMesh.tscn" id="3_mesh"]
 
-[sub_resource type="SphereShape3D" id="SphereShape3D_ywja5"]
+[sub_resource type="PhysicsMaterial" id="PM"]
+friction = 0.8
+bounce = 0.0
+
+[sub_resource type="SphereShape3D" id="Sphere"]
 radius = 1.0
 
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_vviip"]
-transparency = 1
-albedo_color = Color(1, 1, 1, 0.643137)
-albedo_texture = ExtResource("1_rqohb")
-uv1_scale = Vector3(6, 3, 1)
-
-[sub_resource type="SphereMesh" id="SphereMesh_00jmq"]
-material = SubResource("StandardMaterial3D_vviip")
+[sub_resource type="SphereMesh" id="SphereDebug"]
 radius = 1.0
 height = 2.0
 
 [node name="Car" type="RigidBody3D"]
 collision_layer = 2
-physics_material_override = SubResource("PhysicsMaterial_dtpcx")
+physics_material_override = SubResource("PM")
 gravity_scale = 3.0
 angular_damp = 10.0
-script = ExtResource("1_0cfhi")
+contact_monitor = true
+max_contacts_reported = 8
+script = ExtResource("1_script")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="."]
-shape = SubResource("SphereShape3D_ywja5")
+shape = SubResource("Sphere")
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="CollisionShape3D"]
 visible = false
-mesh = SubResource("SphereMesh_00jmq")
+mesh = SubResource("SphereDebug")
 
-[node name="CarMesh" parent="." instance=ExtResource("2_wv6cm")]
+[node name="CarMesh" parent="." instance=ExtResource("3_mesh")]
 top_level = true
 
 [node name="RayCast3D" type="RayCast3D" parent="CarMesh"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.08165e-12, 0.5, 2.08165e-12)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)
+target_position = Vector3(0, -4, 0)
