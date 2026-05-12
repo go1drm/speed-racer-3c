@@ -1,0 +1,58 @@
+[gd_scene format=3 uid="uid://n46ipt4rw321"]
+
+[ext_resource type="Script" path="res://GlassShatterFX.gd" id="1_script"]
+
+; ============================================================
+;  玻璃渣碎开特效 (撞墙瞬间在撞击点位播放)
+;  用法: car.gd 撞墙时 add_child 实例化一个, set_global_position 到接触点
+;        特效自播放 ~0.6s 后 queue_free 自己清理
+;  可调: amount / speed / scale / color / lifetime / spread
+; ============================================================
+
+[sub_resource type="SphereMesh" id="ShardMesh"]
+radius = 0.03
+height = 0.06
+radial_segments = 4
+rings = 2
+
+[sub_resource type="StandardMaterial3D" id="ShardMat"]
+shading_mode = 0
+vertex_color_use_as_albedo = true
+albedo_color = Color(0.85, 0.95, 1.0, 0.9)
+emission_enabled = true
+emission = Color(0.7, 0.85, 1.0, 1)
+emission_energy_multiplier = 3.5
+blend_mode = 1
+cull_mode = 2
+transparency = 1
+metallic = 0.7
+roughness = 0.2
+
+[sub_resource type="ParticleProcessMaterial" id="ShardProc"]
+emission_shape = 1
+emission_sphere_radius = 0.15
+direction = Vector3(0, 1, 0)
+spread = 70.0
+initial_velocity_min = 4.0
+initial_velocity_max = 9.0
+gravity = Vector3(0, -12.0, 0)
+scale_min = 0.6
+scale_max = 1.4
+color = Color(0.85, 0.95, 1.0, 1)
+hue_variation_min = -0.05
+hue_variation_max = 0.08
+angle_min = -180.0
+angle_max = 180.0
+angular_velocity_min = -720.0
+angular_velocity_max = 720.0
+
+[node name="GlassShatterFX" type="GPUParticles3D"]
+script = ExtResource("1_script")
+cast_shadow = 0
+amount = 25
+lifetime = 0.7
+one_shot = true
+explosiveness = 1.0
+process_material = SubResource("ShardProc")
+draw_pass_1 = SubResource("ShardMesh")
+material_override = SubResource("ShardMat")

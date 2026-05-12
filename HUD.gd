@@ -64,6 +64,11 @@ var _lamp_base_color: Color = LAMP_OFF_COLOR
 var _current_nitro_variant: String = "blue"
 # combo 字保护: 这个时刻之前 boost_triggered 不覆盖 boost_label
 var _combo_protect_until: float = 0.0
+# 松前状态: 进入松前时, drift_label 锁定为"松前"满 alpha 持续显示, 不走 hold/fade 衰减
+# 离开松前(踩回油门 / 退漂 / 触发松前漂移)时解锁, 走正常 fade
+var _songqian_active: bool = false
+# 松前提示颜色 (用青绿色, 区分于"漂移"的橙红/紫红)
+const SONGQIAN_COLOR := Color(0.4, 1.0, 0.85, 1.0)
 
 
 func _ready() -> void:
@@ -108,6 +113,10 @@ func _connect_to_car() -> void:
 		car.connect("air_boost_armed", _on_air_boost_armed)
 	if car.has_signal("landing_boost_triggered"):
 		car.connect("landing_boost_triggered", _on_landing_boost_triggered)
+	if car.has_signal("songqian_state_changed"):
+		car.connect("songqian_state_changed", _on_songqian_state_changed)
+	if car.has_signal("songqian_back_boost_triggered"):
+		car.connect("songqian_back_boost_triggered", _on_songqian_back_boost_triggered)
 
 
 # ============================================================
@@ -136,8 +145,13 @@ func _show_crash_popup(text: String, color: Color) -> void:
 
 
 func _process(delta: float) -> void:
-	# 漂移弹字: hold 阶段保持满 alpha, hold 结束进入 fade 阶段渐隐
-	if _drift_hold_left > 0.0:
+	# 漂移弹字: 松前期间锁定常驻满 alpha; 否则走 hold → fade 标准流程
+	if _songqian_active:
+		drift_label.modulate.a = 1.0
+		# 松前期间清零计时器, 避免离开松前后还残留计时
+		_drift_hold_left = 0.0
+		_drift_fade_left = drift_fade_time
+	elif _drift_hold_left > 0.0:
 		_drift_hold_left -= delta
 		drift_label.modulate.a = 1.0
 	elif _drift_fade_left > 0.0:
@@ -206,19 +220,19 @@ func _paint_nitro_slots(stock: int) -> void:
 
 
 func _on_drift_started(mode: String) -> void:
-	var txt := ""
-	var col := Color.WHITE
-	if mode == "tuck":
-		txt = "DRIFT · 甩尾"
-		col = Color(1.0, 0.65, 0.2)
-	else:
-		txt = "DRIFT · 侧身"
-		col = Color(1.0, 0.3, 0.5)
+	# 【炫点】漂移就是漂移, 不叫甩尾.
+	# "甩尾漂移"(tuck) 和 "侧身漂移"(side) 是内部技巧分类, 用于其他系统(比如成就/奖励), 不在中央弹字里区分.
+	# mode 参数保留, 仅用于后续如果要区分颜色/特效时用
+	var txt: String = "漂移"
+	var col: Color = Color(1.0, 0.65, 0.2) if mode == "tuck" else Color(1.0, 0.3, 0.5)
 	_show_drift_popup(txt, col)
 
 
 func _on_drift_ended(_gained: float, _succeeded: bool = false) -> void:
 	# 退漂时让漂移提示快速渐隐(给后续 boost/combo 弹字让位)
+	# 同时强制清松前锁: 漂移结束后, "松前"提示绝不能继续常驻
+	# (有时候 car.gd 的 songqian_state_changed(false) 信号会和 drift_ended 同帧到达, 顺序不确定; 这里兜底)
+	_songqian_active = false
 	_drift_hold_left = 0.0
 	_drift_fade_left = minf(_drift_fade_left, 0.2)
 
@@ -234,15 +248,16 @@ func _on_boost_triggered(type_name: String) -> void:
 	if not combo_protected:
 		var txt := ""
 		var col := Color.WHITE
+		# 【炫点文案】除了 CW/CWW/WCW 这类序列名保留英文字母外, 其他全部中文
 		match type_name:
 			"mini":
-				txt = "小  喷"
+				txt = "小喷"
 				col = W_COLOR_BLUE
 			"double":
-				txt = "D O U B L E !"
+				txt = "双喷"
 				col = W_COLOR_BLUE
 			"nitro":
-				txt = "N I T R O !!"
+				txt = "氮气"
 				col = _nitro_color_for_variant(_current_nitro_variant)
 		_show_boost_popup(txt, col)
 	# 小喷触发: 灯保持蓝色, 不再加额外提示文字
@@ -253,13 +268,21 @@ func _on_boost_triggered(type_name: String) -> void:
 		_set_boost_lamp_off()
 
 
-# combo 弹字: 只处理合法的两种叠喷 CWW / WCW
-# combo_name 只会是 "CW"(前缀, 不弹) / "CWW"(终结) / "WC"(前缀, 不弹) / "WCW"(终结)
+# combo 弹字: 三种合法叠喷都弹字
+# combo_name 取值:
+#   "CW"  → 2 段叠喷(突破 1 次), 弹字
+#   "CWW" → 3 段终结(突破 2 次), 弹字
+#   "WCW" → 3 段终结(突破 1 次), 弹字
+#   "WC"  → WCW 的过渡前缀, 不弹 (玩家还没完成 WCW)
+#   其他  → 不弹
 func _on_combo_triggered(combo_name: String, breakthrough_count: int) -> void:
-	# 只弹"完整叠喷"字, 中间前缀(CW / WC)不弹
-	if combo_name != "CWW" and combo_name != "WCW":
+	# 只有这三个 combo 弹字, 其他过渡前缀(WC) 静默
+	if combo_name != "CW" and combo_name != "CWW" and combo_name != "WCW":
 		return
-	# 颜色按突破次数: CWW=2 次(红), WCW=1 次(金)
+	# 颜色按突破次数:
+	#   2 次突破(CWW)        → 红色 (最强)
+	#   1 次突破(CW / WCW)   → 金色
+	#   0 次突破             → 蓝色 (理论上不会到这里)
 	var col: Color
 	if breakthrough_count >= 2:
 		col = NITRO_COLOR_RED
@@ -267,8 +290,10 @@ func _on_combo_triggered(combo_name: String, breakthrough_count: int) -> void:
 		col = NITRO_COLOR_GOLD
 	else:
 		col = W_COLOR_BLUE
-	var combo_hold: float = popup_hold_time + 0.4
-	_show_boost_popup("叠喷  " + combo_name, col, combo_hold, popup_fade_time)
+	# CW 是 2 段叠喷, 持续时间略短; CWW/WCW 是终结型, 持续更长
+	var combo_hold: float = popup_hold_time + (0.4 if combo_name != "CW" else 0.2)
+	# 【炫点文案】"叠喷" 为中文前缀, CWW 等序列名保留英文 (就是玩家识别的技巧代号)
+	_show_boost_popup("叠喷  %s" % combo_name, col, combo_hold, popup_fade_time)
 	_combo_protect_until = Time.get_ticks_msec() / 1000.0 + combo_hold + popup_fade_time * 0.5
 	print("[HUD] combo: %s 突破=%d" % [combo_name, breakthrough_count])
 
@@ -289,32 +314,70 @@ func _on_wall_crashed(lost_amount: float) -> void:
 
 
 func _on_air_boost_armed() -> void:
-	# 空中按 W: 提示已锁定
-	_show_boost_popup("空喷锁定", Color(1.0, 0.9, 0.4, 1.0), 0.6, 0.3)
+	# 空中按 W: 仅"意图锁定"的中间状态, 还没真正完成空喷技巧.
+	# 【炫点】原则不弹字, 完成时在 _on_air_boost_triggered 里弹"空喷！Xs 飞跃"
+	pass
+
+
+# ============================================================
+#  松前状态显示 (在 drift_label 位置常驻"松前")
+# ============================================================
+# 设计:
+#   · 进入松前 → drift_label 立刻改为"松前"满 alpha, 用青绿色区分"漂移"
+#   · 松前期间 → _process 锁定 alpha=1.0, 不衰减 (玩家不踩回油门就一直显示)
+#   · 离开松前 → 如果车还在漂(_drift_hold_left/_drift_fade_left 由 drift_started 信号管理)
+#                  之前 _on_drift_started 就已经把"漂移"和它的颜色记好了, 但被我们覆盖了
+#                  所以离开松前时主动恢复一次"漂移"显示, 走 hold + fade 流程
+#                若已经退漂(state→NORMAL), car.gd 已经发过 drift_ended, 这里走快速渐隐即可
+func _on_songqian_state_changed(active: bool) -> void:
+	if active:
+		_songqian_active = true
+		drift_label.text = "松前"
+		drift_label.modulate = Color(SONGQIAN_COLOR.r, SONGQIAN_COLOR.g, SONGQIAN_COLOR.b, 1.0)
+		print("[HUD] 进入松前 → 显示松前提示")
+	else:
+		_songqian_active = false
+		# 离开松前: 恢复"漂移"显示走 hold→fade. 如果车已经退漂了, drift_ended 已把 hold/fade 清零
+		# 这里再 show 一次会让"漂移"短暂闪一下, 不优雅. 折衷: 直接进入 fade 阶段, 让"松前"两字渐隐消失
+		drift_label.text = "漂移"
+		drift_label.modulate = Color(1.0, 0.3, 0.5, 1.0)  # 默认漂移色
+		_drift_hold_left = 0.3   # 给 0.3s 短暂保持, 让"漂移"两字一闪而过
+		_drift_fade_left = drift_fade_time
+		print("[HUD] 离开松前 → 恢复漂移显示")
 
 
 func _on_air_boost_triggered(air_time: float) -> void:
-	_show_boost_popup("空喷！%.1fs 飞跃" % air_time, Color(1.0, 0.5, 0.95, 1.0))
+	# 【炫点文案】中文. 气泡时长参数保留原 default (不带 hold/fade 参数)
+	_show_boost_popup("空喷  %.1f秒飞跃" % air_time, Color(1.0, 0.5, 0.95, 1.0))
 	_combo_protect_until = Time.get_ticks_msec() / 1000.0 + 0.4
 
 
 func _on_landing_boost_triggered(air_time: float) -> void:
-	_show_boost_popup("落地喷 +%.1fs" % air_time, Color(0.5, 1.0, 0.7, 1.0), 0.9, 0.4)
+	# 【炫点文案】中文.
+	_show_boost_popup("落地喷  +%.1f秒" % air_time, Color(0.5, 1.0, 0.7, 1.0), 0.9, 0.4)
+
+
+# 三喷 (松前后退喷) 触发: 弹红色"三喷"字, 突出高级技巧感
+# yaw_deg = 触发瞬间车头偏角 (供调试/未来扩展)
+func _on_songqian_back_boost_triggered(_yaw_deg: float) -> void:
+	# 红色 = 最强, 和"叠喷 CWW"颜色对齐. 持续时间长一点凸显成就感
+	_show_boost_popup("三喷  后退爆发", NITRO_COLOR_RED, 1.6, 0.6)
+	_combo_protect_until = Time.get_ticks_msec() / 1000.0 + 1.6
+	print("[HUD] 三喷弹字 (偏角 %.1f°)" % _yaw_deg)
 
 
 func _on_boost_window_opened(level: String, _duration: float) -> void:
+	# 【炫点】原则: 中央弹字只反馈"玩家做出了什么技巧", 不做"现在按 W"这类教学
+	# 这里是"小喷/双喷窗口开启"事件, 属于"可以做什么"而非"已经做了什么" → 不弹字
+	# 仅用灯效提示(灯亮+闪 W 字样, 这是 UI 持续性状态提示, 不是"炫点"弹字)
 	if level == "double":
-		_show_boost_popup("按 W！双喷", LAMP_DOUBLE_COLOR)
 		_set_boost_lamp_on(LAMP_DOUBLE_COLOR, "W")
 	else:
-		_show_boost_popup("按 W！小喷", LAMP_MINI_COLOR)
 		_set_boost_lamp_on(LAMP_MINI_COLOR, "W")
 
 
 func _on_boost_window_closed() -> void:
-	# 让"按 W"提示快速渐隐, 把舞台让给 boost_triggered 弹字
-	_boost_hold_left = 0.0
-	_boost_fade_left = minf(_boost_fade_left, 0.15)
+	# 窗口关闭: 熄灯即可, 无需弹字
 	_set_boost_lamp_off()
 
 
@@ -376,10 +439,10 @@ func _on_double_charge_progress(progress: float) -> void:
 		boost_lamp_label.text = ""
 
 
-# 双喷蓄满: 提示"按 W"
+# 双喷蓄满: 灯变亮 + "W!" 文字提示, 但**不**在炫点里弹"按 W！双喷"这种教学字
+# (玩家已经把蓄能做完了, 这只是"可以按 W 消费"的 UI 状态, 不是刚完成的技巧反馈)
 func _on_double_charge_ready() -> void:
 	_set_boost_lamp_on(LAMP_DOUBLE_COLOR, "W!")
-	_show_boost_popup("按 W！双喷", LAMP_DOUBLE_COLOR)
 
 
 # 双喷资格失效(超时/已释放/入漂清空 等)

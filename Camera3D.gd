@@ -44,13 +44,21 @@ extends Camera3D
 @export_group("Y Stabilizer")
 ## 启用 Y 轴稳定器: 过滤平地上微小起伏造成的相机抖动
 @export var y_stabilizer_enabled: bool = true
-## Y 偏差死区(米): 相机 Y 与目标 Y 的差距小于此值时不跟随. 0.15 推荐
-## 大 = 稳相机但大起伏响应慢; 小 = 灵敏但还会抖
-@export var y_deadzone: float = 0.15
+## Y 偏差死区(米): 相机 Y 与目标 Y 的差距小于此值时不跟随
+## 大 = 稳相机但大起伏响应慢; 小 = 灵敏但还会抖. 坑洼路面建议 0.3+
+@export var y_deadzone: float = 0.3
 ## Y 跟随速度乘数: 在 deadzone 外, Y 方向的 lerp 速度倍率(相对水平). 小=更慢追 Y
-@export var y_follow_speed_mult: float = 0.35
+@export var y_follow_speed_mult: float = 0.2
 ## 强制跟随 Y 的速度阈值(m/s): Y 速度超过此值(起跳/落地) 立即完全跟随. 3.0 推荐
 @export var y_force_follow_vy: float = 3.0
+
+# ---------------- 前瞻焦点 (V2 新增) ----------------
+@export_group("Look Ahead")
+## 焦点向车头方向额外偏移多少米 (基于车头, 不基于速度, 所以漂移时不会甩飞)
+## 0 = 镜头完全看车 (旧行为); 推荐 3~6 让玩家能看到前方一点路
+@export_range(0.0, 15.0, 0.1) var lookahead_distance: float = 3.0
+## 焦点向上偏移多少米 (避免镜头从上往下看车的问题)
+@export_range(-3.0, 5.0, 0.1) var lookahead_height: float = 0.5
 
 var _shake_timer: float = 0.0
 var _shake_intensity: float = 0.0
@@ -122,7 +130,7 @@ func _physics_process(delta: float) -> void:
 		var new_pos: Vector3 = cur_origin
 		new_pos.x = lerpf(cur_origin.x, target_origin.x, new_xz_t)
 		new_pos.z = lerpf(cur_origin.z, target_origin.z, new_xz_t)
-		# Y: 看车的 Y 速度, 平地微抖时不动
+		# Y: 看车的 Y 速度, 平地微抖时极慢追(不抖), 大起伏时正常追
 		var car_vy: float = 0.0
 		if target.get_parent() and "linear_velocity" in target.get_parent():
 			car_vy = absf(target.get_parent().linear_velocity.y)
@@ -134,8 +142,9 @@ func _physics_process(delta: float) -> void:
 			# 超出死区: 慢速追赶
 			new_pos.y = lerpf(cur_origin.y, target_origin.y, new_xz_t * y_follow_speed_mult)
 		else:
-			# 死区内: 相机 Y 不动
-			new_pos.y = cur_origin.y
+			# 死区内: 极慢追赶 (而不是完全不动), 消除"一抖一停"
+			# 数学: 在死区内仍然 lerp, 但用极小的 t (≤0.05), 视觉上感觉不到 Y 移动也不会抖
+			new_pos.y = lerpf(cur_origin.y, target_origin.y, minf(new_xz_t * y_follow_speed_mult * 0.15, 0.05))
 		global_position = new_pos
 		# basis (旋转) 单独插值, 用 XZ 速度
 		global_transform.basis = global_transform.basis.slerp(target_pos.basis, new_xz_t)
@@ -166,25 +175,43 @@ func _physics_process(delta: float) -> void:
 
 
 func _stable_look_target() -> Vector3:
-	# 返回一个 Y 经过稳定的 look_at 目标点. XZ 用车实际位置, Y 用平滑+死区后的值
+	# 返回 look_at 目标点:
+	#   · XZ: 车位置 + 车头方向 × lookahead_distance (前瞻, 让镜头不"完全看着车")
+	#         车头方向 (不是速度方向) → 漂移时车头朝边上, 焦点也朝边上, 但镜头不会"甩飞"
+	#         因为相机位置仍然由 target.global_transform.translated_local 算 (跟车走), 焦点偏移只是看哪
+	#   · Y: 车 Y + lookahead_height + 平滑(防坑洼)
 	var tp: Vector3 = target.global_position
+	var lookahead_pos: Vector3 = tp
+	if lookahead_distance > 0.0:
+		var fwd: Vector3 = -target.global_transform.basis.z
+		fwd.y = 0.0
+		if fwd.length() > 0.001:
+			lookahead_pos += fwd.normalized() * lookahead_distance
+	lookahead_pos.y += lookahead_height
+
 	if not y_stabilizer_enabled:
-		return tp
+		return lookahead_pos
+
+	# Y 平滑: 死区内"极慢追", 死区外"正常追"; 起跳/落地立即跟
+	# 旧版"死区内完全不动"会造成"路面起伏在阈值附近一抖一停",
+	# 改成"死区内仍然追但速度极慢"消除这个跳变
 	if not _stable_look_y_inited:
-		_stable_look_y = tp.y
+		_stable_look_y = lookahead_pos.y
 		_stable_look_y_inited = true
 	var car_vy: float = 0.0
 	if target.get_parent() and "linear_velocity" in target.get_parent():
 		car_vy = absf(target.get_parent().linear_velocity.y)
-	var dy: float = tp.y - _stable_look_y
+	var dy: float = lookahead_pos.y - _stable_look_y
 	if absf(car_vy) > y_force_follow_vy:
 		# 起跳/落地: 立即跟随
-		_stable_look_y = tp.y
+		_stable_look_y = lookahead_pos.y
 	elif absf(dy) > y_deadzone:
-		# 超出死区: 慢速追
-		_stable_look_y = lerpf(_stable_look_y, tp.y, 0.25)
-	# 死区内: 保持不变
-	return Vector3(tp.x, _stable_look_y, tp.z)
+		# 超出死区: 正常追 (以前是 0.25, 还是用 0.25)
+		_stable_look_y = lerpf(_stable_look_y, lookahead_pos.y, 0.25)
+	else:
+		# 死区内: 极慢追 (而非完全不动). 0.02 = 50 帧才追一半, 视觉上感觉不到, 也不会抖
+		_stable_look_y = lerpf(_stable_look_y, lookahead_pos.y, 0.02)
+	return Vector3(lookahead_pos.x, _stable_look_y, lookahead_pos.z)
 
 
 func _on_shake(intensity: float, duration: float) -> void:
@@ -213,7 +240,8 @@ func _on_boost(type_name: String) -> void:
 			_zoom_curve = double_zoom_curve
 			_zoom_target = _zoom_base_offset
 			_fov_target_boost = _zoom_base_fov
-		"mini":
+		"mini", "songqian_back":
+			# 小喷 + 三喷的"后退喷"共用小喷镜头反应
 			if mini_zoom_scale > 0.0 or mini_fov_boost > 0.0:
 				_zoom_base_offset = nitro_zoom_offset * mini_zoom_scale
 				_zoom_base_fov = mini_fov_boost
