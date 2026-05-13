@@ -233,20 +233,33 @@ anchors_preset = 2
 anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 20.0
-offset_top = -180.0
+offset_top = -202.0
 offset_right = 360.0
-offset_bottom = -20.0
+offset_bottom = -42.0
 grow_vertical = 0
 theme_override_font_sizes/font_size = 16
 theme_override_colors/font_color = Color(1, 1, 1, 0.78)
 theme_override_colors/font_outline_color = Color(0, 0, 0, 0.85)
 theme_override_constants/outline_size = 3
-text = "↑↓  加速 / 刹车
-←→  左右转向
-Q   点按入漂 / 退漂
-W   退漂窗口内: 小喷
-E   氮气（消耗 1 格）
+text = "↑   前进
+↓   后退
+← →  左转 / 右转
+Q   漂移
+W   小喷 / 空喷 / 落地喷
+E   氮气"
 
-漂角度 ≥ 10° 退漂可小喷（黄灯亮）
-小喷期间按住 Q 蓄能（灯变粉）→ 按 W 双喷
-撞墙：当前漂移集气 -80%"
+; ============ 署名小字 (HelpLabel 下方) ============
+; 样式: 14px 纯灰色, 无透明, 无描边
+[node name="SignatureLabel" type="Label" parent="Root"]
+layout_mode = 1
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 20.0
+offset_top = -36.0
+offset_right = 360.0
+offset_bottom = -10.0
+grow_vertical = 0
+theme_override_font_sizes/font_size = 14
+theme_override_colors/font_color = Color(0.55, 0.55, 0.55, 1)
+text = "本简易 DEMO 用于快速还原玩法原型  by.shilohuang"

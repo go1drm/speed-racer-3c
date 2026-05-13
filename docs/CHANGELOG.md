@@ -1,4 +1,4 @@
-# StarDust Racers 改动日志
+# 简单飞车试验场 改动日志
 
 > 按"功能模块"分类记录每次改动: **何时 / 改了什么 / 为什么改 / 受影响文件**。
 > 新增条目请放到对应分类的最上方（倒序时间）。
@@ -27,6 +27,74 @@
 ---
 
 ## 2026-05
+
+### 2026-05-13 14:08 【3C-车】反打重构 + 加速带 + 多 bug 修复
+- 【3C-车-反打】真实赛车反打机制重构 (新开关 `drift_counter_enabled`, 默认 true):
+  - 漂角 = 车头 XZ 与速度向量 XZ 的有符号夹角. 玩家按"与漂角相反"的方向 → 车头朝速度向量缓慢回正 (默认 120°/s, |steer| × ramp 调制), 直到漂角进入死区 (默认 4°)
+  - 反打期间暂停向心力 → 速度向量保持原方向, 玩家看到"车身仍在漂、车头先回正"的 QQ 飞车手感
+  - 旧机制 (反打减速 / 反打前向阻力 / 反打侧向抓地下降 / 反打 turn_mult 缩减 / 反打锁定 / 连续反打疲劳) 全部由新开关绕过, @export 默认值与 cfg 兼容
+  - 新参数 (Tuner): `drift_counter_enabled` / `drift_counter_angular_speed_deg=120` / `drift_counter_deadzone_deg=4` / `drift_counter_response_time=0.5`
+  - 文件: `car.gd`, `Tuner.gd`
+- 【3C-车-加速带】赛道白色方块加速带 + 弹射器:
+  - `TrackSetup.gd` 自动识别 FBX 里 mesh 名带 `AddSpeed` / `Shoot` 的 MeshInstance3D, 创建 Area3D + BoxShape3D 触发器 (不生成物理碰撞, 车可穿过)
+  - 新建 `SpeedPad.gd` 处理 body_entered 信号, 调用 `car.apply_speed_pad_boost(kick, dur, type)`
+  - 车端: 瞬时冲量 (沿车头) + 持续推力 (`speed_pad_sustain_power=18`, 线性衰减) + 顶速临时放宽到 `top_speed_boosted`
+  - 注意: Area3D collision_mask 必须设 2 (匹配 car 的 collision_layer=2)
+  - 默认参数: 加速带 kick=20 m/s dur=0.4s; 弹射器 kick=40 m/s dur=0.5s
+  - 文件: `TrackSetup.gd`, `SpeedPad.gd`(新), `car.gd`, `Tuner.gd`
+- 【3C-车-叠喷】air / landing 加入氮气延续白名单:
+  - 旧逻辑: 氮气中只有 mini/double 能延续氮气时长; air 和 landing 会强制打断氮气
+  - 新逻辑: air/landing 也算 W 系小喷, 也能延续氮气 + 沾叠喷链 (CW/CWW 等组合现在对 air/landing 生效)
+  - air/landing 仍**不**开放"蓄双喷资格" (它们是被动触发, 保留原设计意图)
+  - 文件: `car.gd::_start_boost`
+- 【3C-车-松前漂移】CD 改成全局生效:
+  - 新参数 `songqian_drift_cooldown=0.8s` 替代旧 `songqian_drift_max_per_drift` 次数限制
+  - CD 不因起漂清零, 跨多次漂移生效 (彻底封死"反复抖油门"刷冲量)
+  - 物理层倒计时统一在 `_physics_process` 衰减
+- 【3C-车】其他 bug 修复:
+  - 引擎软封顶用 `current_speed` 替代 `long_speed`, 修"前进+转向无限加速"bug
+  - 码表只取水平速度 (`linear_velocity` 去 Y 分量), 修"按住前进+转向数值虚高"bug
+- 【UI】HUD 操作提示精简到 ↑↓←→QWE 6 键 + 加署名小字 "本简易 DEMO 用于快速还原玩法原型 by.shilohuang"; 松前漂移触发瞬间弹"松前漂移"字 (青绿色)
+- 【工程】Tuner cfg 路径稳定化:
+  - 改用 `app_userdata/SimpleRacerLab/tune.cfg` 作为固定路径, 不再随 `config/name` 改变
+  - 启动时自动从历史目录 (`3d_car_sphere`/`StarDust Racers`/`SpeedRacer3C`/`简单飞车试验场`) 继承旧 cfg
+  - 启动时自动 load (不需要按"加载"按钮)
+
+### 2026-05-12 🎉 基础3C 第一版定型 + 项目重命名
+
+**【工程】** 项目改名 `3d_car_sphere` → **简单飞车试验场**
+- `project.godot` 的 `application/config/name` 更新
+- 默认场景从 `track.tscn` 切到 **`track_qinghuaci.tscn`** (小赛道调参更方便)
+- 日志路径随之变为 `%APPDATA%\Godot\app_userdata\简单飞车试验场\logs\godot*.log`
+
+**【Tuner】** 参数面板三级分类重构 + 隐藏废弃参数
+- 新增分类标记: `__page` (页签) / `__group` (大标题) / `__sub` (小标题) / `__hidden_start/end` (包裹隐藏参数)
+- 页签重新划分: 🚗基础移动 / 🎯漂移系统 / 💨喷射 / ✨视觉 / ⛰️地面物理 / 🧱撞墙物理 / ⛰️坡道 / 🛫空喷落地喷 + 原有的玉麒麟外观 / 漂移特效 / 镜头 / 喷射特效强度
+- 废弃参数集中到隐藏区 (不显示在 UI 但 cfg 加载兼容):
+  - `wall_reflect_tangent_keep` / `wall_slide_boost` / `slope_wall_bounce_absorb` / `slope_wall_shake`
+  - `landing_hard_stick` / `landing_stick_duration` / `landing_stick_min_fall_speed`
+  - `air_boost_intent_window` / `air_boost_overrides_window` / `landing_boost_stacks_with_air`
+- UI 增加 `_add_sub_header()` 小标题渲染
+
+**【工程】** 建立 `docs/` 项目文档体系
+- `docs/00_README.md` - 项目总入口 + 快速开始 + 目录导航
+- `docs/01_HIGH_VOLTAGE.md` - **基础3C 高压线** 声明, AI/开发者改 3C 前必须先问用户
+- `docs/02_CODE_INDEX.md` - 代码知识库索引 (每个文件/每个函数的职责)
+- `docs/CHANGELOG.md` - 本日志
+- (下一步) `docs/03_FEATURES.xlsx` - 3C 功能+参数总表
+
+**【架构】** 定型版核心 3C 模块总结:
+- 基础移动 (引擎/刹车/倒车/转向/摩擦)
+- 漂移 (入漂/退漂 + 松前 + 三喷 + 反打+减速 + 集气)
+- 喷射 (小喷/双喷/氮气/叠喷CWW/WCW + 漂移氮气 + 空喷立即触发 + 落地喷按键窗口)
+- 撞墙物理 (硬碰硬反弹 + 弹墙掉头 + 防吸住 + 弹墙推力)
+- 地面物理 (防弹+贴附 + 坡道补偿 + 上坡助力)
+- 视觉 (车身侧倾 + 漂移 yaw + 玉麒麟材质)
+- 镜头 (Y 稳定 + 前瞻焦点 + 喷射拉远)
+
+---
+
+
 
 ### 2026-05-12 14:30 【漂移】松前完整规则: 不能小喷 + 严格3键松前漂移 + 松前断漂不开窗口 + 进入小加速
 - 设计澄清(用户进一步定义):

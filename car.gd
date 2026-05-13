@@ -92,6 +92,16 @@ extends RigidBody3D
 @export var songqian_drift_kick_impulse: float = 14.0
 ## 松前漂移爆发期持续时间(秒). 复用 _drift_exit_boost_left/_mult 机制
 @export_range(0.1, 2.0, 0.05) var songqian_drift_boost_duration: float = 0.7
+## 【松前漂移 CD】两次松前漂移之间的最小冷却时间(秒) —— 全局生效, 不因起漂重置
+##   背景: 玩家发现"松油门→松前→踩前进键→松前漂移→再松→再踩"可以反复触发,
+##         每次都吃巨大冲量, 让车一直加速, 体验上是个 bug.
+##   规则: 触发松前漂移后开始计时, CD 期内再次"松前+踩油门"只把状态切回普通漂移、
+##         车头回正, **不给冲量、不重置爆发期**(玩家可以正常退出松前继续游戏, 但拿不到爆发).
+##   计时: 触发瞬间 _songqian_drift_cd_left = songqian_drift_cooldown,
+##         每物理帧 -= delta. **不**在 _start_drift 起漂时清零, CD 是全局冷却,
+##         不管玩家是连续漂移还是中间退出, 两次松前漂移之间都至少间隔此秒数.
+##   设 0 = 无 CD (回到旧行为, 可无限触发); 推荐 0.6~1.2 秒.
+@export_range(0.0, 5.0, 0.05) var songqian_drift_cooldown: float = 0.8
 ## 进入松前时的"小加速"冲量 (沿车体当前运动方向). 模拟"打滑滑行"的轻微势能保留
 ## 设 0 = 不加速(纯惯性); 推荐 3~6
 @export var songqian_enter_kick_impulse: float = 4.0
@@ -211,11 +221,71 @@ extends RigidBody3D
 ## 退漂转向冷却起始倍率(0~1): 0.5 = 退漂瞬间转向只剩 50%, 然后平滑回到 100%
 @export_range(0.0, 1.0, 0.01) var post_drift_steer_mult: float = 0.5
 
-## 漂移反打时车身侧倾衰减到的最低倍率: 1.0=反打不影响侧倾, 0.0=反打时车身完全回正
-## 推荐 0.0~0.2: 反打 → 类似正打入漂的逆播放, 慢慢把车身从倾斜回正
+## 漂移反打时车头 yaw 偏转衰减到的最低倍率: 1.0=反打不影响车头偏转, 0.0=反打时车头完全朝运动方向回正
+## 推荐 0.0~0.2: 反打 → 前轮回正 → 车头跟着朝运动方向慢慢转回来
+## 注: 不再控制车身侧倾, 侧倾在漂移期间始终保持完整(让漂移姿态视觉一致)
 @export_range(0.0, 1.0, 0.01) var drift_counter_lean_mult: float = 0.0
-## 反打时车身倾斜回正的过渡平滑系数(越大回正/恢复越快)
+## 反打时车头 yaw 回正的过渡平滑系数(越大回正/恢复越快) —— 这是"满速度"
+## 实际生效速度会被 drift_counter_response_time 调制 (前期慢、后期才达到此值)
 @export var drift_counter_lean_smooth: float = 4.0
+## 【反打响应时间】反打从"刚开始按"到"达到峰值回正速度"的累计时间(秒)
+##   背景: 真实物理 + 玩家手感, 反打不应该一按就最快, 而是有个加速过程
+##         (前轮从打满到反向打满需要时间, 配合"轮胎慢慢从滑动转为反向抓地"的感受)
+##   实现: 累计连续反打时长 _counter_steer_hold_time, 反打中断立即清零;
+##         实际平滑速度 = drift_counter_lean_smooth × smoothstep(0, response_time, hold_time)
+##         smoothstep 让起步柔和(不是线性), 玩家感觉"按下去先慢、转着转着突然就快了"
+##   设 0 = 不蓄势, 一按就满速 (回到旧线性指数平滑行为)
+##   推荐 0.3~0.8: 太短没"蓄势感", 太长玩家以为按键失灵
+@export_range(0.0, 2.0, 0.05) var drift_counter_response_time: float = 0.5
+
+# ==================== 反打 (真实赛车过弯反打, 2026-05-13 重构) ====================
+# 设计:
+#   真实赛车过弯反打 = "让漂角归零的工具"
+#   漂角 = 车头朝向 XZ 水平投影 与 速度向量 XZ 水平投影 之间的有符号夹角
+#   反打动作 = 玩家按住"与当前漂角符号相反"的方向键
+#   物理后果 = 车头朝速度向量方向缓慢对齐
+#     · 按到位 → 车头对准速度向量 → 松手 → 直线出弯(漂角归零)
+#     · 按过头 → 车头反向甩过去 (自然惩罚, 无需额外机制)
+#     · spam 来回反打 → 漂角在两边摆 (自然混乱, 无需额外机制)
+#
+# 实现:
+#   在 turn_rad 计算完、应用到 car_mesh.basis 之前, 插入"反打额外角速度"增量:
+#     slip_angle = yaw_diff(forward_xz, velocity_xz)   // 有符号漂角, 弧度
+#     if state==DRIFT and 玩家反打 (steer 与 slip_angle 同号, 即朝着"漂角方向"的反方向打):
+#         counter_ang_vel = sign(-slip_angle) × drift_counter_angular_speed × |steer| × ramp(response_time)
+#         turn_rad += counter_ang_vel × delta
+#         // 这让车头朝速度向量方向转
+#         // 不施加额外减速、不改 turn_mult、不开锁
+#
+# 新开关一开, 旧"减速/前向阻力/锁定"三条分支会被 _new_counter_active() 绕过,
+# 保证旧参数 cfg 值不生效 (高压线: @export 默认值和参数声明保留, 仅改代码行为).
+#
+## 【反打新机制】开关. true=启用真实反打(车头朝速度向量回正) + 绕过旧的减速/前向阻力/锁定三套旧机制
+##             false=关闭新机制, 回退到旧机制(减速 + 前向阻力 + 锁定, 由 cfg 控制)
+@export var drift_counter_enabled: bool = true
+## 反打时车头朝速度向量回正的角速度 (度/秒). 完全反打 (|steer|=1) 时的峰值角速度
+## 实际角速度 = 此值 × |steer| × ramp(response_time) × drift_intensity
+## 推荐 60~180: 60=缓慢回正(1 秒转 60°), 120=流畅(QQ飞车手感), 180=快速利索
+@export_range(10.0, 360.0, 5.0) var drift_counter_angular_speed_deg: float = 120.0
+## 反打"死区": 漂角绝对值小于此值 (度) 时不触发反打回正, 避免车头在 0 附近抖动
+## 推荐 2~8: 2 = 几乎无死区, 8 = 有明显"松弛区"
+@export_range(0.0, 20.0, 0.5) var drift_counter_deadzone_deg: float = 4.0
+
+# ---------------- 反打锁定 (反 exploit) ----------------
+# 设计动机:
+#   正打 turn_mult = 1.0, 反打 turn_mult ×= drift_counter_steer_mult (默认 0.35).
+#   两者数值差距大 → 玩家来回快速切换转向方向时, turn_mult 在 1.0 ↔ 0.35 之间瞬时跳变,
+#   镜头跟随出现跳变. 玩家发现: 只要单帧反打就能把视觉感受统一成"反打速度",
+#   实际上他只是在 spam 转向输入. 这就是 spam 来回反打 exploit.
+#
+# 解决方案 (用户最终规则):
+#   "漂移过程中一旦反打, 之后再正打转向速度也等同于反打速度, 直到退漂结束."
+#   一次性单向锁: _counter_steer_used_in_this_drift 在反打瞬间置 true,
+#   置 true 后所有正打也按反打速度走, 退漂(_start_drift/_end_drift) 才清回 false.
+#   这彻底封死 spam 反打获益: 反打一次就废掉这次漂移剩余阶段的爽快正打.
+#
+## 反打锁定开关 (true=反打过的漂移转向永远按反打速度直到退漂; false=旧行为, 实时切换)
+@export var drift_counter_lock_until_exit_enabled: bool = true
 
 # ---------------- 反打减速 (用户最新需求) ----------------
 # 设计动机:
@@ -233,6 +303,10 @@ extends RigidBody3D
 #   |steer| 越大减速越强, 给玩家"踩多深抓多深"的细腻手感
 #
 ## 反打减速开关
+## 【设计说明】这个机制本质是"反打=刹车", 体感偏硬. 真正实现"反打=车顺惯性甩出去"的是
+## 新参数 drift_counter_lat_grip_mult (反打时侧向抓地下降). 两个机制可以共存:
+##   想要"刹车感"反打: 这个开 + drift_counter_decel 调高
+##   想要"甩出感"反打: 这个关 (或调小 decel) + drift_counter_lat_grip_mult 调到 0.2~0.5
 @export var drift_counter_decel_enabled: bool = true
 ## 反打减速强度 (m/s² × mass, 即每秒减多少 m/s 速度. |steer|=1 时的全力减速)
 ## 数学: F = drift_counter_decel × |steer_input| × mass, 沿 -v_horiz 方向施加
@@ -241,6 +315,54 @@ extends RigidBody3D
 ## 反打减速最小输入阈值: |steer_input| ≥ 此值才触发减速
 ## 防止"轻微反打/方向键抖动"也减速, 推荐 0.2~0.4
 @export_range(0.0, 1.0, 0.01) var drift_counter_decel_min_steer: float = 0.25
+
+# ---------------- 反打+前进 额外向前摩擦 (用户最新需求) ----------------
+# 设计动机:
+#   单纯的"反打减速"只在玩家反打时减速. 但玩家边反打边按前进键时, 引擎推力会和反打减速对冲,
+#   导致反打体验变弱(车感觉还在加速). 真实物理上, "反打+踩油门" = 轮胎打滑+反向推力,
+#   应该有显著的"前进方向摩擦感", 让玩家明显感到"踩油门也无法继续加速".
+#
+# 实现:
+#   每帧检测: state==DRIFT + 反打 (steer 与 drift_dir 异号) + |steer| ≥ 阈值 + throttle_input > 0.05
+#   若满足:   沿 -forward 方向额外施加摩擦力, 大小 = drift_counter_throttle_friction × |steer| × throttle × mass
+#   位置:     在反打减速之后, 紧挨着, 不和引擎打架(只是把"前进方向"上的有效推力削弱)
+#
+# 数学:
+#   F = -forward × drift_counter_throttle_friction × |steer_input| × throttle_input × mass
+#   注: 不是 -v_horiz, 而是 -forward, 这样反打+前进时削弱的是"车头方向"上的推进
+#       (反打减速 drift_counter_decel 是沿 -v_horiz, 处理"侧向滑行"那部分)
+#
+## 反打+前进时额外向前摩擦开关
+@export var drift_counter_throttle_friction_enabled: bool = true
+## 反打+前进时额外向前摩擦强度 (m/s² × mass)
+## 数学: F = drift_counter_throttle_friction × |steer_input| × throttle_input × mass, 沿 -forward 方向施加
+## 推荐 4~12: 4 = 轻微对抗感; 8 = 明显"踩油门也加不上速"; 12+ = 反打瞬间抓死
+@export_range(0.0, 30.0, 0.1) var drift_counter_throttle_friction: float = 8.0
+
+# ---------------- 反打 = 侧向抓地下降 (用户最新规则: "反打=车身顺惯性甩出去") ----------------
+# 设计动机:
+#   旧实现把"反打"当成"刹车" (drift_counter_decel + drift_counter_throttle_friction),
+#   结果反打感觉像撞墙: 车被瞬间拽住, 完全不顺手.
+#   真实物理上, 反打 = 玩家把前轮扭到反方向 → 但车身惯性还在原方向 → 前轮抓不住 →
+#   车继续沿原惯性方向甩出去 (经典欠转向 understeer / 推头)
+#
+# 实现:
+#   每帧检测: state==DRIFT + 反打 (steer 与 drift_dir 异号) + |steer| ≥ 反打减速最小输入阈值
+#   若满足:   把 _apply_friction 里的 lat_k (侧向抓地系数) 乘以 drift_counter_lat_grip_mult
+#             这样侧向摩擦下降 → 车不再被拽回打方向键的方向 → 顺惯性甩出去
+#
+# 数学:
+#   反打强度 cs = clampf((|steer| - 阈值) / (1 - 阈值), 0, 1)  (阈值之上线性归一化)
+#   实际倍率 = lerpf(1.0, drift_counter_lat_grip_mult, cs)
+#   1.0 = 完全不缩 (不打/正打), drift_counter_lat_grip_mult = 完全反打
+#
+## 反打侧向抓地倍率 (反打时 lat_k *= 此值)
+## 0.0 = 完全无侧向抓地, 车100%顺惯性甩出 (太滑)
+## 0.3 = 强反打感, 车明显甩出去, 仍有一点抓地保留
+## 0.6 = 温和反打, 车微微甩
+## 1.0 = 关闭机制 (不影响侧向摩擦)
+## 推荐 0.2~0.5
+@export_range(0.0, 1.0, 0.01) var drift_counter_lat_grip_mult: float = 0.3
 
 # ---------------- 集气公式参数 ----------------
 @export_group("Charge Formula")
@@ -358,18 +480,105 @@ extends RigidBody3D
 ## 漂移撞墙后的入漂冷却(秒): 撞墙立即断漂(本次不给小喷), 此秒数内按 Q 无法重新漂移
 @export var wall_drift_lockout_time: float = 0.5
 
-# ---------------- 真实反弹物理 (v2 重写) ----------------
+# ---------------- 真实反弹物理 (v3 硬碰硬) ----------------
+# 设计目标 (用户最终需求): 撞墙要"硬碰硬", 像 QQ 飞车一样可以"撞墙过弯"
+#   1) 擦墙: 切向几乎全保留 (擦墙不掉速, 让玩家敢往墙上贴)
+#   2) 正撞: 弹得猛, 法线方向有强反弹 + 二次方缩放的 kickback (高速撞砰一下飞出去)
+#   3) 撞墙过弯: 沿墙面切向额外推力, 让车能贴着墙滑出去过弯 (QQ 飞车的核心手感)
+#   4) 撞完锁速宽松: cap = max(撞前, 撞后) × 倍率, 不会把 kickback 自己拍下去
 @export_group("Wall Reflect (Realistic)")
-## 真实反弹: 切向速度保留比例 (0=切向速度归零, 1=切向速度完全保留)
-## 推荐 0.85~0.95: 擦墙后基本不掉速, 像真实赛车
-@export_range(0.0, 1.0, 0.05) var wall_reflect_tangent_keep: float = 0.9
-## 真实反弹: 法线方向反弹系数 (恢复系数 e)
-## 0=完全吸收无弹回(粘墙), 1=完美弹性(撞回去和撞过来一样快), 推荐 0.3~0.5
-@export_range(0.0, 1.0, 0.05) var wall_reflect_normal_factor: float = 0.4
-## 真实反弹: 擦墙临界角(度) - 车头与墙面夹角小于此值视为擦墙, 不施加额外摩擦
-## 90°=正面撞(完全弹回), 0°=平行墙(完全擦过). 推荐 20°
+## 切向速度保留比例 - 撞越狠减得越多 (从 keep_max 到 keep_min 之间按撞击速度插值)
+## keep_max = 撞击速度极小时(擦墙)的切向保留比例 (推荐 0.85~0.95, 让擦墙基本不掉速)
+@export_range(0.0, 1.0, 0.05) var wall_reflect_tangent_keep_max: float = 0.9
+## keep_min = 撞击速度极大时(正撞)的切向保留比例 (推荐 0.2~0.4)
+@export_range(0.0, 1.0, 0.05) var wall_reflect_tangent_keep_min: float = 0.3
+## 切向减速插值参考速度 (m/s): 撞击 v_normal 达到此值时, tangent_keep 完全降到 keep_min
+## 推荐 15~25: 大约相当于 50~80km/h 正撞
+@export var wall_reflect_tangent_lerp_speed: float = 18.0
+## 兼容旧参数: wall_reflect_tangent_keep (单一保留比例)
+## 设 > 0 时优先生效, 跳过 keep_max/keep_min/lerp_speed 三件套. 默认 0 = 用新版插值
+@export_range(0.0, 1.0, 0.05) var wall_reflect_tangent_keep: float = 0.0
+## 法线方向反弹系数 (恢复系数 e)
+## 0=完全吸收无弹回(粘墙), 1=完美弹性, 推荐 0.55~0.75 (硬碰硬)
+@export_range(0.0, 1.0, 0.05) var wall_reflect_normal_factor: float = 0.65
+## 【硬碰硬 kickback V3】撞墙后沿法线方向额外推开的瞬时速度 (m/s)
+## V3 数学修复: 用 (into_wall/10)² 二次方缩放, 高速撞才"砰"一下被弹飞
+##   into_wall=5  → scale=0.25→clamp 0.5×    (低速擦墙: 推 0.5×kickback)
+##   into_wall=10 → scale=1.0×                 (中速撞墙: 推 1.0×kickback)
+##   into_wall=20 → scale=4.0×                 (高速撞墙: 推 4.0×kickback, 真的砰一下飞出去)
+##   into_wall=30 → scale=9→clamp 4.0×         (上限保护)
+## 推荐 5~15. 设 0 = 关闭
+@export var wall_hit_kickback: float = 8.0
+## 【QQ 飞车撞墙过弯】(已废弃 - 用户要的是"弹墙掉头"不是"滑墙")
+## 沿墙面切向方向的额外推力 (m/s). 保留参数兼容旧 cfg, 默认 0 = 关闭
+## 要\"弹墙掉头\"手感请用 wall_reflect_normal_factor + wall_hit_kickback + wall_turnaround_* 参数
+@export var wall_slide_boost: float = 0.0
+## 【弹墙掉头 — 切向擦除】正撞时沿墙面切向速度的衰减比例 (额外叠加在 tangent_keep 之上)
+## 目的: 正撞时玩家速度大部分应该被"弹回反方向", 而不是"被保留沿墙滑"
+## 数学: 正撞 (face_angle >= wall_grazing_angle_deg) 时,
+##       v_tangent 在标准 tangent_keep 之上再乘以 (1 - wall_straight_tangent_kill)
+## 1.0 = 正撞时切向完全清零 (车完全沿法线弹回, 最 QQ飞车)
+## 0.5 = 正撞时切向再减一半 (擦墙不受影响)
+## 0.0 = 关闭此机制 (旧行为)
+## 推荐 0.6~0.9
+@export_range(0.0, 1.0, 0.05) var wall_straight_tangent_kill: float = 0.7
+## 【弹墙掉头】墙判定法线 n.y 宽松阈值
+## 防止用户把 slope_wall_angle_deg 调太严(如 80°), 弧形墙的法线达不到阈值导致撞墙完全没反应
+## 数学: n.y < 0.7 ≈ 法线与 Y 轴夹角 > 45°. 推荐 0.6~0.75
+## 设 1.0 = 完全依赖 slope_wall_angle_deg 严格判定 (不推荐)
+@export_range(0.0, 1.0, 0.05) var wall_normal_y_threshold: float = 0.7
+## 【硬碰硬 锁速】撞墙后短暂窗口内, 整车水平速度上限被 clamp
+## V3 修复: cap = max(撞前速度, 撞后速度) × wall_hit_speed_cap_mult
+##   不再是"撞后速度 × 倍率", 防止 kickback 被自己的 cap 立刻拍下去
+## 1.0=锁死撞前速度上限, 1.05=允许微涨, 1.5=允许大涨 (kickback 飞得多远不限)
+@export_range(0.5, 2.0, 0.05) var wall_hit_speed_cap_mult: float = 1.5
+## 【硬碰硬 锁速】撞墙后锁速窗口持续时间 (秒). 设 0 = 关闭锁速
+## 推荐 0.2~0.5: 短了感觉不到, 长了会卡顿
+@export_range(0.0, 1.5, 0.05) var wall_hit_lock_duration: float = 0.3
+## 【硬碰硬 清 boost】撞墙瞬间是否取消正在进行的 boost (小喷/双喷/氮气)
+## true = 撞墙取消所有喷射, 让"撞击-减速"更明确
+## false = 撞墙不影响 boost (旧行为)
+@export var wall_hit_cancel_boost: bool = false
+
+## 【防吸住 V4】撞墙后, 撞墙物理触发的冷却时间 (秒). 该窗口内不再触发新的反弹
+## 解决: trimesh 撞墙时每物理帧都报告 contact + 每帧都触发反弹, 反弹瞬间被接触约束拽回 → "吸住"
+## 推荐 0.1~0.2: 太短防不住, 太长玩家二次撞墙没反应
+@export_range(0.0, 1.0, 0.01) var wall_hit_cooldown: float = 0.15
+
+## 【防吸住 V4】撞墙瞬间沿法线方向硬位移 (米), 让车物理上立即脱离接触面
+## 不依赖速度推开 (那种方式在每帧 contact 报告下会被立即拽回)
+## 推荐 0.05~0.15: 0.05=5cm 微推开足以脱离, 0.15=15cm 更安全
+## 设 0 = 关闭硬位移 (回到旧行为, 容易吸住)
+@export_range(0.0, 0.5, 0.01) var wall_unstick_offset: float = 0.08
+
+# ---------------- 弹墙掉头 (车身 yaw 跟随反弹方向旋转) ----------------
+# 概念: QQ 飞车撞墙时, 车不光物理上被弹开, **车头也跟着转向**被弹开的方向
+#       这样车撞完墙的下一刻不会车头朝墙, 而是车头朝场地中央, 玩家立刻能继续驾驶
+# 实现:
+#   撞墙瞬间 _integrate_forces 计算 new_v 后, 把该速度方向设为目标 yaw
+#   然后在 _update_visuals 里每帧把 car_mesh 的 yaw 插值到 _wall_turnaround_target_yaw
+#   wall_turnaround_duration 控制插值速度 (0=瞬间转, 0.3=0.3秒内转过去)
+## 弹墙掉头总开关
+@export_group("Wall Turnaround (弹墙掉头)")
+@export var wall_turnaround_enabled: bool = true
+## 弹墙掉头生效的最小撞击速度 (m/s): 低于此速度的轻碰不触发车身转向
+## 推荐 5~10: 5 = 轻碰也会掉头, 10 = 只有明显撞击才掉头
+@export var wall_turnaround_min_into: float = 7.0
+## 弹墙掉头持续时间 (秒): 车身 yaw 在此秒数内从"撞墙瞬间 yaw"平滑到"反弹方向 yaw"
+## 0 = 瞬间转过去 (硬切), 0.25~0.4 = QQ 飞车风格的平滑"被撞飞"转向
+## 推荐 0.3
+@export_range(0.0, 1.5, 0.01) var wall_turnaround_duration: float = 0.3
+## 弹墙掉头最大旋转角度 (度): 限制单次掉头的最大角度, 防止小角度擦墙也强制大转向
+## 正常撞墙入射角大 → 反弹方向差异大, 掉头角也大. 此参数是硬上限
+## 推荐 120~180: 180=允许 180° 原路返回, 120=最多转 120° (保留一些切向运动)
+@export_range(0.0, 180.0, 5.0) var wall_turnaround_max_deg: float = 150.0
+## 弹墙掉头最小旋转角度 (度): 小于此角度的掉头直接跳过(擦墙时避免抖头)
+## 推荐 15~30
+@export_range(0.0, 90.0, 1.0) var wall_turnaround_min_deg: float = 20.0
+## 擦墙临界角(度) - 车头与墙面切平面夹角小于此值视为擦墙, 不施加额外切向摩擦
+## 90°=正面撞(完全弹回), 0°=平行墙(完全擦过). 推荐 15~25°
 @export_range(0.0, 90.0, 1.0) var wall_grazing_angle_deg: float = 20.0
-## 真实反弹: 玻璃渣特效场景
+## 玻璃渣特效场景
 @export var glass_shatter_fx_scene: PackedScene = preload("res://GlassShatterFX.tscn")
 ## 玻璃渣触发的最小撞击速度 (m/s) - 低于此速度的轻碰不出特效
 @export var glass_shatter_min_speed: float = 3.0
@@ -451,6 +660,21 @@ extends RigidBody3D
 @export var landing_boost_power: float = 22.0
 ## 落地喷持续时间(秒)
 @export var landing_boost_time: float = 0.45
+
+# ---------------- 加速带 / 弹射器 (Speed Pad) ----------------
+# 由赛道上的 Area3D (SpeedPad.gd) 触发: 车穿过加速带白色方块时
+# 调用 car.apply_speed_pad_boost(kick, duration, pad_type) 给一次"增速 + 短暂持续推力"
+#
+# 【实现】两段式:
+#   1) 瞬时冲量: apply_central_impulse(forward × kick × mass), 让车速立刻 +kick m/s
+#   2) 持续推力: _speed_pad_boost_left > 0 时, _apply_engine_and_brake 每帧沿 forward
+#      施加一个衰减力, 让"加速感"在 duration 秒内逐渐消退而不是瞬间结束
+#
+# 【顶速放宽】加速带持续期内, effective_top 临时抬高到 top_speed_boosted (喷射极速),
+#   让加速带能把速度真正顶上去, 而不是被 max_speed 软封顶吃掉
+## 加速带持续推力基础值 (m/s² × mass). 在 duration 时间内沿 forward 持续施力
+## 数学: F = _speed_pad_boost_power × (t_left / duration) × mass  // 线性衰减
+@export var speed_pad_sustain_power: float = 18.0
 ## 落地喷力度曲线
 @export var landing_boost_curve: Curve
 ## 落地喷与空喷可以叠加: true=两者同时生效(力度叠加, 时长取较长); false=空喷优先, 落地喷被吞掉
@@ -531,6 +755,9 @@ signal air_boost_triggered(air_time: float)
 signal landing_boost_triggered(air_time: float)
 ## 松前状态变化: active=true 进入松前, false 离开松前 (供 HUD 显示"松前"提示)
 signal songqian_state_changed(active: bool)
+## 松前漂移触发: 在松前状态下踩回前进键瞬间发出, 供 HUD 弹"松前漂移"字
+##   payload: count_in_this_drift = 这次入漂以来累计第几次触发(从 1 开始)
+signal songqian_drift_triggered(count_in_this_drift: int)
 ## 三喷 (松前后退喷) 触发: 携带角度信息供 HUD 显示
 signal songqian_back_boost_triggered(yaw_deg: float)
 
@@ -636,8 +863,36 @@ var _drift_lockout_left: float = 0.0              # 撞墙断漂后的入漂冷�
 # 防止"按住 Q 撞墙→CD 走完→Q 还按着→自动续漂"
 var _require_release_q: bool = false
 var _post_drift_steer_cooldown_left: float = 0.0  # 退漂转向冷却剩余秒数
-# 反打时车身倾斜衰减系数, 平滑到 1.0(正打/不打) ~ drift_counter_lean_mult(完全反打)
+# 撞墙锁速窗口 (硬碰硬反弹)
+var _wall_hit_lock_left: float = 0.0    # 锁速窗口剩余秒数
+var _wall_hit_speed_cap: float = 0.0    # 锁速窗口期内的最大水平速度 (m/s)
+# 撞墙冷却 (防吸住): 撞墙触发反弹后此秒数内不再触发新的反弹
+var _wall_hit_cooldown_left: float = 0.0
+# 弹墙掉头 (车身 yaw 跟随反弹方向)
+var _wall_turnaround_left: float = 0.0       # 掉头动画剩余秒数
+var _wall_turnaround_total: float = 0.0      # 本次掉头总时长 (用于 normalize)
+var _wall_turnaround_start_yaw: float = 0.0  # 撞墙瞬间的车身 yaw (世界坐标, 弧度)
+var _wall_turnaround_target_yaw: float = 0.0 # 反弹后目标 yaw (弧度)
+# 反打时车头 yaw 偏转衰减系数, 平滑到 1.0(正打/不打=完整偏转) ~ drift_counter_lean_mult(完全反打=朝运动方向回正)
 var _counter_lean_factor: float = 1.0
+# 【反打物理层激活 flag】当真实反打条件满足且正在施加 yaw 回正增量时为 true
+# 每个物理帧开头 _read_input / _physics_process 会先清 false, 反打 yaw 段满足条件时置 true
+# 供其他物理力 (向心力等) 判定: 反打期间某些力需要暂停, 让车身保持漂移轨迹
+var _counter_steer_active_physics: bool = false
+# ---- 加速带 / 弹射器状态 ----
+# 剩余持续推力时间 (秒). > 0 时 _apply_engine_and_brake 会沿 forward 施加衰减推力
+var _speed_pad_boost_left: float = 0.0
+# 本次加速带的总时长 (用于线性衰减进度计算)
+var _speed_pad_boost_total: float = 0.0
+# 本次加速带的推力强度 (m/s², 全时段峰值)
+var _speed_pad_boost_power: float = 0.0
+# 【反打响应蓄势时长】连续反打累计秒数, 0=刚开始/未反打, response_time=已蓄满到峰值
+# 反打满足条件每帧 += delta, 反打中断立即清零, 用 smoothstep 计算实际回正速度倍率
+var _counter_steer_hold_time: float = 0.0
+# 【反打锁定 flag】本次漂移是否反打过
+# 入漂时清 false, 反打的瞬间置 true, 退漂时清 false
+# 一旦置 true, 后续即使玩家正打, turn_mult 也按反打速度走, 直到这次漂移结束
+var _counter_steer_used_in_this_drift: bool = false
 # 漂移打滑系数 (0=完全抓地, 1=完全打滑即摩擦归零)
 # 每帧由 _apply_friction 按 throttle_input 驱动, 在 DRIFT 状态下才有意义
 var _drift_slip_factor: float = 0.0
@@ -652,6 +907,11 @@ var _songqian_yaw_offset: float = 0.0
 var _is_in_songqian: bool = false
 # 松前小加速是否已经发放 (一次性, 进入松前时发一次)
 var _songqian_kick_given: bool = false
+# 【松前漂移 CD】剩余冷却时间(秒). >0 表示在 CD, 不能再次触发松前漂移.
+#   _trigger_songqian_drift 成功时 = songqian_drift_cooldown
+#   _start_drift 起漂时清 0 (新一轮漂移立即可用)
+#   每物理帧由 _physics_process 衰减
+var _songqian_drift_cd_left: float = 0.0
 
 # ---- 落地预输入缓冲 ----
 # 机制: 在空中按下 W 或 Q 的"最近一次 just_pressed" 会被记录.
@@ -687,8 +947,13 @@ func _ready() -> void:
 		return
 
 	contact_monitor = true
-	max_contacts_reported = 4
+	# trimesh 赛道撞击会同时报告多个三角面 contact, 4 个不够用
+	# 撞墙时常见 6~10 个接触点 (车球底+车球侧+车球前等), 调到 16 保证不丢
+	max_contacts_reported = 16
 	body_entered.connect(_on_body_entered)
+	# 撞墙物理参数自检 + 提示 (帮用户识别 cfg 是否调到了不利于撞墙手感的值)
+	# 用 timer 延迟 1.5s, 等 Tuner 的 cfg 完全加载完之后再打 log, 看到的才是真正运行时值
+	get_tree().create_timer(1.5).timeout.connect(_log_wall_physics_status)
 
 	# 记录 CarMesh 的初始位置和朝向(由 glb/tscn 设置, 代表美术摆好的出生点)
 	_initial_car_mesh_basis = car_mesh.global_transform.basis
@@ -841,6 +1106,16 @@ func _physics_process(delta: float) -> void:
 		_drift_exit_boost_left -= delta
 		if _drift_exit_boost_left < 0.0:
 			_drift_exit_boost_left = 0.0
+	# 松前漂移 CD 倒计时 (CD 期内, 再次"松前+踩油门"不给冲量, 只切回普通漂移)
+	if _songqian_drift_cd_left > 0.0:
+		_songqian_drift_cd_left -= delta
+		if _songqian_drift_cd_left < 0.0:
+			_songqian_drift_cd_left = 0.0
+	# 加速带持续推力倒计时
+	if _speed_pad_boost_left > 0.0:
+		_speed_pad_boost_left -= delta
+		if _speed_pad_boost_left < 0.0:
+			_speed_pad_boost_left = 0.0
 	# 退漂转向冷却倒计时
 	if _post_drift_steer_cooldown_left > 0.0:
 		_post_drift_steer_cooldown_left -= delta
@@ -1185,6 +1460,9 @@ func _apply_engine_and_brake(_delta: float) -> void:
 
 	# 当前生效的极速: 喷射时用 boosted, 否则用 max_speed
 	var effective_top: float = top_speed_boosted if is_boosting else max_speed
+	# 加速带持续期内, 顶速也放宽到喷射极速, 让加速带能把速度顶上去
+	if _speed_pad_boost_left > 0.0:
+		effective_top = maxf(effective_top, top_speed_boosted)
 	# 叠喷突破: 当前段处于突破状态时, 极速被临时拔高
 	if is_boosting and _stack_current_breakthrough and _stack_breakthrough_count > 0:
 		effective_top *= pow(stack_breakthrough_top_mult, _stack_breakthrough_count)
@@ -1243,7 +1521,11 @@ func _apply_engine_and_brake(_delta: float) -> void:
 			# 倍率从 drift_exit_boost_mult 线性衰减到 1.0
 			exit_boost_k = lerpf(1.0, drift_exit_boost_mult, t_ratio)
 		# 软封顶: 仅当尚未达到极速时施加推力(超过则交给摩擦自然减速)
-		if long_speed < effective_top:
+		# 【bug 修复 2026-05-13】之前用 long_speed (= v 投影到车头方向):
+		#   玩家边按前进边转向时, 车头持续旋转, long_speed = current_speed × cos(夹角) 永远 < current_speed,
+		#   于是 long_speed 永远 < effective_top, 引擎一直加力, current_speed 突破极速无限增长.
+		# 改用 current_speed (实际水平速度大小), 让"速度大小"真正受 effective_top 约束.
+		if current_speed < effective_top:
 			apply_central_force(thrust_dir * engine_force_max * engine_k * throttle_input * eff_mult * exit_boost_k * mass)
 	elif throttle_input < -0.01:
 		# 后退/刹车混合逻辑:
@@ -1303,6 +1585,20 @@ func _apply_engine_and_brake(_delta: float) -> void:
 				vel_dir = vel_dir.normalized()
 		apply_central_force(vel_dir * boost_power * mass)
 
+	# ============ 加速带 / 弹射器 持续推力 ============
+	# 两段式加速带: apply_speed_pad_boost() 启动时给了瞬时冲量, 这里再给短暂持续推力
+	# 数学: F = speed_pad_boost_power × (t_left / t_total) × mass × forward  // 线性衰减
+	# 条件: 持续时间未到 + 速度未超过顶速 + 沿车头方向
+	if _speed_pad_boost_left > 0.0 and current_speed < effective_top:
+		var pad_dir: Vector3 = forward
+		# 坡面切向对齐 (防止上坡时往天上推)
+		if slope_align_thrust:
+			var pad_on_slope: Vector3 = pad_dir - ground_n * pad_dir.dot(ground_n)
+			if pad_on_slope.length() > 0.001:
+				pad_dir = pad_on_slope.normalized()
+		var pad_progress: float = clampf(_speed_pad_boost_left / maxf(_speed_pad_boost_total, 0.01), 0.0, 1.0)
+		apply_central_force(pad_dir * _speed_pad_boost_power * pad_progress * mass)
+
 	# ============ 空喷滞空感 (下压力) ============
 	# 只在空喷进行中 + 离地时施加一个向下的力
 	# 数学: F = (0, -air_boost_downforce, 0) * mass    (相当于额外重力)
@@ -1311,13 +1607,11 @@ func _apply_engine_and_brake(_delta: float) -> void:
 	if is_boosting and boost_type == "air" and _is_airborne and air_boost_downforce > 0.0:
 		apply_central_force(Vector3(0.0, -air_boost_downforce, 0.0) * mass)
 
-	# ============ 反打减速 ============
-	# 漂移中反打 (steer_input 与 drift_dir 异号) → 沿水平速度反向施加减速力
-	# 模拟"轮胎反向抓地"的真实物理: 方向猛拉到反方向时车身会被拽住一下
-	# 数学: F = -v_horiz_normalized × drift_counter_decel × |steer_input| × mass
-	# 条件: state==DRIFT, drift_dir!=0, steer 与 drift_dir 异号, |steer|≥阈值, 速度>1m/s 避免低速抖
-	# 注: 不和引擎/刹车/喷射打架, 是单独的"抓地刹车"力, 想要的就是它能叠加在喷射推力上
-	if drift_counter_decel_enabled and state == State.DRIFT and drift_dir != 0.0 and current_speed > 1.0:
+	# ============ 反打减速 (旧机制, drift_counter_enabled=true 时绕过) ============
+	# 【2026-05-13 重构说明】此段是旧"反打=刹车"机制, 新真实反打机制不需要它.
+	# 仅当 drift_counter_enabled=false 时才生效, 此时 cfg 里的旧参数 (decel/throttle_friction) 继续工作.
+	# 高压线: @export 默认值与参数声明全部保留, 仅通过绕过让新开关默认下不生效.
+	if not drift_counter_enabled and drift_counter_decel_enabled and state == State.DRIFT and drift_dir != 0.0 and current_speed > 1.0:
 		var steer_sign: float = signf(steer_input)
 		if steer_sign != 0.0 and steer_sign != signf(drift_dir):
 			var steer_mag: float = absf(steer_input)
@@ -1325,6 +1619,10 @@ func _apply_engine_and_brake(_delta: float) -> void:
 				var brake_dir: Vector3 = -v_horiz.normalized()
 				var brake_force: float = drift_counter_decel * steer_mag * mass
 				apply_central_force(brake_dir * brake_force)
+				# ============ 反打+前进 额外向前摩擦 (旧机制, 同上绕过) ============
+				if drift_counter_throttle_friction_enabled and throttle_input > 0.05:
+					var fric_force: float = drift_counter_throttle_friction * steer_mag * throttle_input * mass
+					apply_central_force(-forward * fric_force)
 
 
 # ============================================================
@@ -1390,6 +1688,20 @@ func _apply_friction(delta: float) -> void:
 		long_k *= inertia_mult
 		lat_k *= inertia_mult
 
+	# -------- 【反打 = 侧向抓地下降 (旧机制, drift_counter_enabled=true 时绕过)】--------
+	# 【2026-05-13 重构说明】此段是"反打=车顺惯性甩出"的旧侧向抓地下降机制.
+	# 新真实反打机制用"朝速度向量 yaw 回正"替代它, 更符合真实赛车物理.
+	# 仅当 drift_counter_enabled=false 时才生效, 此时旧 cfg 值 (lat_grip_mult) 继续工作.
+	if not drift_counter_enabled and state == State.DRIFT and drift_dir != 0.0 and drift_counter_lat_grip_mult < 1.0:
+		var s_sign: float = signf(steer_input)
+		if s_sign != 0.0 and s_sign != signf(drift_dir):
+			var s_mag: float = absf(steer_input)
+			if s_mag >= drift_counter_decel_min_steer:
+				var thr: float = drift_counter_decel_min_steer
+				var cs: float = clampf((s_mag - thr) / maxf(1.0 - thr, 0.001), 0.0, 1.0)
+				var grip_mult: float = lerpf(1.0, drift_counter_lat_grip_mult, cs)
+				lat_k *= grip_mult
+
 	# 沿各自速度分量反方向施加冲量
 	var long_impulse: Vector3 = -forward * v_long * long_k * delta
 	var lat_impulse: Vector3  = -right   * v_lat  * lat_k  * delta
@@ -1404,8 +1716,15 @@ func _apply_friction(delta: float) -> void:
 	#   · (forward - v_dir): 指向"车头希望速度去哪", 即"向心差向量", 沿这个方向施力
 	#   · speed: 乘速度让高速弯拉力更大 (QQ飞车高速弯"吸"的感觉)
 	# 效果: 速度方向会慢慢被拉向车头方向 → 漂移弧线更"粘", 向心感强
+	# 【2026-05-13 QQ飞车反打】反打期间暂停向心力:
+	#   反打时车头在朝 v 转, 如果向心力还在把 v 朝 forward 拽, 两个力互相追逐,
+	#   玩家感觉"整个人被甩出去". 暂停向心力后, v 保持原方向, 玩家看到
+	#   "身体继续沿漂移轨迹滑 + 车头先回正"的经典 QQ 飞车反打画面.
+	#   反打判定: drift_counter_enabled + 真反打条件 (steer 与 slip 异号, 跨死区)
+	#   使用已有的 _counter_steer_active_physics 标志 (由物理层反打 yaw 增量段维护)
 	# 使用已有的局部变量: v (水平惯性), total_speed (水平速度大小)
-	if state == State.DRIFT and drift_centripetal_pull > 0.0 and drift_intensity > 0.01 and total_speed > 1.0:
+	if state == State.DRIFT and drift_centripetal_pull > 0.0 and drift_intensity > 0.01 and total_speed > 1.0 \
+			and not _counter_steer_active_physics:
 		var v_dir_xz: Vector3 = v / total_speed   # v 已是 XZ 平面(y=0), 归一化
 		var fwd_xz: Vector3 = forward
 		fwd_xz.y = 0.0
@@ -1672,14 +1991,17 @@ func _update_visuals(delta: float) -> void:
 		var k: float = lerpf(1.0, post_drift_steer_mult, t_ratio)
 		turn_mult *= k
 	# 反打缩减: 漂移中玩家往"漂移方向的反向"打方向时, 角速度受限制
-	#   drift_dir 为漂移方向(-1=左漂, 1=右漂), steer_input 为玩家输入(正=左打, 负=右打)
-	#   反打判定: drift_dir 与 steer_input 同号 → 同向(拉角度, 正常); 异号 → 反打(缩减)
-	#   注: steer_input 正=左打对应正向漂移方向(drift_dir=1 右漂? 不对, 应再验证方向约定)
-	# 按 _try_start_drift: drift_dir = signf(steer_input) → 漂移方向 = 当时的打向
-	# 所以"反打" = steer_input 与 drift_dir 异号
-	if state == State.DRIFT and drift_dir != 0.0 and drift_intensity > 0.01:
-		if signf(steer_input) != 0.0 and signf(steer_input) != signf(drift_dir):
-			# 反打: 按漂移强度插值应用缩减(drift_intensity=1 时完全缩减)
+	#   【2026-05-13 重构: drift_counter_enabled=true 时整段绕过】
+	#   新机制见下方 "真实反打 yaw 回正" 段, 用漂角驱动的角速度增量替代 turn_mult 缩减.
+	#   保留此段兼容 drift_counter_enabled=false 的旧行为 (带 cfg 里的旧参数一起工作).
+	if not drift_counter_enabled and state == State.DRIFT and drift_dir != 0.0 and drift_intensity > 0.01:
+		var is_counter_now: bool = (signf(steer_input) != 0.0 and signf(steer_input) != signf(drift_dir))
+		if is_counter_now:
+			if not _counter_steer_used_in_this_drift:
+				print("[Car] 反打锁定触发: 本次漂移剩余时间内正打速度=反打速度")
+			_counter_steer_used_in_this_drift = true
+		var use_counter_speed: bool = is_counter_now or (drift_counter_lock_until_exit_enabled and _counter_steer_used_in_this_drift)
+		if use_counter_speed:
 			var counter_mult: float = lerpf(1.0, drift_counter_steer_mult, drift_intensity)
 			turn_mult *= counter_mult
 	# 【倒车方向反转】真实赛车里, 倒车时"按左 = 车屁股往左移动 = 车头朝右转"
@@ -1703,6 +2025,61 @@ func _update_visuals(delta: float) -> void:
 	# 落地瞬间恢复正常转向
 	if _is_airborne:
 		turn_rad = 0.0
+
+	# ============ 【真实反打 yaw 回正】 ============
+	# 设计: 漂角 slip_angle = 车头朝向 与 速度向量 的有符号水平夹角
+	#       玩家反打 = 按住"与 slip_angle 符号相反"的方向 (即朝"漂角归零"方向打)
+	#       物理后果 = 车头朝速度向量方向缓慢对齐, 角速度随 |steer| 线性 + response_time 蓄势
+	# 数学:
+	#   slip_angle_rad = atan2((v × f).y, v · f)  // f=forward_xz, v=velocity_xz 单位向量
+	#                  = 正值表示车头在速度向量的右侧, 负值在左侧
+	#                  (与 signf(drift_dir) 对齐: drift_dir=1 入弯向右 → 漂角往往 > 0)
+	#   真反打 = signf(steer_input) ≠ 0 且 signf(steer_input) == -signf(slip_angle_rad)
+	#        玩家按的方向恰好是"把漂角往 0 拉"的方向
+	#   ramp = smoothstep(0, response_time, _counter_steer_hold_time)  // 蓄势曲线
+	#   counter_yaw_rate = drift_counter_angular_speed × |steer| × ramp × drift_intensity
+	#   turn_rad += counter_yaw_rate × delta × signf(-slip_angle_rad)
+	#        即车头朝 slip_angle 归零方向转. slip 为 + → turn_rad 朝 - 增
+	# 死区: |slip_angle| < deadzone 时不加增量, 避免 0 附近抖动
+	# 旧注: _counter_steer_hold_time 已经在 _update_visuals 里被反打条件累积, 这里直接用
+	# 【QQ飞车反打】当 is_real_counter = true 时置 _counter_steer_active_physics = true,
+	#   _integrate_forces 里的向心力段会检查此 flag, 反打期间暂停向心力,
+	#   让速度向量保持原方向 → 车身继续沿漂移轨迹滑 + 车头先回正 = QQ飞车风格
+	_counter_steer_active_physics = false   # 每帧先清, 下面满足条件再置 true
+	if drift_counter_enabled and state == State.DRIFT and drift_dir != 0.0 and not _is_airborne \
+			and drift_intensity > 0.01 and absf(steer_input) > 0.05:
+		# 计算当前漂角 (水平面)
+		var f_xz: Vector3 = -car_mesh.global_transform.basis.z
+		f_xz.y = 0.0
+		var v_xz: Vector3 = linear_velocity
+		v_xz.y = 0.0
+		if f_xz.length() > 0.001 and v_xz.length() > 1.0:
+			f_xz = f_xz.normalized()
+			var v_dir: Vector3 = v_xz.normalized()
+			var dot_fv: float = clampf(f_xz.dot(v_dir), -1.0, 1.0)
+			var cross_y_fv: float = v_dir.cross(f_xz).y   # 车头在 v 的左(>0)还是右(<0)
+			var slip_angle_rad: float = acos(dot_fv) * signf(cross_y_fv)
+			var slip_angle_deg: float = rad_to_deg(slip_angle_rad)
+			# 玩家意图: steer_input 正=左打(按下 ←), 负=右打(按下 →)
+			# 真反打条件: 玩家打的方向与漂角方向相反
+			#   slip > 0 (车头在 v 右侧) → 玩家按左 (steer > 0) 才算反打
+			#   slip < 0 (车头在 v 左侧) → 玩家按右 (steer < 0) 才算反打
+			# 即: signf(steer_input) != signf(slip_angle_rad) 且两者都非 0
+			var is_real_counter: bool = (signf(steer_input) != 0.0 and signf(slip_angle_rad) != 0.0
+				and signf(steer_input) != signf(slip_angle_rad)
+				and absf(slip_angle_deg) >= drift_counter_deadzone_deg)
+			if is_real_counter:
+				_counter_steer_active_physics = true   # 通知 _integrate_forces 的向心力段: 反打期间暂停向心力
+				# 响应时间蓄势 (复用 _counter_steer_hold_time, 已在 _update_visuals 维护)
+				var counter_ramp: float = 1.0
+				if drift_counter_response_time > 0.001:
+					counter_ramp = smoothstep(0.0, drift_counter_response_time, _counter_steer_hold_time)
+				# 最终回正角速度 (rad/s). 方向: slip 正(车头右侧) → turn_rad 取负(往左转回正)
+				# 注: 不乘 drift_intensity, 让 angular_speed_deg 就是真实上限
+				#     否则深漂时回正瞬间满速太激进, 玩家感觉车头"猛扯"
+				var counter_yaw_rate: float = deg_to_rad(drift_counter_angular_speed_deg) \
+					* absf(steer_input) * counter_ramp
+				turn_rad += counter_yaw_rate * delta * (-signf(slip_angle_rad))
 
 	var new_basis: Basis = car_mesh.global_transform.basis.rotated(
 		car_mesh.global_transform.basis.y, turn_rad
@@ -1793,28 +2170,79 @@ func _update_visuals(delta: float) -> void:
 	# 漂移时间归一化(用 drift_head_yaw_duration_ref 作为曲线完成点)
 	var drift_t_norm: float = clampf(drift_elapsed / maxf(drift_head_yaw_duration_ref, 0.1), 0.0, 1.0)
 	var tilt_time_k: float = _sample_curve_safe(drift_body_tilt_curve, drift_t_norm, 1.0)
-	# ---------- 反打回正: 反打时车身侧倾衰减, 类似"正打入漂的逆播放" ----------
+	# ---------- 反打回正系数 (供下方"车头 yaw 回正"使用) ----------
+	# 【2026-05-13 重构】反打的视觉本质是"车头朝反方向缓慢转回来", **不是**"车身从倾斜回正"。
+	#   旧版本错误地把这个系数应用在 lean_drift 上(车身侧倾衰减), 玩家反打时看到车身慢慢站起来,
+	#   但车头还是横甩状态, 体感不对. 真实物理上反打 = 前轮回正 → 车头跟着转回来 →
+	#   配合"反打=车顺惯性甩出去"的 lat_grip 下降, 玩家反打时看到的是
+	#   "车头朝反方向转回来, 但车身仍然在惯性方向甩出"的复合效果.
+	# 【2026-05-13 二次改进 - 响应时间】反打不是一按就最快, 而是有"蓄势加速"过程:
+	#   累计连续反打时长 _counter_steer_hold_time, smoothstep 调制实际回正速度
+	#   - hold_time=0 (刚反打) → 倍率 0 → 几乎不动
+	#   - hold_time=response_time (已按住够久) → 倍率 1 → 满速回正
+	#   - 反打中断 → hold_time 立即清 0, 下次重新蓄势
 	# 目标系数:
-	#   · 不打 / 正打(steer_input 与 drift_dir 同号或为 0) → 1.0 (保持完整侧倾)
-	#   · 完全反打(steer_input 与 drift_dir 异号) → drift_counter_lean_mult (一般 0.0, 即完全回正)
-	# 用 |steer_input| 作为反打强度, 平滑到目标
+	#   · 不打 / 正打(steer_input 与 drift_dir 同号或为 0) → 1.0 (保持完整车头偏转)
+	#   · 完全反打(steer_input 与 drift_dir 异号) → drift_counter_lean_mult (一般 0.0~0.2,
+	#     即车头偏转衰减到原值的 0~20%, 等价"车头朝运动方向转回")
 	var counter_target: float = 1.0
-	if state == State.DRIFT and drift_dir != 0.0 and signf(steer_input) != 0.0 and signf(steer_input) != signf(drift_dir):
-		var cs: float = clampf(absf(steer_input), 0.0, 1.0)
-		counter_target = lerpf(1.0, drift_counter_lean_mult, cs)
-	_counter_lean_factor = lerpf(_counter_lean_factor, counter_target, clampf(drift_counter_lean_smooth * delta, 0.0, 1.0))
-	# 平滑过渡: drift_intensity(0~1) × 时间曲线 × 配置角度 × 漂移方向 × 反打回正系数
+	var is_counter_steering: bool = false
+	if state == State.DRIFT and drift_dir != 0.0 and signf(steer_input) != 0.0:
+		# 【2026-05-13 重构】蓄势触发条件改成"真实反打" (与 slip_angle 异号) 当新开关开时
+		# 与物理层 turn_rad 增量段保持一致, 避免蓄势条件和物理生效条件不对齐
+		if drift_counter_enabled:
+			# 基于漂角判定
+			var f_xz2: Vector3 = -car_mesh.global_transform.basis.z
+			f_xz2.y = 0.0
+			var v_xz2: Vector3 = linear_velocity
+			v_xz2.y = 0.0
+			if f_xz2.length() > 0.001 and v_xz2.length() > 1.0:
+				f_xz2 = f_xz2.normalized()
+				var v_dir2: Vector3 = v_xz2.normalized()
+				var cy2: float = v_dir2.cross(f_xz2).y
+				var dfv2: float = clampf(f_xz2.dot(v_dir2), -1.0, 1.0)
+				var slip_rad: float = acos(dfv2) * signf(cy2)
+				# 真实反打: steer 与 slip 异号, 且 |slip| >= 死区
+				if signf(steer_input) != signf(slip_rad) and signf(slip_rad) != 0.0 \
+						and rad_to_deg(absf(slip_rad)) >= drift_counter_deadzone_deg:
+					var cs_rc: float = clampf(absf(steer_input), 0.0, 1.0)
+					counter_target = lerpf(1.0, drift_counter_lean_mult, cs_rc)
+					is_counter_steering = true
+		else:
+			# 旧判定: steer 与 drift_dir 异号 (兼容旧行为)
+			if signf(steer_input) != signf(drift_dir):
+				var cs_old: float = clampf(absf(steer_input), 0.0, 1.0)
+				counter_target = lerpf(1.0, drift_counter_lean_mult, cs_old)
+				is_counter_steering = true
+	# 累计反打蓄势时长: 反打中 += delta; 不反打/松手 立即清 0
+	if is_counter_steering:
+		_counter_steer_hold_time += delta
+	else:
+		_counter_steer_hold_time = 0.0
+
+	# smoothstep 加速曲线: 起步柔和, 越按越快达到满速
+	# 数学: ramp = smoothstep(0, response_time, hold_time)
+	#   · response_time=0 → 直接给 1.0 (旧行为, 无蓄势)
+	#   · hold_time=0 → ramp=0 → 实际平滑速度=0 → 车头几乎不转
+	#   · hold_time=response_time → ramp=1 → 实际平滑速度=lean_smooth (满速)
+	var ramp: float = 1.0
+	if drift_counter_response_time > 0.001:
+		ramp = smoothstep(0.0, drift_counter_response_time, _counter_steer_hold_time)
+	var effective_smooth: float = drift_counter_lean_smooth * ramp
+	_counter_lean_factor = lerpf(_counter_lean_factor, counter_target, clampf(effective_smooth * delta, 0.0, 1.0))
+	# 车身侧倾: 不再受反打影响, 漂移时永远保持完整侧倾(让"漂移姿态"视觉始终对得上)
 	# 漂移氮气时, 侧倾视觉额外加成(更夸张的过弯姿态)
 	var tilt_nitro_mult: float = drift_nitro_body_tilt_mult if _is_drift_nitro() else 1.0
-	lean_drift = deg_to_rad(drift_body_tilt) * drift_dir * drift_intensity * tilt_time_k * tilt_nitro_mult * _counter_lean_factor
+	lean_drift = deg_to_rad(drift_body_tilt) * drift_dir * drift_intensity * tilt_time_k * tilt_nitro_mult
 	body_mesh.rotation.z = lerp(body_mesh.rotation.z, lean_base + lean_drift, 6.0 * delta)
 
 	# ============ V2 车头 yaw (漂移时偏转 + 时间曲线动态晃动) ============
 	# 非漂移的"拧头"基础量
 	var base_head_yaw: float = deg_to_rad(head_yaw_deg) * steer_input
 	# 漂移偏转量: 基础 × drift_intensity × 时间曲线(可以让车头在漂移中段更甩)
+	# 【反打回正】最后乘上 _counter_lean_factor: 反打越猛, 车头越朝运动方向转回来
 	var yaw_time_k: float = _sample_curve_safe(drift_head_yaw_curve, drift_t_norm, 1.0)
-	var drift_yaw_rad: float = deg_to_rad(drift_yaw_offset) * drift_dir * drift_intensity * yaw_time_k
+	var drift_yaw_rad: float = deg_to_rad(drift_yaw_offset) * drift_dir * drift_intensity * yaw_time_k * _counter_lean_factor
 	# 两者插值合并(drift_intensity=0 时全用 base, =1 时全用 drift)
 	var target_head_yaw: float = lerpf(base_head_yaw, drift_yaw_rad, drift_intensity)
 	body_mesh.rotation.y = lerp(body_mesh.rotation.y, target_head_yaw, 6.0 * delta)
@@ -1827,6 +2255,49 @@ func _update_visuals(delta: float) -> void:
 		var n: Vector3 = ground_ray.get_collision_normal()
 		var xform: Transform3D = _align_with_y(car_mesh.global_transform, n)
 		car_mesh.global_transform = car_mesh.global_transform.interpolate_with(xform, 10.0 * delta)
+
+	# ============ 弹墙掉头 (车身 yaw 跟着反弹方向旋转) ============
+	# 撞墙瞬间 _integrate_forces 记录了 _wall_turnaround_start_yaw / _target_yaw / _total / _left
+	# 每帧按剩余时间计算进度 t ∈ [0,1], 把 car_mesh 的 yaw 插值过去
+	# 数学:
+	#   t = 1.0 - (_wall_turnaround_left / _wall_turnaround_total)  (0=开始, 1=结束)
+	#   用 smoothstep 让前期转得快后期转得慢, 更像"被撞飞一下"的手感
+	#   target_yaw_now = lerp(start_yaw, target_yaw, smoothstep(t))
+	# 完成后清 _wall_turnaround_left = 0, 玩家恢复正常控制
+	if _wall_turnaround_left > 0.0:
+		_wall_turnaround_left -= delta
+		if _wall_turnaround_left < 0.0:
+			_wall_turnaround_left = 0.0
+		var t: float = 1.0 - (_wall_turnaround_left / maxf(_wall_turnaround_total, 0.001))
+		t = clampf(t, 0.0, 1.0)
+		# smoothstep: 3t² - 2t³, 前快后慢
+		var smooth_t: float = t * t * (3.0 - 2.0 * t)
+		# 用最短路径插值 (归一化 diff 到 [-π, π])
+		var yaw_diff_total: float = _wall_turnaround_target_yaw - _wall_turnaround_start_yaw
+		while yaw_diff_total > PI:
+			yaw_diff_total -= TAU
+		while yaw_diff_total < -PI:
+			yaw_diff_total += TAU
+		var current_yaw_target: float = _wall_turnaround_start_yaw + yaw_diff_total * smooth_t
+		# 直接设 car_mesh 的世界 yaw (绕 Y 轴)
+		# 保留 car_mesh 当前 pitch/roll, 只改 yaw
+		# 做法: 以当前 basis 的 Y 轴为旋转轴, 算增量 yaw 应用
+		var fwd_now: Vector3 = -car_mesh.global_transform.basis.z
+		fwd_now.y = 0.0
+		var current_yaw_now: float = 0.0
+		if fwd_now.length() > 0.001:
+			fwd_now = fwd_now.normalized()
+			current_yaw_now = atan2(-fwd_now.x, -fwd_now.z)
+		var yaw_step: float = current_yaw_target - current_yaw_now
+		while yaw_step > PI:
+			yaw_step -= TAU
+		while yaw_step < -PI:
+			yaw_step += TAU
+		if absf(yaw_step) > 0.0001:
+			car_mesh.global_transform.basis = car_mesh.global_transform.basis.rotated(
+				Vector3.UP, yaw_step
+			)
+			car_mesh.global_transform = car_mesh.global_transform.orthonormalized()
 
 	prev_yaw = car_mesh.rotation.y
 
@@ -1851,6 +2322,18 @@ func _align_with_y(xform: Transform3D, new_y: Vector3) -> Transform3D:
 func _trigger_songqian_drift() -> void:
 	if state != State.DRIFT:
 		return
+	# 【松前漂移 CD】CD 期内再次"松前+踩油门"只把状态切回普通漂移, 车头回正,
+	#   不给冲量、不重置爆发期, 防止"反复抖动油门" exploit.
+	#   注: 即使 CD 命中也要把 _is_in_songqian 清掉, 不然玩家会卡在"松前但踩着油门"的诡异状态.
+	if _songqian_drift_cd_left > 0.0:
+		_songqian_yaw_offset = 0.0
+		if _is_in_songqian:
+			_is_in_songqian = false
+			emit_signal("songqian_state_changed", false)
+		_songqian_kick_given = false
+		print("[Car] 松前漂移在 CD 中 (%.2fs 剩余), 本次踩油门不给冲量(只退出松前)"
+			% _songqian_drift_cd_left)
+		return
 	# 1) 沿车头方向施加一次性大冲量
 	var fwd_kick: Vector3 = -car_mesh.global_transform.basis.z
 	fwd_kick.y = 0.0
@@ -1867,8 +2350,11 @@ func _trigger_songqian_drift() -> void:
 		# 通知 HUD: 松前漂移触发瞬间立刻关掉"松前"提示, 显示回"漂移"
 		emit_signal("songqian_state_changed", false)
 	_songqian_kick_given = false
-	print("[Car] 松前漂移触发! 巨大冲量=%.1f 爆发=%.2fs (drift 不中断, 朝车头入弯方向冲)"
-		% [songqian_drift_kick_impulse, songqian_drift_boost_duration])
+	# 4) 开启 CD + 发信号给 HUD 弹"松前漂移"字
+	_songqian_drift_cd_left = songqian_drift_cooldown
+	emit_signal("songqian_drift_triggered", 1)  # 1 = 仅作"已触发"的 ack, HUD 不再显示次数
+	print("[Car] 松前漂移触发! 巨大冲量=%.1f 爆发=%.2fs CD=%.2fs"
+		% [songqian_drift_kick_impulse, songqian_drift_boost_duration, songqian_drift_cooldown])
 
 
 # ============================================================
@@ -1965,6 +2451,8 @@ func _try_start_drift() -> bool:
 	_low_speed_grace_left = 0.0
 	_grace_start_angle = 0.0
 	_auto_exit_t = 0.0
+	# 反打锁定 flag 起漂清 0: 每轮新漂移都从"未反打"状态开始, 正打重新爽快
+	_counter_steer_used_in_this_drift = false
 	# 入漂瞬间: 触发推力爆发期, 产生"重新起步"的冲劲
 	_drift_exit_boost_left = drift_exit_boost_duration
 	# 记录起漂时车头方向, 供松前 yaw 偏移上限做参考
@@ -1994,6 +2482,10 @@ func _try_start_drift() -> bool:
 	_prev_forward_xz = Vector2(_fwd0.x, _fwd0.z).normalized()
 	_drift_charge_level = "none"
 	emit_signal("drift_charge_level_changed", "none")
+	# 【松前漂移 CD】注: CD 不在起漂时清零, 它是"全局冷却"——
+	#   不管玩家是连漂还是中间停了一段, 两次松前漂移之间始终保持
+	#   songqian_drift_cooldown 秒的间隔, 防止"狂抖油门连续吃冲量"。
+	#   CD 衰减只在 _physics_process 里随时间发生。
 	emit_signal("drift_started", drift_mode)
 	if drift_fx_node and drift_fx_node.has_method("set_drifting"):
 		drift_fx_node.set_drifting(true)
@@ -2029,8 +2521,12 @@ func _end_drift(_success_boost: bool = false, manual: bool = false, failed: bool
 	_drift_exit_boost_left = drift_exit_boost_duration
 	# 退漂转向冷却: 防止转向"瞬间变敏感"
 	_post_drift_steer_cooldown_left = post_drift_steer_cooldown
-	# 重置反打回正系数, 下次入漂从满 1.0 开始(完整侧倾)
+	# 重置反打回正系数, 下次入漂从满 1.0 开始(完整车头偏转)
 	_counter_lean_factor = 1.0
+	# 清反打蓄势时长, 下次入漂的反打需要重新蓄势加速
+	_counter_steer_hold_time = 0.0
+	# 清反打锁定 flag, 下次入漂从"未反打"状态开始(正打重新爽快)
+	_counter_steer_used_in_this_drift = false
 	# 延迟结算氮气: 漂移期间积累的格子, 退漂时一次性发放
 	if _pending_nitro > 0:
 		nitro_stock = mini(nitro_stock + _pending_nitro, max_nitro_stock)
@@ -2580,6 +3076,29 @@ func _update_stack_chain_timeout() -> void:
 		_stack_current_breakthrough = false
 
 
+# ============================================================
+#  加速带 / 弹射器 对外接口 (被 SpeedPad.gd 的 Area3D 调用)
+# ============================================================
+func apply_speed_pad_boost(speed_kick: float, duration: float, pad_type: String = "addspeed") -> void:
+	# 1) 瞬时冲量: 沿当前车头水平方向施加 speed_kick m/s 的增速
+	#    用 apply_central_impulse(dir × m/s × mass), 因为 impulse 单位是 kg·m/s
+	var fwd: Vector3 = -car_mesh.global_transform.basis.z if car_mesh else -global_transform.basis.z
+	fwd.y = 0.0
+	if fwd.length() < 0.001:
+		return
+	fwd = fwd.normalized()
+	apply_central_impulse(fwd * speed_kick * mass)
+	# 2) 启动持续推力段
+	if duration > 0.0 and speed_pad_sustain_power > 0.0:
+		_speed_pad_boost_left = duration
+		_speed_pad_boost_total = duration
+		_speed_pad_boost_power = speed_pad_sustain_power
+	# 3) 视觉/音效钩子 (可选): 摇屏
+	emit_signal("camera_shake_requested", 0.25, 0.2)
+	print("[Car] 加速带触发 (type=%s) kick=%.1f m/s dur=%.2f sustain=%.1f"
+		% [pad_type, speed_kick, duration, speed_pad_sustain_power])
+
+
 func _start_boost(type_name: String, power: float, duration: float) -> void:
 	# ---- 双喷蓄能资格管理 ----
 	# 规则: 只有"玩家主动做出的有意义 W 操作"允许蓄双喷:
@@ -2593,12 +3112,16 @@ func _start_boost(type_name: String, power: float, duration: float) -> void:
 	if type_name == "air" or type_name == "landing" or type_name == "nitro" or type_name == "double":
 		_can_charge_double = false
 
-	# 【特殊路径】氮气进行中按 W 释放小喷/双喷: 不打断氮气, 延续之
+	# 【特殊路径】氮气进行中按 W 释放小喷类: 不打断氮气, 延续之
+	# 【2026-05-13 修订】"小喷类"包括 mini / double / air / landing
+	#   原版只允许 mini/double 延续, 导致空喷/落地喷直接打断氮气, 不符合"它们也是 W 系小喷"的语义.
+	#   现在: 氮气进行中, 触发任意 W 段都延续氮气 + 走叠喷判定 (cw/cww 等也对 air/landing 生效).
 	#   · 不替换 boost_type(氮气视觉/逻辑保留)
 	#   · 但走叠喷判定(突破计数+1, combo 弹字)
-	#   · 把小喷/双喷的 duration 加到 boost_time_left, 让氮气延长
-	#   · 推力可以被衰减后的小喷/双喷推力增强(取较大者保持氮气感)
-	if is_boosting and boost_type == "nitro" and (type_name == "mini" or type_name == "double"):
+	#   · 把小喷/双喷/空喷/落地喷的 duration 加到 boost_time_left, 让氮气延长
+	#   · 推力可以被衰减后的本段推力增强(取较大者保持氮气感)
+	if is_boosting and boost_type == "nitro" and \
+			(type_name == "mini" or type_name == "double" or type_name == "air" or type_name == "landing"):
 		_check_and_apply_stack_boost(type_name)
 		var dp_extend: float = _stack_decayed_power(power)
 		boost_time_left += duration
@@ -2609,6 +3132,7 @@ func _start_boost(type_name: String, power: float, duration: float) -> void:
 		_emit_nitro_variant()
 		# ★ 氮气延续出 mini 段(CW 的第二段 W) → 允许继续蓄第三段 double (形成 CWW)
 		# 氮气延续出 double 段本身就是最终段, 蓄能无意义, 不重新置 true (默认已在上面清零)
+		# air / landing 是被动触发的 W 段, 玩家"无意识做出", 不开放蓄双喷资格 (保持原设计意图)
 		if type_name == "mini":
 			_can_charge_double = true
 			print("[Boost] 氮气延续出 mini: 允许蓄第三段双喷 (CW → CWW 路径)")
@@ -2733,135 +3257,344 @@ func _get_boost_curve(type_name: String) -> Curve:
 
 
 # ============================================================
-#  撞墙
+#  撞墙物理状态自检 (启动时输出当前关键参数, 帮用户判断 cfg 是否合理)
+# ============================================================
+func _log_wall_physics_status() -> void:
+	print("[Car] === 撞墙物理参数自检 ===")
+	print("[Car]   slope_as_wall_enabled = %s" % str(slope_as_wall_enabled))
+	print("[Car]   slope_wall_angle_deg = %.1f° %s" % [slope_wall_angle_deg,
+		"⚠️ 太严, 弧形墙可能识别不到, 推荐 50~65°" if slope_wall_angle_deg > 70 else "✓"])
+	print("[Car]   wall_normal_y_threshold = %.2f (n.y < 此值强制视为墙)" % wall_normal_y_threshold)
+	print("[Car]   wall_reflect_normal_factor = %.2f %s" % [wall_reflect_normal_factor,
+		"⚠️ 太低, 反弹很弱, 推荐 0.55~0.75" if wall_reflect_normal_factor < 0.4 else "✓"])
+	print("[Car]   wall_straight_tangent_kill = %.2f (正撞切向擦除, 0=关闭) %s" % [wall_straight_tangent_kill,
+		"⚠️ 0=正撞也保留切向, 不易掉头, 推荐 0.6~0.9" if wall_straight_tangent_kill < 0.3 else "✓"])
+	print("[Car]   wall_hit_kickback = %.1f m/s %s" % [wall_hit_kickback,
+		"⚠️ 0=关闭" if wall_hit_kickback < 0.5 else "✓ (高速撞墙会×4 倍放大)"])
+	print("[Car]   wall_slide_boost = %.1f m/s %s" % [wall_slide_boost,
+		"✓ (已关闭, 不再滑墙)" if wall_slide_boost < 0.5 else "⚠️ >0 会让车沿墙滑, 弹墙掉头请设 0"])
+	print("[Car]   wall_hit_speed_cap_mult = %.2f %s" % [wall_hit_speed_cap_mult,
+		"⚠️ <1.3 会拍掉 kickback, 推荐 1.3~1.6" if wall_hit_speed_cap_mult < 1.3 and wall_hit_lock_duration > 0.01 else "✓"])
+	print("[Car]   wall_hit_lock_duration = %.2fs" % wall_hit_lock_duration)
+	print("[Car]   wall_hit_cancel_boost = %s %s" % [str(wall_hit_cancel_boost),
+		"⚠️ true 会打断撞墙过弯时的喷射" if wall_hit_cancel_boost else "✓"])
+	print("[Car] === 防吸住参数 (V4) ===")
+	print("[Car]   wall_hit_cooldown = %.2fs %s" % [wall_hit_cooldown,
+		"⚠️ 0=关闭, 撞墙易吸住" if wall_hit_cooldown < 0.01 else "✓"])
+	print("[Car]   wall_unstick_offset = %.2fm %s" % [wall_unstick_offset,
+		"⚠️ 0=关闭硬位移, 易吸住" if wall_unstick_offset < 0.001 else "✓"])
+	print("[Car] === 弹墙掉头参数 ===")
+	print("[Car]   wall_turnaround_enabled = %s" % str(wall_turnaround_enabled))
+	print("[Car]   wall_turnaround_min_into = %.1f m/s" % wall_turnaround_min_into)
+	print("[Car]   wall_turnaround_duration = %.2fs (0=瞬间, 0.3=QQ飞车风)" % wall_turnaround_duration)
+	print("[Car]   wall_turnaround_max_deg = %.0f° (最大掉头角度上限)" % wall_turnaround_max_deg)
+	print("[Car]   wall_turnaround_min_deg = %.0f° (小于此角度不掉头)" % wall_turnaround_min_deg)
+
+
+# ============================================================
+#  撞墙 - 旧的扣气逻辑
+#  注: 真实反弹物理在 _integrate_forces 里 (能拿到精确的 contact normal/position)
+#       这里只做"扣气"和"震屏"的兜底, 不再做反弹物理
 # ============================================================
 func _on_body_entered(_body: Node) -> void:
 	if state != State.DRIFT:
 		return
-	# 【修复】只有真正撞墙才扣气: 用"速度大小骤降"判定
-	# 保存上一帧速度, 本帧碰撞后若速度损失 > 阈值才算撞墙
-	var cur_speed: float = linear_velocity.length()
-	var speed_loss: float = _last_frame_speed - cur_speed
-	if speed_loss < wall_crash_speed_loss:
-		return   # 轻微擦碰, 不算
-	var lost: float = drift_accum_charge * (1.0 - crash_charge_penalty)
-	charge = maxf(charge - lost, 0.0)
-	drift_accum_charge *= crash_charge_penalty
-	emit_signal("wall_crashed", lost)
-	if wall_crash_shake > 0.0:
-		emit_signal("camera_shake_requested", wall_crash_shake, 0.25)
+	# 注: speed_loss 判定不可靠 (与 _integrate_forces 同帧但顺序难控)
+	#     真正的撞墙判定走 _integrate_forces 路径, 那里能拿到 contact normal
+	#     这里仅作为"漂移中接触任何东西" 的兜底监听, 真正扣气逻辑已移到 _integrate_forces
+	pass
 
 
 # ============================================================
-#  斜面墙 + 接触法线检测 (在物理回调中才能拿到有效 contact)
+#  墙/地面区分 + 真实反弹物理 (硬碰硬 + QQ 飞车撞墙过弯)
+#  在物理回调 _integrate_forces 里跑, 这里才能拿到有效 contact data
 # ============================================================
+# 墙/地面判定逻辑 (V2 - 双重 fallback):
+#   1) 优先看接触体 group: 在 "wall" 组 → 强制视为墙 ; "ground" 组 → 强制视为地面
+#   2) 没 group 时双重判定 (任一满足就算墙):
+#      a) n.angle_to(Vector3.UP) >= slope_wall_angle_deg (严格, 用户可调)
+#      b) n.y < wall_normal_y_threshold (宽松兜底, 默认 0.7)
+#         例: n.y=0.5 → angle≈60°, 即使用户调到 80°也能识别
+#         (防止用户把 angle_deg 调太严, 弧形墙的法线达不到阈值, 撞墙完全没反应)
+#
+# 这样既兼容当前赛道(整个 trimesh 一个 collider 没分组), 也支持未来分场景标签
 func _integrate_forces(state_phys: PhysicsDirectBodyState3D) -> void:
+	# 撞墙锁速窗口: 每帧 clamp 水平速度上限
+	# 【V3 修复】cap 现在用"撞前速度 × 倍率", 不是"撞后速度", 这样 kickback 能突破 cap
+	# 防止刚撞完又被引擎/喷射推力推回墙的尴尬循环
+	if _wall_hit_lock_left > 0.0:
+		_wall_hit_lock_left -= state_phys.step
+		if _wall_hit_lock_left < 0.0:
+			_wall_hit_lock_left = 0.0
+		var v_now: Vector3 = state_phys.linear_velocity
+		var vh: Vector3 = v_now
+		vh.y = 0.0
+		var sp: float = vh.length()
+		if sp > _wall_hit_speed_cap and _wall_hit_speed_cap > 0.001:
+			# 等比缩放水平分量到 cap, Y 保留 (重力不被锁)
+			var scale: float = _wall_hit_speed_cap / sp
+			v_now.x *= scale
+			v_now.z *= scale
+			state_phys.linear_velocity = v_now
+
 	if not slope_as_wall_enabled:
 		return
+	# 撞墙冷却倒计时 (防吸住): 上一次反弹后此秒数内不再触发新反弹
+	# 让车有时间真正离开墙, 防止每物理帧都触发反弹被接触约束拽回的"吸住"循环
+	if _wall_hit_cooldown_left > 0.0:
+		_wall_hit_cooldown_left -= state_phys.step
+		if _wall_hit_cooldown_left < 0.0:
+			_wall_hit_cooldown_left = 0.0
+		# 冷却中, 跳过本帧的反弹处理 (但仍要让车走正常物理, 不然就真吸住了)
+		return
+
 	var contact_count: int = state_phys.get_contact_count()
 	if contact_count <= 0:
 		return
 	var wall_threshold_rad: float = deg_to_rad(slope_wall_angle_deg)
-	var absorbed: bool = false
 	# 用车头方向判断撞击点是车的哪一侧
 	var car_forward: Vector3 = -car_mesh.global_transform.basis.z if car_mesh else Vector3.FORWARD
 	var car_right: Vector3 = car_mesh.global_transform.basis.x if car_mesh else Vector3.RIGHT
+
+	# ============================================================
+	# 【V4 防吸住】聚合所有 wall contact, 用平均法线 + 平均接触点 触发一次反弹
+	# 旧版: 每帧只处理第一个 wall contact, 但 trimesh 边角处法线方向不一致
+	#       (n.y=0.5/0.7/0.3 同时存在), 单点法线乱跳导致反弹方向不稳定
+	# 新版: 把所有"被识别为墙"的 contact 法线归一化后求和再归一化 (得到主导墙面方向)
+	#       用这个稳定法线触发一次反弹, 物理上更稳定
+	# ============================================================
+	var wall_normal_sum: Vector3 = Vector3.ZERO
+	var wall_pos_sum: Vector3 = Vector3.ZERO
+	var wall_n_count: int = 0
+	var has_wall_group_contact: bool = false   # 是否有带"wall"标签的精确 contact
+	var contact_count_all: int = contact_count
+
 	for i in range(contact_count):
 		var n: Vector3 = state_phys.get_contact_local_normal(i)
-		# n 与 Y 轴夹角: 0°=纯地面, 90°=纯墙
-		var angle_to_up: float = n.angle_to(Vector3.UP)
-		if angle_to_up >= wall_threshold_rad and not absorbed:
-			# ============================================================
-			#  真实反弹物理 (基于 撞击点 + 撞击速度 + 撞击角度)
-			# ============================================================
-			# 1) 收集数据
-			# get_contact_local_position 返回接触点相对刚体局部坐标
-			# 转世界坐标需要乘上刚体 transform
-			var local_contact: Vector3 = state_phys.get_contact_local_position(i)
-			var contact_pos: Vector3 = state_phys.transform * local_contact
-			var v: Vector3 = state_phys.linear_velocity
-			var into_wall: float = -v.dot(n)  # 朝墙冲的速率(正值=朝墙冲)
-			if into_wall <= 0.5:
-				continue  # 速度太小不触发, 跳过
-			
-			# 2) 速度分解: 法线分量 + 切线分量
-			#    v_normal = (v · n) × n  (沿法线的投影分量, 朝向墙)
-			#    v_tangent = v - v_normal  (沿墙面的切向)
-			var v_normal: Vector3 = n * v.dot(n)
-			var v_tangent: Vector3 = v - v_normal
-			
-			# 3) 撞击角度: 车头与墙面切平面的夹角
-			#    撞击角=车头方向与墙面法线之间的偏移
-			#    n.dot(car_forward) > 0 → 车头朝墙(撞墙) ; <0 → 车尾朝墙
-			#    incidence_dot ∈ [0, 1]: 0=擦墙(平行), 1=正撞(垂直)
-			var fwd_for_angle: Vector3 = car_forward
-			fwd_for_angle.y = 0.0
-			if fwd_for_angle.length() > 0.001:
-				fwd_for_angle = fwd_for_angle.normalized()
-			var incidence_dot: float = absf(fwd_for_angle.dot(-n))   # |cos(angle)|, 1=正面 0=平行
-			var incidence_angle_rad: float = acos(clampf(incidence_dot, 0.0, 1.0))
-			var incidence_angle_deg: float = rad_to_deg(incidence_angle_rad)
-			# 与"擦墙临界"对比: 入射角 < grazing → 擦墙(切向几乎全保留, 法线弱反弹)
-			#                  入射角 > grazing → 真实弹回
-			# 注: 这里 "入射角" 我们定义成"远离擦墙的角度" — 0=正面撞墙, 90=平行墙
-			# 因为 incidence_dot=1 是正面撞, 对应 acos=0 角度. 所以 90-incidence_angle_deg = 与切平面夹角
-			# 用 "面对墙面" 的角度更直观: face_angle = 90 - incidence_angle_deg (0=擦, 90=正面)
-			var face_angle_deg: float = 90.0 - incidence_angle_deg
-			var is_grazing: bool = face_angle_deg < wall_grazing_angle_deg
-			
-			# 4) 反弹速度计算:
-			#    new_v = v_tangent × tangent_keep - v_normal × normal_factor
-			#    切向保留: 擦墙时几乎全保留(0.9~0.95), 正面撞时切向小本来就少
-			#    法线反弹: -v_normal × normal_factor (反方向 = 弹回墙外)
-			var tangent_keep: float = wall_reflect_tangent_keep
-			if not is_grazing:
-				# 非擦墙(正撞或大角度): 切向也损失一点(墙摩擦)
-				tangent_keep *= 0.85
-			var new_v: Vector3 = v_tangent * tangent_keep + n * (into_wall * wall_reflect_normal_factor)
-			# 沿法线方向额外推开一点点防止贴墙
-			new_v += n * slope_wall_push_back
-			
-			# 5) 弹墙推力 (尾/侧撞), 保留原逻辑作为"快速擦墙加速"奖励
-			#    判定: 撞击点位于车后或侧面 (用法线投影)
-			if wall_bounce_boost_enabled:
-				var rear_factor: float = n.dot(car_forward)   # 越大说明墙在车后(尾撞)
-				var side_factor: float = absf(n.dot(car_right))   # 越大说明侧撞
-				var is_rear_or_side: bool = rear_factor > wall_bounce_rear_threshold or side_factor > wall_bounce_side_threshold
-				if is_rear_or_side and into_wall > wall_bounce_min_into_speed:
-					new_v += car_forward * wall_bounce_forward_speed
-					emit_signal("boost_triggered", "wall_bounce")
-					print("[Car] 弹墙推力! rear=%.2f side=%.2f face_angle=%.0f° boost=%.1f"
-						% [rear_factor, side_factor, face_angle_deg, wall_bounce_forward_speed])
-			
-			state_phys.linear_velocity = new_v
-			absorbed = true
-			
-			# 6) 撞墙特效: 玻璃渣 (在接触点位置一次性播放)
-			if into_wall >= glass_shatter_min_speed and glass_shatter_fx_scene:
-				_spawn_glass_shatter(contact_pos, n, into_wall)
-			
-			# 7) 漂移中撞墙 → 立即失败断漂: 本次不给小喷, 并进入入漂冷却
-			if state == State.DRIFT:
-				_end_drift(false, false, true)
-				if wall_drift_lockout_time > 0.0:
-					_drift_lockout_left = wall_drift_lockout_time
-				_drift_input_grace_left = 0.0
-				_require_release_q = true
-				print("[Car] 撞墙断漂! face_angle=%.0f° into=%.1fm/s CD=%.2fs"
-					% [face_angle_deg, into_wall, wall_drift_lockout_time])
-			# 8) 蓄能阶段视为"准漂移", 撞墙也要打断
-			if _double_charge_t > 0.0 or _double_armed:
-				_double_charge_t = 0.0
-				_double_armed = false
-				_double_armed_left = 0.0
-				emit_signal("double_charge_progress", 0.0)
-				emit_signal("double_charge_lost")
-				_set_double_charge_fx(false)
-				print("[Car] 撞墙打断双喷蓄能/资格")
-			# 9) 震屏: 强度按撞击速度缩放
-			if slope_wall_shake > 0.0:
-				var shake_amp: float = slope_wall_shake * clampf(into_wall / 15.0, 0.3, 2.0)
-				emit_signal("camera_shake_requested", shake_amp, 0.25)
+		# 墙/地面判定 V3 (优先级: wall group > ground group > collision_layer & 4 > 法线 fallback):
+		var is_wall: bool = false
+		var contact_body: Node = state_phys.get_contact_collider_object(i)
+		if contact_body and contact_body is Node:
+			if (contact_body as Node).is_in_group("wall"):
+				is_wall = true
+				has_wall_group_contact = true
+			elif (contact_body as Node).is_in_group("ground"):
+				is_wall = false   # 强制地面
+			else:
+				# 没标签 → 检查 collision_layer 是否带 wall layer (4)
+				if contact_body.has_method("get_collision_layer"):
+					var layer: int = contact_body.collision_layer
+					if (layer & 4) != 0:
+						is_wall = true
+						has_wall_group_contact = true
+				if not is_wall:
+					# 还是没识别 → 法线角度兜底
+					is_wall = (n.angle_to(Vector3.UP) >= wall_threshold_rad) or (n.y < wall_normal_y_threshold)
+		else:
+			is_wall = (n.angle_to(Vector3.UP) >= wall_threshold_rad) or (n.y < wall_normal_y_threshold)
+
+		if is_wall:
+			# 优先级机制: 如果出现了带 wall group 的 contact, 后续就只聚合 wall group 的 contact
+			# (避免同时把 trimesh fallback 法线和 wall body 法线混在一起平均)
+			if has_wall_group_contact:
+				var is_this_group: bool = false
+				if contact_body and contact_body is Node:
+					if (contact_body as Node).is_in_group("wall"):
+						is_this_group = true
+					elif contact_body.has_method("get_collision_layer") and (contact_body.collision_layer & 4) != 0:
+						is_this_group = true
+				if not is_this_group:
+					continue   # 已有 group contact, 这个 fallback 法线不参与平均
+
+			wall_normal_sum += n.normalized()
+			wall_pos_sum += state_phys.get_contact_local_position(i)
+			wall_n_count += 1
+
+	# 没有任何 wall contact → 不是撞墙, 直接返回
+	if wall_n_count == 0:
+		return
+
+	# 聚合: 平均法线 (归一化后求和再归一化, 得到"主导墙面方向")
+	var n: Vector3 = wall_normal_sum.normalized()
+	var local_contact: Vector3 = wall_pos_sum / float(wall_n_count)
+	var contact_pos: Vector3 = state_phys.transform * local_contact
+
+	# 撞前速度
+	var v: Vector3 = state_phys.linear_velocity
+	var into_wall: float = -v.dot(n)
+	if into_wall <= 0.5:
+		return   # 速度太小不触发
+
+	# ============================================================
+	#  硬碰硬反弹物理 (基于聚合的稳定法线)
+	# ============================================================
+	# 速度分解
+	var v_normal: Vector3 = n * v.dot(n)
+	var v_tangent: Vector3 = v - v_normal
+
+	# 撞击角度
+	var fwd_for_angle: Vector3 = car_forward
+	fwd_for_angle.y = 0.0
+	if fwd_for_angle.length() > 0.001:
+		fwd_for_angle = fwd_for_angle.normalized()
+	var incidence_dot: float = absf(fwd_for_angle.dot(-n))
+	var incidence_angle_rad: float = acos(clampf(incidence_dot, 0.0, 1.0))
+	var incidence_angle_deg: float = rad_to_deg(incidence_angle_rad)
+	var face_angle_deg: float = 90.0 - incidence_angle_deg
+	var is_grazing: bool = face_angle_deg < wall_grazing_angle_deg
+
+	# 切向减速插值
+	var tangent_keep: float
+	if wall_reflect_tangent_keep > 0.001:
+		tangent_keep = wall_reflect_tangent_keep
+		if not is_grazing:
+			tangent_keep *= 0.85
+	else:
+		var t: float = clampf(into_wall / maxf(wall_reflect_tangent_lerp_speed, 0.1), 0.0, 1.0)
+		tangent_keep = lerpf(wall_reflect_tangent_keep_max, wall_reflect_tangent_keep_min, t)
+		if is_grazing:
+			tangent_keep = minf(tangent_keep + 0.15, 1.0)
+
+	# 弹墙掉头切向擦除
+	if not is_grazing and wall_straight_tangent_kill > 0.001:
+		tangent_keep *= (1.0 - wall_straight_tangent_kill)
+
+	# 反弹速度 = 切向衰减 + 法线弹回
+	var new_v: Vector3 = v_tangent * tangent_keep + n * (into_wall * wall_reflect_normal_factor)
+
+	# Kickback 沿法线 (二次方缩放)
+	if wall_hit_kickback > 0.0:
+		var k_ratio: float = into_wall / 10.0
+		var kickback_scale: float = clampf(k_ratio * k_ratio, 0.5, 4.0)
+		new_v += n * (wall_hit_kickback * kickback_scale)
+
+	# 已废弃: wall_slide_boost (默认 0)
+	if wall_slide_boost > 0.001 and v_tangent.length() > 1.0:
+		var slide_dir: Vector3 = v_tangent.normalized()
+		var slide_scale: float = clampf(v_tangent.length() / 20.0, 0.3, 2.0)
+		new_v += slide_dir * (wall_slide_boost * slide_scale)
+
+	# 沿法线推开防贴墙
+	new_v += n * slope_wall_push_back
+
+	# 弹墙推力 (尾/侧撞)
+	if wall_bounce_boost_enabled:
+		var rear_factor: float = n.dot(car_forward)
+		var side_factor: float = absf(n.dot(car_right))
+		var is_rear_or_side: bool = rear_factor > wall_bounce_rear_threshold or side_factor > wall_bounce_side_threshold
+		if is_rear_or_side and into_wall > wall_bounce_min_into_speed:
+			new_v += car_forward * wall_bounce_forward_speed
+			emit_signal("boost_triggered", "wall_bounce")
+			print("[Car] 弹墙推力! rear=%.2f side=%.2f face_angle=%.0f° boost=%.1f"
+				% [rear_factor, side_factor, face_angle_deg, wall_bounce_forward_speed])
+
+	state_phys.linear_velocity = new_v
+
+	# ============================================================
+	# 【V4 防吸住】撞墙瞬间硬位移 - 把车沿法线方向硬推开几厘米
+	# 不依赖速度推开 (那种方式被接触约束立即拽回), 直接改 transform.origin
+	# 这是脱离 trimesh 接触面的"暴力但有效"的方式
+	# ============================================================
+	if wall_unstick_offset > 0.001:
+		var xform: Transform3D = state_phys.transform
+		xform.origin += n * wall_unstick_offset
+		state_phys.transform = xform
+
+	# 启动撞墙冷却 (防吸住): 后续 wall_hit_cooldown 秒不再触发新反弹
+	_wall_hit_cooldown_left = wall_hit_cooldown
+
+	# 启动锁速窗口 (防止撞完又被引擎/喷射推回墙, cap=max(撞前,撞后)*mult)
+	if wall_hit_lock_duration > 0.0:
+		var pre_v: Vector3 = v
+		pre_v.y = 0.0
+		var new_vh_cap: Vector3 = new_v
+		new_vh_cap.y = 0.0
+		var pre_speed: float = pre_v.length()
+		var post_speed: float = new_vh_cap.length()
+		_wall_hit_speed_cap = maxf(pre_speed, post_speed) * wall_hit_speed_cap_mult
+		_wall_hit_lock_left = wall_hit_lock_duration
+
+	# 弹墙掉头: 记录车身 yaw 旋转目标
+	if wall_turnaround_enabled and into_wall >= wall_turnaround_min_into and car_mesh:
+		var new_v_horiz: Vector3 = new_v
+		new_v_horiz.y = 0.0
+		if new_v_horiz.length() > 1.0:
+			var target_dir: Vector3 = new_v_horiz.normalized()
+			var target_yaw: float = atan2(-target_dir.x, -target_dir.z)
+			var fwd: Vector3 = -car_mesh.global_transform.basis.z
+			fwd.y = 0.0
+			var current_yaw: float = 0.0
+			if fwd.length() > 0.001:
+				fwd = fwd.normalized()
+				current_yaw = atan2(-fwd.x, -fwd.z)
+			var yaw_diff: float = target_yaw - current_yaw
+			while yaw_diff > PI:
+				yaw_diff -= TAU
+			while yaw_diff < -PI:
+				yaw_diff += TAU
+			var yaw_diff_deg: float = rad_to_deg(absf(yaw_diff))
+			if yaw_diff_deg >= wall_turnaround_min_deg:
+				if yaw_diff_deg > wall_turnaround_max_deg:
+					var clamped_diff: float = deg_to_rad(wall_turnaround_max_deg) * signf(yaw_diff)
+					target_yaw = current_yaw + clamped_diff
+				_wall_turnaround_start_yaw = current_yaw
+				_wall_turnaround_target_yaw = target_yaw
+				_wall_turnaround_total = maxf(wall_turnaround_duration, 0.001)
+				_wall_turnaround_left = _wall_turnaround_total
+
+	# 撞墙取消 boost (可选)
+	if wall_hit_cancel_boost and is_boosting:
+		is_boosting = false
+		boost_time_left = 0.0
+		_drift_exit_boost_left = 0.0
+		print("[Car] 撞墙取消 boost (type=%s)" % boost_type)
+
+	# 玻璃渣特效
+	if into_wall >= glass_shatter_min_speed and glass_shatter_fx_scene:
+		_spawn_glass_shatter(contact_pos, n, into_wall)
+
+	# 漂移中撞墙 → 立即失败断漂
+	if state == State.DRIFT:
+		_end_drift(false, false, true)
+		if wall_drift_lockout_time > 0.0:
+			_drift_lockout_left = wall_drift_lockout_time
+		_drift_input_grace_left = 0.0
+		_require_release_q = true
+		var lost: float = drift_accum_charge * (1.0 - crash_charge_penalty)
+		charge = maxf(charge - lost, 0.0)
+		drift_accum_charge *= crash_charge_penalty
+		emit_signal("wall_crashed", lost)
+		print("[Car] 撞墙断漂! face=%.0f° into=%.1fm/s CD=%.2fs lost=%.1f wall_n=%d/%d %s"
+			% [face_angle_deg, into_wall, wall_drift_lockout_time, lost, wall_n_count, contact_count_all,
+				"[group]" if has_wall_group_contact else "[fallback]"])
+	else:
+		var pre_speed_log: float = v.length()
+		var post_speed_log: float = new_v.length()
+		var turnaround_info: String = ""
+		if _wall_turnaround_left > 0.0:
+			turnaround_info = " turnaround=%.0f°" % rad_to_deg(absf(_wall_turnaround_target_yaw - _wall_turnaround_start_yaw))
+		print("[Car] 撞墙! face=%.0f° into=%.1f n=(%.2f,%.2f,%.2f) keep=%.2f e=%.2f kick=%.1f×%.2f speed:%.1f→%.1f wall_n=%d/%d %s unstick=%.2f cd=%.2fs%s"
+			% [face_angle_deg, into_wall, n.x, n.y, n.z, tangent_keep, wall_reflect_normal_factor,
+				wall_hit_kickback, clampf((into_wall/10.0)*(into_wall/10.0), 0.5, 4.0),
+				pre_speed_log, post_speed_log, wall_n_count, contact_count_all,
+				"[group]" if has_wall_group_contact else "[fallback]",
+				wall_unstick_offset, wall_hit_cooldown, turnaround_info])
+
+	# 蓄能阶段视为"准漂移", 撞墙也要打断
+	if _double_charge_t > 0.0 or _double_armed:
+		_double_charge_t = 0.0
+		_double_armed = false
+		_double_armed_left = 0.0
+		emit_signal("double_charge_progress", 0.0)
+		emit_signal("double_charge_lost")
+		_set_double_charge_fx(false)
+		print("[Car] 撞墙打断双喷蓄能/资格")
+
+	# 震屏强度按撞击速度缩放
+	var shake_intensity: float = maxf(wall_crash_shake, slope_wall_shake)
+	if shake_intensity > 0.0:
+		var shake_amp: float = shake_intensity * clampf(into_wall / 10.0, 0.5, 2.5)
+		emit_signal("camera_shake_requested", shake_amp, 0.3)
 
 
 # 玻璃渣特效生成: 在世界坐标 contact_pos 实例化, 由特效自己 queue_free
@@ -2883,6 +3616,14 @@ func _spawn_glass_shatter(contact_pos: Vector3, normal: Vector3, impact_speed: f
 #  HUD 信号
 # ============================================================
 func _emit_hud_signals() -> void:
-	var kmh: float = linear_velocity.length() * 3.6
+	# 【bug 修复 2026-05-13】码表只取"水平速度", 不含 Y 分量.
+	# 旧实现 linear_velocity.length() 把 Y 也算进去, 导致:
+	#   · 按"前进+转向"时, 球体驱动 + 坡道补偿/上坡助力会让 Y 有几 m/s 的分量
+	#     被开根号一并算进 |v|, 码表数字明显虚高 (玩家实际行驶速度并未那么快)
+	#   · 跳跃/落地瞬间码表蹦字
+	# 新实现: 只取水平面速度, 跟引擎/物理软封顶 (current_speed) 一致, 显示与体感对齐.
+	var v_horiz: Vector3 = linear_velocity
+	v_horiz.y = 0.0
+	var kmh: float = v_horiz.length() * 3.6
 	emit_signal("speed_changed", kmh)
 	emit_signal("charge_changed", charge, charge_nitro_full)

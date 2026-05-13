@@ -115,6 +115,8 @@ func _connect_to_car() -> void:
 		car.connect("landing_boost_triggered", _on_landing_boost_triggered)
 	if car.has_signal("songqian_state_changed"):
 		car.connect("songqian_state_changed", _on_songqian_state_changed)
+	if car.has_signal("songqian_drift_triggered"):
+		car.connect("songqian_drift_triggered", _on_songqian_drift_triggered)
 	if car.has_signal("songqian_back_boost_triggered"):
 		car.connect("songqian_back_boost_triggered", _on_songqian_back_boost_triggered)
 
@@ -364,6 +366,14 @@ func _on_songqian_back_boost_triggered(_yaw_deg: float) -> void:
 	_show_boost_popup("三喷  后退爆发", NITRO_COLOR_RED, 1.6, 0.6)
 	_combo_protect_until = Time.get_ticks_msec() / 1000.0 + 1.6
 	print("[HUD] 三喷弹字 (偏角 %.1f°)" % _yaw_deg)
+
+
+# 松前漂移触发: 在 boost_label 上弹 "松前漂移" 字, 用青绿色与"松前"提示色对齐
+# (历史: payload 之前是"次数", 现在 car.gd 改成 CD 模式, 此参数固定传 1, 仅作触发 ack)
+func _on_songqian_drift_triggered(_count_unused: int) -> void:
+	_show_boost_popup("松前漂移", SONGQIAN_COLOR, 1.2, 0.5)
+	print("[HUD] 松前漂移弹字")
+
 
 
 func _on_boost_window_opened(level: String, _duration: float) -> void:

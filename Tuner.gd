@@ -16,12 +16,20 @@ var _panel: PanelContainer
 
 # 参数定义: [prop, label, min, max, step, tooltip, curve_prop_or_empty]
 # curve_prop_or_empty: 如果非空, 表示该参数关联一条曲线(可点 🎨 编辑)
+#
+# 三级分类标记 (基础3C定型版 V1):
+#   __page  : 顶级页签 (左侧 tab 栏的一项, 重写 current_list)
+#   __group : 页内大标题 (高亮黄色, 视觉分组)
+#   __sub   : 大标题下的小标题 (浅蓝细字)
+#   __hidden_start / __hidden_end : 包裹的参数被隐藏(不显示在 UI), 但仍兼容旧 cfg 加载
 const PARAMS := [
-	["__group", "[b]基础移动[/b]"],
+	["__page", "🚗 基础移动"],
+	["__group", "极速 & 油门"],
 	["max_speed",                 "巡航极速 (m/s)",     10.0, 200.0, 0.5,
 		"无喷射时车辆能达到的最高速度。引擎曲线 X=1 对应到这个值。", ""],
 	["top_speed_boosted",         "喷射极速 (m/s)",     10.0, 300.0, 0.5,
 		"小喷/双喷/氮气期间车辆能达到的最高速度。喷射时引擎曲线 X=1 对应到这个值, 让喷射阶段也是从 0 推到 1, 同样有'越接近顶速越乏力'的曲线感。", ""],
+	["__sub", "转向"],
 	["steering_deg",              "前轮转角(度)",       5.0,  60.0,  0.5,
 		"前轮视觉转角, 同时也是车头朝向的转向幅度上限。", ""],
 	["turn_speed",                "车头响应速度",       0.5,  8.0,   0.1,
@@ -31,13 +39,14 @@ const PARAMS := [
 	["high_speed_threshold",      "高速衰减阈值(m/s)",  5.0,  80.0,  1.0,
 		"超过此速度后开始应用'高速转向衰减倍率'。", ""],
 
-	["__group", "[b]动力(曲线化)[/b]"],
+	["__group", "动力 (引擎/刹车)"],
 	["engine_force_max",          "引擎最大推力",       10.0, 300.0, 1.0,
 		"引擎峰值推力. 实际推力 = 此值 × 引擎曲线在当前速度比的采样 × 油门. 调大=加速更猛.", "engine_force_curve"],
 	["brake_force_max",           "刹车最大力",         10.0, 300.0, 1.0,
 		"刹车峰值力, 配合刹车曲线实现高速刹车更强的真实感.", "brake_force_curve"],
 	["engine_idle_drag",          "松油门引擎拖曳",     0.0,  20.0,  0.1,
 		"松油门时沿前进方向反向施加的力, 模拟引擎刹车/滚阻.", ""],
+	["__sub", "倒车"],
 	["reverse_threshold",         "刹车→倒车切换阈值",  0.0,  10.0,  0.1,
 		"车头方向速度低于此值时, 按下刹车键切换为倒车模式. 推荐 1.5.", ""],
 	["reverse_force_mult",        "倒车推力倍率",       0.0,  2.0,   0.05,
@@ -45,7 +54,7 @@ const PARAMS := [
 	["reverse_max_speed",         "倒车最高速度(m/s)",  1.0,  40.0,  0.5,
 		"倒车时 long_speed 不能低于 -此值, 防止倒车太快.", ""],
 
-	["__group", "[b]摩擦·正常状态[/b]"],
+	["__group", "摩擦 - 正常行驶"],
 	["friction_long_normal",      "前后向摩擦",         0.0,  20.0,  0.1,
 		"正常行驶前后方向摩擦系数(等效力 = k × 速度). 影响低速松油门减速感.", "friction_long_speed_curve_normal"],
 	["friction_lat_normal",       "侧向抓地",           0.0,  30.0,  0.1,
@@ -53,7 +62,8 @@ const PARAMS := [
 	["friction_air_drag",         "空气阻力系数",       0.0,  0.5,   0.005,
 		"与速度平方成正比的总阻力(沿惯性反向), 决定顶速手感. 调大→更难达到极速.", ""],
 
-	["__group", "[b]摩擦·漂移状态[/b]"],
+	["__page", "🎯 漂移系统"],
+	["__group", "摩擦 - 漂移状态"],
 	["friction_long_drift",       "漂移前后摩擦",       0.0,  20.0,  0.1,
 		"漂移时前后向摩擦(通常比正常低, 让车滑得更远).", "friction_long_speed_curve_drift"],
 	["friction_lat_drift",        "漂移侧向抓地",       0.0,  15.0,  0.1,
@@ -62,42 +72,49 @@ const PARAMS := [
 		"漂移时额外沿惯性反向施加的整体减速力(模拟轮胎打滑功耗).", ""],
 	["drift_extra_decel_songqian_mult", "松前能耗倍率",  0.0,  3.0,   0.05,
 		"松前(松开油门)时 drift_extra_decel 的倍率. 0.3=松前时能耗只剩 30% 车滑得更远, 1.0=不变.", ""],
+	["__group", "松前 (松油门漂)"],
 	["songqian_drift_enabled",    "松前漂移开关",       0.0,  1.0,   1.0,
 		"1=开启: 漂移中松油门=松前. 松前下车头朝入弯方向偏, 按 Q 触发松前漂移(冲量+爆发, 不退漂). 0=关闭: 漂移中按 Q 一律退漂.", ""],
-	["songqian_yaw_limit_deg",    "松前车头偏移上限(度)",  0.0,  180.0, 1.0,
+	["songqian_yaw_limit_deg",    "车头偏移上限(度)",   0.0,  180.0, 1.0,
 		"松前车头相对起漂时方向最多偏的角度. 90° = 车身完全侧向. 推荐 60~90.", ""],
-	["songqian_yaw_speed_deg",    "松前车头偏移速度(度/秒)", 10.0, 360.0, 5.0,
+	["songqian_yaw_speed_deg",    "车头偏移速度(度/秒)", 10.0, 360.0, 5.0,
 		"松前车头朝偏移上限达到的速度. 越大偏越快. 推荐 60~120.", ""],
-	["songqian_drift_kick_impulse", "松前漂移巨大冲量", 0.0,  50.0,  0.5,
-		"松前下'前进+方向+Q'触发松前漂移时, 沿车头方向的一次性'巨大'冲量(单位 m/s²×mass). 推荐 14~25, 这是松前漂移的灵魂.", ""],
+	["songqian_drift_kick_impulse", "踩油门触发冲量",   0.0,  50.0,  0.5,
+		"松前下踩回油门触发松前漂移时, 沿车头方向的一次性'巨大'冲量(单位 m/s²×mass). 推荐 14~25.", ""],
 	["songqian_drift_boost_duration", "松前漂移爆发时长", 0.1, 2.0,  0.05,
-		"松前漂移触发后, 推力爆发期持续秒数. 期间引擎推力被 _drift_exit_boost_mult 加强. 推荐 0.5~1.0.", ""],
-	["songqian_enter_kick_impulse", "松前进入小加速",   0.0,  20.0,  0.5,
+		"松前漂移触发后, 推力爆发期持续秒数.", ""],
+	["songqian_drift_cooldown",     "松前漂移CD",         0.0,  5.0,   0.05,
+		"两次松前漂移之间的最小冷却时间(秒), 全局生效不会因起漂清零. CD 期内再次'松前+踩油门'只切回普通漂移、不给冲量, 防止反复抖油门 exploit. 设 0=无 CD(可无限连发); 推荐 0.6~1.2.", ""],
+	["songqian_enter_kick_impulse", "进入松前小加速",   0.0,  20.0,  0.5,
 		"刚进入松前(漂移中松油门瞬间)时, 沿当前运动方向的一次性小冲量. 模拟打滑势能保留, 0=纯惯性, 推荐 3~6.", ""],
 	["songqian_steer_mult",       "松前转向倍率",       0.0,  1.5,   0.05,
-		"松前期间转向倍率(相对漂移转向再乘这个数). 数学: turn_mult = drift_steer_mult × songqian_steer_mult. 0.3=松前转向只剩漂移转向的 30%, 防止松前下方向乱甩. 0=完全禁止松前期间转向, 1=不限制.", ""],
+		"松前期间转向倍率(相对漂移转向再乘这个数). 数学: turn_mult = drift_steer_mult × songqian_steer_mult. 0.3=松前转向只剩漂移转向的 30%, 防止松前下方向乱甩.", ""],
+
+	["__group", "三喷 (松前后退喷)"],
 	["songqian_back_boost_enabled", "三喷开关",         0,    1,     1,
 		"1=启用三喷(松前后退喷): 松前下车头偏角足够时按 Q+W 触发. 0=禁用.", ""],
-	["songqian_back_min_yaw_deg", "三喷触发最小偏角(度)", 0.0,  180.0, 1.0,
-		"三喷需要车头相对起漂方向至少偏过这么多度才能触发. 数学: |当前车头与起漂方向夹角|≥此值. 推荐 60~90.", ""],
+	["songqian_back_min_yaw_deg", "触发最小偏角(度)",   0.0,  180.0, 1.0,
+		"三喷需要车头相对起漂方向至少偏过这么多度才能触发. 推荐 60~90.", ""],
 	["songqian_back_boost_power", "三喷推力",            10.0, 200.0, 1.0,
 		"三喷的持续推力(沿车头反方向). 推荐 80~150.", ""],
 	["songqian_back_boost_time",  "三喷持续(秒)",        0.1,  2.0,   0.05,
 		"三喷推力持续秒数.", ""],
 	["songqian_back_kick_impulse","三喷瞬时冲量",        0.0,  30.0,  0.5,
 		"三喷触发瞬间沿车头反方向给的一次性冲量, 让车'嘭'一下推出去. 推荐 8~15.", ""],
-	["drift_slip_enabled",        "打滑: 总开关",       0.0,  1.0,   1.0,
+
+	["__group", "打滑 (松油门=滑)"],
+	["drift_slip_enabled",        "打滑总开关",         0.0,  1.0,   1.0,
 		"是否启用'漂移中松开前进键=打滑'. 关闭后漂移摩擦不受油门影响.", ""],
-	["drift_slip_friction_cut",   "打滑: 摩擦削减",     0.0,  1.0,   0.05,
+	["drift_slip_friction_cut",   "打滑摩擦削减",       0.0,  1.0,   0.05,
 		"完全松开前进键时摩擦削减比例. 1.0=摩擦归零(纯惯性打滑), 0.5=摩擦保留一半.", ""],
-	["drift_slip_smooth",         "打滑: 过渡速度",     1.0,  20.0,  0.5,
-		"打滑强度过渡平滑速度. 越大越锐利(瞬间响应油门), 越小越柔和.", ""],
+	["drift_slip_smooth",         "打滑过渡速度",       1.0,  20.0,  0.5,
+		"打滑强度过渡平滑速度. 越大越锐利, 越小越柔和.", ""],
 	["drift_inertia_boost",       "惯性感增强",         0.0,  1.0,   0.05,
 		"漂移中沿惯性方向的摩擦削减. 0=不变, 1=漂到深度时摩擦(除空气)归零. 推荐 0.3~0.6.", ""],
 	["drift_centripetal_pull",    "向心力拉力",         0.0,  50.0,  0.5,
-		"漂移中把速度方向往车头方向拉的拉力(m/s²×速度). 0=关闭, 推荐 5~20. 大弧线过弯的'粘'感来源.", "drift_centripetal_curve"],
+		"漂移中把速度方向往车头方向拉的拉力. 0=关闭, 推荐 5~20. 大弧线过弯的'粘'感来源.", "drift_centripetal_curve"],
 
-	["__group", "[b]漂移触发与限制[/b]"],
+	["__group", "触发与限制"],
 	["drift_min_speed",           "最低入漂车速",       0.0,  30.0,  0.5,
 		"低于此速度无法触发漂移。", ""],
 	["drift_min_angle_to_boost",  "小喷资格累积角(度)", 0.0,  120.0, 1.0,
@@ -128,7 +145,7 @@ const PARAMS := [
 		"刚入漂的多少秒内不启用自动退漂. 防止入漂瞬间车头还没甩出来就被误判摆正而退漂.", ""],
 
 
-	["__group", "[b]漂移动态(曲线化)[/b]"],
+	["__group", "动态曲线"],
 	["drift_engage_duration",     "入漂过渡时长(秒)",   0.0,  1.5,   0.01,
 		"从直行切到漂移, drift_intensity 从 0 到 1 的过渡时间. 小=灵敏, 大=柔和.", "drift_engage_curve"],
 	["drift_disengage_duration",  "退漂过渡时长(秒)",   0.0,  1.5,   0.01,
@@ -139,38 +156,56 @@ const PARAMS := [
 		"漂移时转向速度相对正常的倍率, 数值越大漂移中越容易拉角度.", ""],
 	["drift_accel_mult",          "漂移油门效率",       0.0,  1.5,   0.05,
 		"漂移时油门实际有效比例. 会与 drift_intensity 插值应用.", ""],
-	["drift_counter_steer_mult",  "反打转向缩减倍率",   0.0,  1.0,   0.05,
-		"漂移中反打方向(左漂右打或右漂左打)时的转向倍率. 0.35=反打时角速度只剩 35%, 1.0=不缩减.", ""],
 	["drift_exit_boost_duration", "退漂爆发期时长(秒)", 0.0,  2.0,   0.05,
 		"入漂/退漂瞬间触发的推力爆发期时长. 0=禁用.", ""],
 	["drift_exit_boost_mult",     "退漂爆发期推力倍率", 1.0,  3.0,   0.05,
-		"爆发期开始时的推力倍率, 之后线性衰减回 1.0. 1.5=起步瞬间推力 x1.5.", ""],
+		"爆发期开始时的推力倍率, 之后线性衰减回 1.0.", ""],
 	["post_drift_steer_cooldown", "退漂转向冷却时长(秒)", 0.0, 1.5,   0.01,
-		"退漂瞬间转向倍率被衰减, 在此秒数内线性回到 100%. 防止'漂移压制解除→车头突然超灵敏甩飞'. 0.35 推荐.", ""],
+		"退漂瞬间转向倍率被衰减, 在此秒数内线性回到 100%.", ""],
 	["post_drift_steer_mult",     "退漂转向冷却起始倍率", 0.0,  1.0,   0.05,
-		"退漂瞬间转向倍率. 0.5=只剩 50% 然后平滑回到 100%. 越小越稳, 越大越灵敏.", ""],
-	["drift_counter_lean_mult",   "反打侧倾衰减目标",   0.0,  1.0,   0.05,
-		"漂移反打时车身侧倾衰减到的最低倍率. 0=完全回正(正打入漂的逆播放), 1=反打不影响侧倾. 推荐 0~0.2.", ""],
-	["drift_counter_lean_smooth", "反打回正过渡速度",   1.0,  20.0,  0.5,
-		"反打/松开时车身侧倾的恢复过渡平滑速度. 越大反应越快越锐利, 越小越柔和. 推荐 4~8.", ""],
-	["drift_counter_decel_enabled", "反打减速开关",     0,    1,     1,
-		"1=漂移中反打时给一个减速力(模拟轮胎反向抓地刹车), 0=反打只有视觉回正没物理减速.", ""],
-	["drift_counter_decel",       "反打减速强度",       0.0,  30.0,  0.1,
-		"反打时沿水平速度反向施加的减速 (m/s² × mass). 数学: F = drift_counter_decel × |steer| × mass × (-v̂). 推荐 6~14: 6=轻微; 10=明显抓地刹车; 14+=急停感.", ""],
-	["drift_counter_decel_min_steer", "反打减速最小输入", 0.0, 1.0,  0.01,
-		"|steer_input| 必须 ≥ 此值才会触发反打减速, 防止方向键抖动也减速. 推荐 0.2~0.4.", ""],
-	["drift_body_tilt",           "漂移车身侧倾(度)",   0.0,  60.0,  1.0,
-		"漂移时车身往内侧倾斜的最大角度, 仅视觉效果。", "drift_body_tilt_curve"],
-	["drift_yaw_offset_tuck",     "甩尾yaw偏移(度)",    0.0,  60.0,  1.0,
-		"甩尾型漂移车头相对运动方向的偏转角度。", ""],
-	["drift_yaw_offset_side",     "侧身yaw偏移(度)",    0.0,  80.0,  1.0,
-		"侧身型漂移(反打入漂)车头相对运动方向的偏转, 比甩尾更夸张。", ""],
-	["side_drift_threshold",      "侧身触发侧速阈值",   0.0,  8.0,   0.1,
-		"反打入漂时, 横向速度超过此值则进入侧身漂(否则甩尾漂)。", ""],
-	["drift_input_grace_window",  "Q 输入宽限期(秒)",   0.0,  0.5,   0.01,
-		"按下 Q 后这么久内只要方向键就位就立即入漂. QQ飞车手感: 玩家先按 Q 再补方向键也能漂.", ""],
+		"退漂瞬间转向倍率. 0.5=只剩 50% 然后平滑回到 100%.", ""],
 
-	["__group", "[b]集气公式[/b]"],
+	["__group", "反打 (真实赛车过弯反打)"],
+	["__sub",   "★新机制 (drift_counter_enabled=true 时生效)"],
+	["drift_counter_enabled",          "反打新机制开关",       0, 1, 1,
+		"★真实反打核心开关★ 1=启用: 漂移中玩家按下'与漂角方向相反'的方向键 → 车头朝速度向量缓慢回正, 按到位松手即可直线出弯. 0=关闭, 回退到旧机制 (减速+前向阻力+锁定, 由下方旧参数控制).", ""],
+	["drift_counter_angular_speed_deg", "反打回正角速度(°/s)", 10.0, 360.0, 5.0,
+		"完全反打时车头朝速度向量回正的角速度. 实际角速度 = 此值 × |steer| × ramp(response_time) × drift_intensity. 推荐 60~180: 60 缓慢, 120 流畅 (QQ 飞车手感), 180 利索.", ""],
+	["drift_counter_deadzone_deg",     "反打死区(°)",         0.0, 20.0, 0.5,
+		"漂角 |slip_angle| 小于此值 (度) 时不触发反打回正, 避免车头在 0 附近抖动. 推荐 2~8.", ""],
+	["drift_counter_response_time",    "反打响应时间(s)",     0.0, 2.0,  0.05,
+		"反打从'刚开始按'到'达到峰值回正速度'的累计秒数. 用 smoothstep 加速曲线. 0=一按就满速; 0.3~0.8=有蓄势感. 反打中断立即清零.", ""],
+
+	["__sub",   "车身视觉 (车身侧倾/车头 yaw 动画, 与物理层独立)"],
+	["drift_counter_lean_mult",        "反打车头回正目标",    0.0, 1.0,  0.05,
+		"车身视觉层: 漂移反打时车头 yaw 偏转衰减到的最低倍率 (仅影响 body_mesh.rotation.y 视觉, 不影响物理). 0=车头完全朝运动方向回正; 1=反打不影响车头偏转.", ""],
+	["drift_counter_lean_smooth",      "反打车头回正速度",    1.0, 20.0, 0.5,
+		"车身视觉: 反打/松开时车头 yaw 的恢复过渡平滑速度. 越大越锐利.", ""],
+
+	["__sub",   "旧机制 (drift_counter_enabled=false 时才生效, 不建议)"],
+	["drift_counter_steer_mult",       "旧-反打转向缩减",     0.0, 1.0,  0.05,
+		"[已废弃] 旧机制: 漂移中反打方向的转向倍率. 0.35=反打时角速度只剩 35%. 新机制下此参数不再生效.", ""],
+	["drift_counter_lock_until_exit_enabled", "旧-反打锁定到退漂", 0, 1, 1,
+		"[已废弃] 旧'反打锁定'开关, 仅在 drift_counter_enabled=false 时生效. 新机制不使用此机制.", ""],
+	["drift_counter_decel_enabled",    "旧-反打减速开关",     0,   1,    1,
+		"[已废弃] 旧'反打=刹车'机制, 仅在 drift_counter_enabled=false 时生效.", ""],
+	["drift_counter_decel",            "旧-反打减速强度",     0.0, 30.0, 0.1,
+		"[已废弃] 旧机制减速力. 新机制下不生效.", ""],
+	["drift_counter_decel_min_steer",  "旧-反打最小输入阈值", 0.0, 1.0,  0.01,
+		"[已废弃] 旧机制阈值. 新机制下不生效.", ""],
+	["drift_counter_throttle_friction_enabled", "旧-反打+前进摩擦开关", 0, 1, 1,
+		"[已废弃] 旧机制. 新机制下不生效.", ""],
+	["drift_counter_throttle_friction", "旧-反打+前进摩擦强度", 0.0, 30.0, 0.1,
+		"[已废弃] 旧机制. 新机制下不生效.", ""],
+	["drift_counter_lat_grip_mult",    "旧-反打侧向抓地倍率", 0.0, 1.0,  0.01,
+		"[已废弃] 旧'反打=车顺惯性甩出'机制. 新机制用 yaw 回正替代.", ""],
+
+
+
+
+
+	["__page", "💨 喷射"],
+	["__group", "集气公式"],
 	["charge_nitro_full",         "一格氮气=多少集气",  20.0, 300.0, 5.0,
 		"集气槽多满才升级为一格氮气, 越大越难攒。", ""],
 	["charge_per_lateral_m",      "侧滑米数权重",       0.0,  10.0,  0.1,
@@ -185,10 +220,8 @@ const PARAMS := [
 		"最多能囤积多少格氮气。", ""],
 	["instant_nitro_settle",      "集气满立即结算氮气", 0,    1,     1,
 		"1=集气满立刻得到一格氮气可立即用; 0=漂移结束才结算(平衡向)。", ""],
-	["wall_crash_shake",          "撞墙震屏",           0.0,  2.0,   0.05,
-		"撞墙时震屏强度。0=不震。", ""],
 
-	["__group", "[b]喷射[/b]"],
+	["__group", "喷射类型"],
 	["mini_boost_power",          "小喷推进力",         5.0,  100.0, 1.0,
 		"小喷的基础推进力, 实时力 = 此值 × 力度曲线在当前进度的采样。", "mini_boost_curve"],
 	["mini_boost_time",           "小喷持续(秒)",       0.1,  3.0,   0.05,
@@ -214,7 +247,7 @@ const PARAMS := [
 	["nitro_boost_shake",         "氮气震屏",           0.0,  2.0,   0.05,
 		"氮气触发时震屏强度。0=不震。", ""],
 
-	["__group", "[b]叠喷(连喷)[/b]"],
+	["__group", "叠喷 (连喷接力)"],
 	["stack_link_window",         "连喷接力窗口(秒)",   0.0,  1.5,   0.05,
 		"前一段喷射结束后多少秒内开新喷算'接力'。窗口越大越容易接, 太大失去操作感。", ""],
 	["stack_breakthrough_top_mult", "突破极速倍率",     1.0,  2.0,   0.01,
@@ -222,7 +255,7 @@ const PARAMS := [
 	["stack_max_breakthrough",    "最大突破次数",       0,    5,     1,
 		"叠喷链中能突破极速的最大次数, 超过后再多接也不再加速。", ""],
 
-	["__group", "[b]漂移氮气(过弯增强)[/b]"],
+	["__group", "漂移氮气 (过弯增强)"],
 	["drift_nitro_max_speed_mult","漂移氮气极速倍率",   1.0,  3.0,   0.05,
 		"漂移中放氮气时, 漂移最高速度上限的提升倍率(默认 1.5 = 提升 50%)。", ""],
 	["drift_nitro_steer_mult",    "漂移氮气转向倍率",   1.0,  3.0,   0.05,
@@ -230,9 +263,10 @@ const PARAMS := [
 	["drift_nitro_lat_grip_mult", "漂移氮气侧向抓地倍率", 0.5, 3.0,  0.05,
 		"漂移中放氮气时, 侧向抓地额外加成。>1 让车不甩飞更稳, <1 让车更滑。", ""],
 	["drift_nitro_body_tilt_mult","漂移氮气侧倾倍率",   0.5,  2.5,   0.05,
-		"漂移中放氮气时, 车身侧倾视觉额外倍率(纯视觉效果, 更夸张的过弯姿态)。", ""],
+		"漂移中放氮气时, 车身侧倾视觉额外倍率(纯视觉效果)。", ""],
 
-	["__group", "[b]视觉[/b]"],
+	["__page", "✨ 视觉"],
+	["__group", "车身姿态 (非漂移)"],
 	["body_tilt",                 "过弯侧倾敏感度",     5.0,  120.0, 1.0,
 		"数值越大, 过弯侧倾感越迟钝(可以理解为'稳'); 越小越夸张。", ""],
 	["body_tilt_max_deg",         "过弯最大侧倾角(度)", 0.0,  45.0,  0.5,
@@ -240,7 +274,18 @@ const PARAMS := [
 	["head_yaw_deg",              "车头左右拧头幅度(度)", 0.0,  20.0,  0.5,
 		"非漂移时按方向键车头会做轻微 yaw 摆动, 这是幅度。", ""],
 
-	["__group", "[b]地面物理(防弹+贴附)[/b]"],
+	["__group", "漂移姿态 (车身倾斜+yaw)"],
+	["drift_body_tilt",           "漂移车身侧倾(度)",   0.0,  60.0,  1.0,
+		"漂移时车身往内侧倾斜的最大角度, 仅视觉效果。", "drift_body_tilt_curve"],
+	["drift_yaw_offset_tuck",     "甩尾yaw偏移(度)",    0.0,  60.0,  1.0,
+		"甩尾型漂移车头相对运动方向的偏转角度。", ""],
+	["drift_yaw_offset_side",     "侧身yaw偏移(度)",    0.0,  80.0,  1.0,
+		"侧身型漂移(反打入漂)车头相对运动方向的偏转, 比甩尾更夸张。", ""],
+	["side_drift_threshold",      "侧身触发侧速阈值",   0.0,  8.0,   0.1,
+		"反打入漂时, 横向速度超过此值则进入侧身漂(否则甩尾漂)。", ""],
+
+	["__page", "⛰️ 地面物理"],
+	["__group", "防弹 + 贴附 (统一机制)"],
 	["ground_stick_enabled",      "防弹+贴附总开关",    0,    1,     1,
 		"1=启用统一的防弹/贴附机制; 0=纯物理, 会有弹跳。", ""],
 	["plain_slope_threshold_deg", "平地/坡面切换(度)",  0.0,  30.0,  0.5,
@@ -260,17 +305,16 @@ const PARAMS := [
 	["slope_stick_max_deg",       "坡面贴附最大坡度(度)", 5.0, 90.0,  1.0,
 		"超过此坡度(峭壁)不再贴附, 避免拉住爬墙车。60 合理。", ""],
 
-	["__group", "[b]斜面当墙[/b]"],
+	["__page", "🧱 撞墙物理"],
+	["__group", "墙判定 + 总开关"],
 	["slope_as_wall_enabled",     "斜面视为墙",         0,    1,     1,
 		"1=陡斜面会被当作墙壁吸收速度+反推; 0=允许爬坡。", ""],
 	["slope_wall_angle_deg",      "斜面墙阈值(度)",     20.0, 85.0,  1.0,
-		"法线与竖直方向夹角 ≥ 此值视为墙壁。值越小越严格。", ""],
-	["slope_wall_bounce_absorb",  "撞斜面吸收速度比例", 0.0,  1.0,   0.05,
-		"撞斜面时沿法线速度被吸收的比例, 1=完全停下。", ""],
-	["slope_wall_push_back",      "撞斜面反推速度",     0.0,  20.0,  0.5,
+		"法线与竖直方向夹角 ≥ 此值视为墙壁。值越小越严格(更多斜面被当墙). 推荐 50~65°.", ""],
+	["slope_wall_push_back",      "撞墙反推速度",       0.0,  20.0,  0.5,
 		"撞墙后沿法线方向额外推开的速度, 防止卡墙。", ""],
-	["slope_wall_shake",          "撞斜面震屏",         0.0,  2.0,   0.05,
-		"撞斜面墙时震屏强度。0=不震。", ""],
+
+	["__group", "弹墙推力 (尾/侧撞奖励)"],
 	["wall_bounce_boost_enabled", "弹墙推力开关",       0,    1,     1,
 		"1=漂移撞墙时车的尾/侧撞墙会获得弹墙加速; 0=纯撞墙吸收.", ""],
 	["wall_bounce_rear_threshold","尾撞判定阈值",       0.0,  1.0,   0.05,
@@ -283,16 +327,55 @@ const PARAMS := [
 		"沿车头方向叠加的速度. 6 推荐.", ""],
 	["wall_drift_lockout_time",   "撞墙断漂入漂CD(秒)", 0.0,  2.0,   0.05,
 		"漂移中撞墙立即断漂(本次无小喷), 此秒数内按 Q 无法重新入漂. 0.5 推荐.", ""],
-	["wall_reflect_tangent_keep", "反弹: 切向保留比例", 0.0,  1.0,   0.05,
-		"撞墙后沿墙面方向速度保留比例. 1.0=完全保留(擦墙不掉速), 0.0=切向归零(粘墙). 推荐 0.85~0.95.", ""],
-	["wall_reflect_normal_factor","反弹: 法向反弹系数", 0.0,  1.0,   0.05,
-		"恢复系数 e: 0=完全吸收无弹回, 1=完美弹性. 推荐 0.3~0.5(略弹回).", ""],
+	["wall_crash_shake",          "撞墙震屏",           0.0,  2.0,   0.05,
+		"撞墙时震屏强度。0=不震。", ""],
+
+	["__group", "硬碰硬反弹 V3"],
+	["wall_reflect_tangent_keep_max", "切向保留(擦墙)", 0.0, 1.0, 0.05,
+		"撞击力极小(擦墙)时切向保留比例. 推荐 0.85~0.95: 擦墙基本不掉速.", ""],
+	["wall_reflect_tangent_keep_min", "切向保留(正撞)", 0.0, 1.0, 0.05,
+		"撞击力极大(正撞)时切向保留比例. 推荐 0.2~0.4.", ""],
+	["wall_reflect_tangent_lerp_speed", "切向插值参考速度", 1.0, 50.0, 0.5,
+		"切向减速插值的参考 v_normal (m/s). 18 = 大约 65km/h 正撞时切向减到最低. 越小越敏感, 越大越宽容.", ""],
+	["wall_reflect_normal_factor","反弹: 法向反弹系数 e", 0.0,  1.0,   0.05,
+		"恢复系数 e: 0=完全吸收无弹回, 1=完美弹性. 硬碰硬推荐 0.55~0.75. 数学: v_n_new = -v_n_old × e.", ""],
+	["wall_hit_kickback",         "Kickback 法线推开速度", 0.0, 30.0,  0.5,
+		"撞墙后沿法线推开的瞬时速度 (m/s). 二次方缩放: into=10→1.0×, into=20→4.0×, 高速撞墙真砰一下飞出去. 0=关闭, 推荐 5~15.", ""],
+	["wall_straight_tangent_kill", "正撞切向擦除",      0.0,  1.0,   0.05,
+		"【弹墙掉头】正撞(非擦墙)时额外衰减切向速度. 1.0=正撞时切向完全清零(车完全沿法线弹回, 最像QQ飞车), 0.0=关闭. 推荐 0.6~0.9.", ""],
 	["wall_grazing_angle_deg",    "擦墙临界角(度)",     0.0,  90.0,  1.0,
-		"车头与墙面夹角 < 此值时算擦墙(切向几乎全保留). 0=平行墙, 90=正面撞.", ""],
+		"车头与墙面夹角 < 此值时算擦墙(切向额外保留 +15%). 0=平行墙, 90=正面撞. 推荐 15~25.", ""],
 	["glass_shatter_min_speed",   "玻璃渣触发最小速度", 0.0,  20.0,  0.5,
 		"撞击速度低于此值不出玻璃渣特效, 避免轻碰也碎. 推荐 3 m/s.", ""],
 
-	["__group", "[b]坡道(推力/重力补偿)[/b]"],
+	["__group", "弹墙掉头 (车身 yaw 跟随)"],
+	["wall_normal_y_threshold",   "墙判定: 法线 n.y 宽松阈值", 0.0, 1.0, 0.05,
+		"【V2 双重判定】法线 n.y < 此值时强制视为墙(不论 slope_wall_angle_deg). 防止用户把 angle_deg 调太严导致弧形墙撞了没反应. 0.7 ≈ 法线与 Y 轴夹角 > 45°. 推荐 0.6~0.75.", ""],
+	["wall_turnaround_enabled",   "掉头开关",           0,    1,     1,
+		"【弹墙掉头】1=撞墙时车身 yaw 跟着反弹方向转, 车头对准'车要去的地方'(QQ飞车核心视觉). 0=只弹物理车头不转.", ""],
+	["wall_turnaround_min_into",  "弹墙掉头: 最小触发速度", 0.0, 30.0, 0.5,
+		"【弹墙掉头】低于此撞击速度(m/s)的轻碰不触发车身转向. 推荐 5~10, 5=轻碰也掉头 10=只有明显撞击才掉头.", ""],
+	["wall_turnaround_duration",  "弹墙掉头: 持续时长(秒)", 0.0, 1.5, 0.01,
+		"【弹墙掉头】车身 yaw 平滑转过去的秒数. 0=瞬间硬切, 0.3=QQ飞车风格平滑转向, 0.5+=慢动作. 推荐 0.25~0.4.", ""],
+	["wall_turnaround_max_deg",   "弹墙掉头: 最大角度", 0.0, 180.0, 5.0,
+		"【弹墙掉头】单次掉头最多转这么多度. 180=允许原路返回掉头, 120=最多转120°保留一些切向. 推荐 120~180.", ""],
+	["wall_turnaround_min_deg",   "弹墙掉头: 最小角度", 0.0, 90.0, 1.0,
+		"【弹墙掉头】角差小于此值不触发掉头(避免擦墙时车头抖动). 推荐 15~30.", ""],
+
+	["__group", "防吸住 (V4 关键修复)"],
+	["wall_hit_cooldown",         "撞墙冷却(秒)",       0.0,  1.0,   0.01,
+		"【V4 防吸住】撞墙触发反弹后此秒数内不再触发新反弹. 解决 trimesh 每帧报告 contact 导致的'撞墙吸住'循环. 推荐 0.10~0.20. 0=关闭(易吸住).", ""],
+	["wall_unstick_offset",       "撞墙硬位移(米)",     0.0, 0.5, 0.01,
+		"【V4 防吸住】撞墙瞬间沿法线方向硬位移车的位置, 物理上立即脱离接触面. 推荐 0.05~0.15.", ""],
+	["wall_hit_speed_cap_mult",   "锁速倍率",           0.5,  2.0,   0.05,
+		"撞墙后锁速 cap = max(撞前速度,撞后速度) × 此倍率. 1.5=允许 kickback 飞50%. 推荐 1.3~1.6.", ""],
+	["wall_hit_lock_duration",    "锁速时长(秒)",       0.0, 1.5,   0.05,
+		"撞墙后锁速窗口持续秒数. 0=关闭, 推荐 0.2~0.5.", ""],
+	["wall_hit_cancel_boost",     "撞墙取消 boost",     0,    1,     1,
+		"1=撞墙瞬间取消正在进行的 boost. QQ飞车风格建议设 0(撞墙过弯时不要打断喷射). 默认 0.", ""],
+
+	["__page", "⛰️ 坡道"],
+	["__group", "推力/重力补偿"],
 	["slope_align_thrust",        "推力沿坡面切向",     0,    1,     1,
 		"1=上坡时推力沿坡面向上, 不再'水平推'(推荐); 0=老的水平推力, 上坡掉速明显。", ""],
 	["slope_gravity_compensation","上坡重力补偿",       0.0,  1.5,   0.05,
@@ -300,7 +383,7 @@ const PARAMS := [
 	["slope_compensation_max_deg","补偿最大坡度(度)",   0.0,  90.0,  1.0,
 		"超过此坡度不再补偿, 防止峭壁也能往上冲。45 度合理。", ""],
 
-	["__group", "[b]上坡爬升助力[/b]"],
+	["__group", "上坡爬升助力"],
 	["uphill_assist_enabled",     "上坡助力开关",       0,    1,     1,
 		"1=上坡时给额外推力, 克服推力曲线高速段衰减带来的爬坡乏力; 0=禁用(只靠引擎曲线和重力补偿)。", ""],
 	["uphill_assist_force",       "助力基础强度",       0.0,  60.0,  0.5,
@@ -315,23 +398,24 @@ const PARAMS := [
 		"喷射状态下助力额外乘这个值. 1.0=不变, 1.5=喷射上坡更猛。", "uphill_assist_speed_curve"],
 
 
-	["__group", "[b]空喷 / 落地喷[/b]"],
+	["__page", "🛫 空喷 / 落地喷"],
+	["__group", "空喷 (空中按 W)"],
 	["air_boost_enabled",         "空喷开关",           0,    1,     1,
-		"1=空中按 W 缓存意图, 落地瞬间触发加速喷; 0=禁用。", ""],
+		"1=空中按 W 立即触发空喷(离地瞬间生效); 0=禁用。", ""],
 	["air_boost_min_air_time",    "空喷最小腾空(秒)",   0.0,  1.5,   0.01,
-		"离地不足这么久时, 落地不会触发空喷(防止小颠簸误触发)。0.18 推荐。", ""],
-	["air_boost_intent_window",   "空喷意图窗口(秒)",   0.1,  5.0,   0.05,
-		"空中按下 W 后, 多长时间内落地都算空喷有效。1.5 推荐, 太短会按了没用。", ""],
+		"离地不足这么久按 W 不会触发空喷(防止小颠簸误触发)。0.18 推荐。", ""],
 	["air_boost_power",           "空喷推进力",         5.0,  150.0, 1.0,
 		"空喷基础推力 × 力度曲线在当前进度的采样。", "air_boost_curve"],
 	["air_boost_time",            "空喷持续(秒)",       0.1,  3.0,   0.05,
 		"空喷持续秒数。", ""],
-	["air_landing_speed_recover", "落地水平速度补偿",   0.0,  1.0,   0.05,
-		"飞行中空气阻力会损耗水平速度, 落地把它拉回。0=不补偿, 1=完全保留起飞前速度, 0.85 推荐。", ""],
+	["air_boost_downforce",       "空喷滞空感下压力",   0.0,  30.0,  0.5,
+		"空喷期间在空中每帧施加的向下加速度(m/s², 会乘 mass)。给空喷一种'悬浮被推进'的手感, 而不是火箭起飞。0=关闭, 推荐 3~10。", ""],
 	["air_boost_shake",           "空喷震屏强度",       0.0,  2.0,   0.05,
 		"空喷释放瞬间的震屏强度, 0 = 不震。", ""],
-	["air_boost_overrides_window","空喷覆盖窗口逻辑",   0,    1,     1,
-		"1=空中按 W 只缓存空喷, 不再走漂移/双喷/小喷窗口判定(推荐); 0=允许同帧叠加。", ""],
+	["air_landing_speed_recover", "落地水平速度补偿",   0.0,  1.0,   0.05,
+		"飞行中空气阻力会损耗水平速度, 落地把它拉回。0=不补偿, 1=完全保留起飞前速度, 0.85 推荐。", ""],
+
+	["__group", "落地喷"],
 	["landing_boost_enabled",     "落地喷开关",         0,    1,     1,
 		"1=飞行足够久后, 稳定落地开启按 W 窗口手动触发(不自动); 0=禁用。", ""],
 	["landing_boost_min_air_time","落地喷最小腾空(秒)", 0.0,  3.0,   0.05,
@@ -342,24 +426,44 @@ const PARAMS := [
 		"落地喷持续秒数。", ""],
 	["landing_boost_press_window","落地喷按键窗口(秒)", 0.1,  2.0,   0.05,
 		"稳定落地后, 玩家可按 W 触发落地喷的时间窗口。0.5 推荐, 太短会错过。", ""],
+
+	["__group", "加速带 / 弹射器"],
+	["speed_pad_sustain_power",  "加速带持续推力",     0.0,  60.0,  0.5,
+		"加速带触发后, 沿车头方向的持续推力 (m/s² × mass), 随 duration 线性衰减. 加速带本身还有'瞬时增速冲量'(kick), 这个参数是冲量之后的持续段. 0=只有瞬时冲量不持续; 推荐 15~25.", ""],
 	["landing_stable_time",       "落地稳定判定(秒)",   0.0,  0.5,   0.005,
 		"连续接地此秒数才视为'真正落地'并开放按键窗口, 避免刚蹭一下就触发。0.08 推荐。", ""],
 	["landing_stable_max_vy",     "落地稳定 Y 速度上限", 0.0, 20.0, 0.2,
 		"Y 速度绝对值超过此值就不算'稳定'(还在砸地过程中)。4 合理。", ""],
-	["landing_boost_stacks_with_air", "落地喷叠加空喷(兼容)", 0, 1, 1,
-		"旧参数, 按键触发模式下一般不用。", ""],
 	["landing_boost_shake",       "落地喷震屏强度",     0.0,  2.0,   0.05,
 		"落地喷触发时震屏强度。", ""],
 	["landing_impact_absorb",     "落地冲击吸收",       0.0,  1.0,   0.05,
-		"落地瞬间 Y 方向冲击吸收比例。0=保留下落动能造成弹跳, 1=完全吸收平稳落地, 0.85 推荐。【注: landing_hard_stick=1 时此参数被忽略】", ""],
-	["air_boost_downforce",       "空喷滞空感下压力",   0.0,  30.0,  0.5,
-		"空喷期间在空中每帧施加的向下加速度(m/s², 会乘 mass)。给空喷一种'悬浮被推进'的手感, 而不是火箭起飞。0=关闭, 推荐 3~10。例: 5 = 额外半个重力。", ""],
-	["landing_hard_stick",        "落地强制Y速归零",    0,    1,     1,
-		"【慎用】1=落地瞬间直接把 Y 速度强制为 0。会和原生 plain_vy_zero_threshold 防弹打架, 可能导致落地后悬浮。推荐 0, 让 landing_impact_absorb 单独处理。", ""],
+		"落地瞬间 Y 方向冲击吸收比例。0=保留下落动能造成弹跳, 1=完全吸收平稳落地, 0.85 推荐。", ""],
+
+	# ========================================================
+	# 隐藏区: 已废弃 / 不生效参数 (保留兼容旧 cfg, 但不显示在 UI)
+	# ========================================================
+	["__hidden_start"],
+	["air_boost_intent_window",   "(已废弃)空喷意图窗口", 0.1, 5.0,   0.05,
+		"【已废弃】旧的'空中按 W 缓存意图等落地'机制, 现在空喷在空中按 W 时立即触发, 不再需要意图窗口.", ""],
+	["air_boost_overrides_window","(已废弃)空喷覆盖窗口", 0,   1,     1,
+		"【已废弃】配合旧空喷意图窗口逻辑.", ""],
+	["landing_boost_stacks_with_air", "(已废弃)落地喷叠加空喷", 0, 1, 1,
+		"【已废弃】旧参数, 按键触发模式下用不上.", ""],
+	["landing_hard_stick",        "(已废弃)落地强制Y速归零", 0,  1,     1,
+		"【已废弃慎用】1=落地瞬间直接把 Y 速度强制为 0. 会和 plain_vy_zero_threshold 防弹打架, 可能导致悬浮.", ""],
 	["landing_stick_duration",    "(已废弃)落地压地窗口", 0.0,  1.0,   0.01,
-		"【已废弃】这套'压地窗口'机制和原生 plain_vy_zero_threshold + plain_downforce 冲突, 导致落地半秒诡异悬浮。代码已禁用此功能, 调此值无效, 保留只为兼容旧 cfg。", ""],
+		"【已废弃】这套'压地窗口'机制和原生 plain_vy_zero_threshold + plain_downforce 冲突, 导致落地半秒诡异悬浮.", ""],
 	["landing_stick_min_fall_speed","(已废弃)压地最小下落速度",  0.0,  10.0,  0.1,
 		"【已废弃】配合压地窗口的阈值, 已禁用。", ""],
+	["wall_reflect_tangent_keep", "(已废弃)反弹切向保留(单一)", 0.0,  1.0,   0.05,
+		"【已废弃】>0 时优先生效(覆盖 keep_max/keep_min/lerp_speed). 现在用插值模式更好.", ""],
+	["wall_slide_boost",          "(已废弃)撞墙切向推力", 0.0, 25.0, 0.5,
+		"【已废弃】沿墙面切向推力=滑墙而过. 用户要的是'弹墙掉头', 不是'滑墙'. 保留兼容旧 cfg.", ""],
+	["slope_wall_bounce_absorb",  "(已废弃)撞斜面吸收", 0.0,  1.0,   0.05,
+		"【已废弃】旧的简单反弹机制, 现在走 wall_reflect_normal_factor.", ""],
+	["slope_wall_shake",          "(已废弃)撞斜面震屏", 0.0,  2.0,   0.05,
+		"【已废弃】统一用 wall_crash_shake.", ""],
+	["__hidden_end"],
 ]
 
 # 仅当 CarMesh 节点上挂了支持调参的脚本(如 YuqilinTuning) 时才显示
@@ -382,12 +486,12 @@ const CAR_MESH_PARAMS := [
 
 # BoostFX 强度参数(应用到所有 BoostFX 实例, 玉麒麟 5 个 tailpipe 都同步)
 const BOOST_FX_PARAMS := [
-	["__group", "[b]形状 — 尺寸[/b]"],
+	["__group", "形状 — 尺寸"],
 	["flame_target_length",       "焰柱目标长度(米)",          0.5,  10.0, 0.1,
 		"主焰柱尾焰长度. 玉麒麟车身约 5.3m, 推荐 2.5=半个车身. 公式: length = velocity × lifetime.", ""],
 	["flame_width_mult",          "焰柱宽度系数",              0.1,  3.0, 0.05,
 		"主焰柱粒子粗细. 1.0=默认(约排气管宽), 小=更细, 大=更粗.", ""],
-	["__group", "[b]强度[/b]"],
+	["__group", "强度"],
 	["fx_global_amount_mult",     "喷射特效全局强度",          0.1,  3.0, 0.05,
 		"全部喷射特效粒子量倍率(空喷/落地喷/小喷/双喷/氮气). 0.5=减半, 1.0=默认, 太大可能掉帧.", ""],
 	["nitro_amount_base",         "氮气基础粒子数",            10,   400, 5,
@@ -416,7 +520,7 @@ const BOOST_FX_PARAMS := [
 		"突破1次时粒子速度倍率.", ""],
 	["nitro_velocity_mult_2",     "氮气速度·2突破(红)",        0.3,  3.0, 0.05,
 		"突破2次时粒子速度倍率.", ""],
-	["__group", "[b]星星散粒[/b]"],
+	["__group", "星星散粒"],
 	["stars_enabled",             "星星开关",                  0.0,  1.0,  1.0,
 		"是否显示星星散粒层. 0=全部关闭, 1=启用.", ""],
 	["stars_amount_mult",         "星星数量倍率",              0.0,  3.0,  0.1,
@@ -525,16 +629,87 @@ const CURVE_PROPS := {
 	"uphill_assist_speed_curve":          {"target": "car"},
 }
 
+## cfg 保存路径
+## ⚠️ 历史教训: 之前用 "user://tune.cfg", 但 user:// 在 Godot 里会被解析为
+##   %APPDATA%\Godot\app_userdata\<config/name>\tune.cfg
+##   只要 project.godot 里的 config/name 一改, user:// 就指向新目录, 旧 cfg 读不到,
+##   用户会以为"调好的参数全丢了"。
+## 解决方案: 用项目固定别名 "SimpleRacerLab" 作为 app_userdata 子目录, 绕开 config/name。
+##   这样不管以后项目名怎么改中文/英文/加 emoji, cfg 都落在同一个地方。
+## 迁移: 启动时如果固定目录没 cfg, 会自动从 user:// 和几个历史目录名尝试继承一次。
+const STABLE_PROJECT_ALIAS := "SimpleRacerLab"
+## 历史 user_data 目录名候选 (按优先级), 用于首次启动自动迁移旧 cfg
+const LEGACY_USER_DIR_NAMES: Array[String] = [
+	"3d_car_sphere",       # 原始项目文件夹名 (最常见, 长期使用)
+	"StarDust Racers",     # 早期项目名
+	"SpeedRacer3C",        # 更早期项目名
+	"简单飞车试验场",       # 2026-05-12 定型稿改的新名
+]
+
+## 返回 cfg 保存目录的绝对路径 (app_userdata\SimpleRacerLab)
+## 做法: 拿当前 user_data_dir (app_userdata\<config_name>), 上一层得到 app_userdata, 再拼别名
+static func _stable_cfg_dir() -> String:
+	var current := OS.get_user_data_dir()            # 例: .../app_userdata/简单飞车试验场
+	var parent := current.get_base_dir()              # 例: .../app_userdata
+	return parent.path_join(STABLE_PROJECT_ALIAS)     # 例: .../app_userdata/SimpleRacerLab
+
+static func _stable_cfg_path() -> String:
+	return _stable_cfg_dir().path_join("tune.cfg")
+
+## 该常量保留给老代码引用; 实际读写走 _stable_cfg_path()
 const SAVE_PATH := "user://tune.cfg"
 
 # ============================================================
 #  生命周期
 # ============================================================
 func _ready() -> void:
+	# 首启动 cfg 迁移: 确保旧项目名下调好的 tune.cfg 能继承到稳定目录
+	# (详见 _ensure_cfg_migrated 注释)
+	_ensure_cfg_migrated()
 	_build_ui()
 	visible = true
 	_panel.visible = true
 	call_deferred("_bind_car")
+	# 延迟一帧等 _bind_car 完成, 再自动从 cfg 恢复参数
+	call_deferred("_auto_load_on_start")
+
+
+## 启动时自动加载 cfg (如果稳定目录有 tune.cfg)
+## 这样用户不需要每次手动按"加载"按钮
+func _auto_load_on_start() -> void:
+	var p := _stable_cfg_path()
+	if FileAccess.file_exists(p):
+		_load_from_file()
+
+
+## cfg 迁移: 首次启动 (或改完项目名后第一次启动) 时,
+## 如果稳定目录 app_userdata\SimpleRacerLab\tune.cfg 不存在,
+## 就从 LEGACY_USER_DIR_NAMES 里按优先级找一个现存的 tune.cfg 复制过来。
+## 注意: 这是"继承", 只读不删旧的。旧目录的 cfg 保留, 万一出问题还能手动回滚。
+func _ensure_cfg_migrated() -> void:
+	var stable_path := _stable_cfg_path()
+	if FileAccess.file_exists(stable_path):
+		return  # 已经有了, 不动
+	var stable_dir := _stable_cfg_dir()
+	# 先确保稳定目录存在
+	DirAccess.make_dir_recursive_absolute(stable_dir)
+	# 到 app_userdata 上层去找历史目录
+	var app_userdata_root := OS.get_user_data_dir().get_base_dir()
+	for legacy_name in LEGACY_USER_DIR_NAMES:
+		var legacy_path := app_userdata_root.path_join(legacy_name).path_join("tune.cfg")
+		if FileAccess.file_exists(legacy_path):
+			var bytes := FileAccess.get_file_as_bytes(legacy_path)
+			var out := FileAccess.open(stable_path, FileAccess.WRITE)
+			if out:
+				out.store_buffer(bytes)
+				out.close()
+				print("[Tuner] cfg 首次迁移: ", legacy_path, " → ", stable_path, " (", bytes.size(), " 字节)")
+			else:
+				push_warning("[Tuner] cfg 迁移失败: 无法写入 %s" % stable_path)
+			return
+	print("[Tuner] 稳定目录无 cfg, 历史目录也无 cfg, 首次使用默认值")
+
+
 
 
 func _input(event: InputEvent) -> void:
@@ -877,13 +1052,39 @@ func _build_ui() -> void:
 	scroll.add_child(pages_root)
 	_pages_root = pages_root
 
-	# 解析 PARAMS: 用 __group 切片, 每组一个页
+	# 解析 PARAMS: 支持三级分类
+	#   __page : 顶级页签 (左侧 tab 栏的一项)
+	#   __group: 页内大标题 (高亮黄色, 视觉分组)
+	#   __sub  : 大标题下的小标题 (浅色细字)
+	#   __hidden_start / __hidden_end : 包裹的参数被隐藏(不显示在 UI), 但仍兼容旧 cfg
+	# 兼容旧版: 若 PARAMS 顶部没有 __page, 第一段 __group 自动创建一个 tab
 	var current_list: VBoxContainer = null
 	var current_tab_name: String = ""
+	var hidden_mode: bool = false
 	for p in PARAMS:
-		if p[0] == "__group":
+		if p[0] == "__hidden_start":
+			hidden_mode = true
+			continue
+		if p[0] == "__hidden_end":
+			hidden_mode = false
+			continue
+		if hidden_mode:
+			continue   # 跳过所有 hidden 区参数, 不显示但 _bind_car 仍会读取它们
+		if p[0] == "__page":
+			# 顶级页签
 			current_tab_name = _strip_bbcode(p[1])
 			current_list = _create_tab_page(current_tab_name)
+		elif p[0] == "__group":
+			# 页内大标题
+			if current_list == null:
+				current_tab_name = _strip_bbcode(p[1])
+				current_list = _create_tab_page(current_tab_name)
+			else:
+				_add_group_header(current_list, _strip_bbcode(p[1]))
+		elif p[0] == "__sub":
+			# 大标题下的小标题
+			if current_list != null:
+				_add_sub_header(current_list, _strip_bbcode(p[1]))
 		else:
 			if current_list == null:
 				current_tab_name = "其他"
@@ -966,6 +1167,17 @@ func _add_group_header(parent: Node, title_text: String) -> void:
 	lbl.scroll_active = false
 	lbl.text = "[color=#ffcc66]%s[/color]" % title_text
 	lbl.add_theme_font_size_override("normal_font_size", 15)
+	parent.add_child(lbl)
+
+
+# 小标题 (大标题下的子分组). 比 group 字号小, 颜色浅, 不加分隔线
+func _add_sub_header(parent: Node, title_text: String) -> void:
+	var lbl := RichTextLabel.new()
+	lbl.bbcode_enabled = true
+	lbl.fit_content = true
+	lbl.scroll_active = false
+	lbl.text = "[color=#aac4e8]· %s[/color]" % title_text
+	lbl.add_theme_font_size_override("normal_font_size", 12)
 	parent.add_child(lbl)
 
 
@@ -1461,8 +1673,11 @@ func _on_save() -> void:
 			var pt: Vector2 = c.get_point_position(i)
 			pts.append([pt.x, pt.y])
 		cfg.set_value("curves", cprop, pts)
-	cfg.save(SAVE_PATH)
-	print("[Tuner] 已保存到 ", SAVE_PATH)
+	var save_path := _stable_cfg_path()
+	# 确保稳定目录存在
+	DirAccess.make_dir_recursive_absolute(_stable_cfg_dir())
+	cfg.save(save_path)
+	print("[Tuner] 已保存到 ", save_path)
 
 
 func _on_load() -> void:
@@ -1471,7 +1686,8 @@ func _on_load() -> void:
 
 func _load_from_file() -> void:
 	var cfg := ConfigFile.new()
-	var err := cfg.load(SAVE_PATH)
+	var load_path := _stable_cfg_path()
+	var err := cfg.load(load_path)
 	if err != OK:
 		return
 	# 范围(必须先加载范围, 才能用新范围去校验数值合法性)
@@ -1521,4 +1737,4 @@ func _load_from_file() -> void:
 					c.add_point(Vector2(float(p[0]), float(p[1])))
 			_curves[cprop] = c
 			_apply_curve_to_target(cprop, c)
-	print("[Tuner] 已从 ", SAVE_PATH, " 加载")
+	print("[Tuner] 已从 ", load_path, " 加载")

@@ -14,8 +14,8 @@ compatibility/default_parent_skeleton_in_mesh_instance_3d=true
 
 [application]
 
-config/name="3d_car_sphere"
-run/main_scene="res://track.tscn"
+config/name="简单飞车试验场"
+run/main_scene="res://track_qinghuaci.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
 config/icon="res://icon.svg"
 
