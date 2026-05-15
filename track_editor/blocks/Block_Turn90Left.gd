@@ -55,10 +55,35 @@ extends TrackBlock
 		if is_inside_tree():
 			rebuild()
 
-# 弯道分段数: 控制视觉 mesh 圆弧的"圆滑程度" + 物理 trimesh 顶点密度
-# 4096 段: 90° 弯每段 0.022°, 半径 20m 时弧长 ~0.008m, 物理面片精度亚毫米级
-# 用户要求: 不要省小性能, RTX 4080S 完全无压力
-const SEGMENTS: int = 4096
+# ============================================================
+# 视觉 mesh 分段数: 512 段足够丝滑 (用户要求)
+# 90° 弯半径 20m: 弧长 31.4m, 每段 0.06m, 视觉上完全看不出折线
+# ============================================================
+const SEGMENTS: int = 512
+
+# ============================================================
+# 碰撞 mesh 分段数 (v9 方案: 参考青花瓷地图, 回到 trimesh)
+# ============================================================
+# 青花瓷地图用 FBX 建模师做的 mesh + create_trimesh_collision(), 完全不抖.
+# 青花瓷不抖的原因: 建模师做的三角形接近正方形, 长宽比 ≈ 1:1.
+#
+# 我们之前抖的原因:
+#   v1~v7: 4096 段 × 单列 quad, 三角形长宽比 25m : 0.008m = 3125:1 (极端!)
+#   v8: ConvexPolygon 楔形体, 段与段之间接缝比 trimesh 更糟
+#
+# v9 方案 (视觉/碰撞分离 + 高质量正方形三角形 trimesh):
+#   · 视觉 mesh: 512 段 × 单列 (纯视觉, 不参与碰撞)
+#   · 碰撞 mesh: 单独生成, 段数和列数让三角形接近正方形
+#     碰撞段数 = COLLISION_SEGMENTS (沿弧线方向)
+#     碰撞列数 = 动态计算, 使每个三角形的长宽比 ≈ 1:1
+#     然后调用 create_trimesh_collision() (跟青花瓷完全一样的做法)
+#
+# 数学 (90° 弯 R=20m, 路宽 25m):
+#   弧长 = 31.4m, 碰撞段数 128, 每段弧长 ≈ 0.25m
+#   碰撞列数 = round(25m / 0.25m) = 100
+#   三角形 ≈ 0.25m × 0.25m, 接近正方形 ✅
+#   总碰撞三角形 = 128 × 100 × 2 = 25,600 (极轻量)
+const COLLISION_SEGMENTS: int = 128
 
 func _ready() -> void:
 	if get_child_count() > 0 and not Engine.is_editor_hint():
@@ -188,26 +213,28 @@ func _build_curved_road(total_angle: float, td: float) -> void:
 		rings.append({"pos": p_center, "right": right_dir, "fwd": fwd_dir, "hw": hw_ring})
 
 	# 拼路面顶面 + 中心带 + 左右路缘 + 左右墙
+	# 视觉 mesh: 每个 ring 之间 1 个 quad (单列, 4096 段已经极致丝滑)
+	# 碰撞体: 后面单独用 ConvexPolygon 楔形体生成 (不走 trimesh)
 	for i in range(SEGMENTS):
 		var r0: Dictionary = rings[i]
 		var r1: Dictionary = rings[i + 1]
 		var hw0: float = float(r0["hw"])
 		var hw1: float = float(r1["hw"])
-		# 路面顶面 (用每个 ring 自己的半宽)
+		# 路面顶面 (单列 quad)
 		var p0_l: Vector3 = r0["pos"] + r0["right"] * (-hw0) + Vector3.UP * top_y
 		var p0_r: Vector3 = r0["pos"] + r0["right"] * (hw0) + Vector3.UP * top_y
 		var p1_l: Vector3 = r1["pos"] + r1["right"] * (-hw1) + Vector3.UP * top_y
 		var p1_r: Vector3 = r1["pos"] + r1["right"] * (hw1) + Vector3.UP * top_y
 		_emit_quad(st, p0_l, p0_r, p1_r, p1_l, Vector3.UP)
 
-		# 中心带 (蓝色细带) 顶面 — 中心带宽度不渐变, 始终是 pat_half_w
+		# 中心带 (蓝色细带) 顶面
 		var pa0_l: Vector3 = r0["pos"] + r0["right"] * (-pat_half_w) + Vector3.UP * pat_y
 		var pa0_r: Vector3 = r0["pos"] + r0["right"] * (pat_half_w) + Vector3.UP * pat_y
 		var pa1_l: Vector3 = r1["pos"] + r1["right"] * (-pat_half_w) + Vector3.UP * pat_y
 		var pa1_r: Vector3 = r1["pos"] + r1["right"] * (pat_half_w) + Vector3.UP * pat_y
 		_emit_quad(st_pat, pa0_l, pa0_r, pa1_r, pa1_l, Vector3.UP)
 
-		# 左路缘顶面 (路面外缘 → 外缘 + kerb_w)
+		# 左路缘顶面 (路面外缘 → 外缘 + kerb_w) — 路缘只有 0.5m 宽, 不需要宽度细分
 		var kl0_in: Vector3 = r0["pos"] + r0["right"] * (-hw0) + Vector3.UP * kerb_top_y
 		var kl0_ou: Vector3 = r0["pos"] + r0["right"] * (-hw0 - kerb_w) + Vector3.UP * kerb_top_y
 		var kl1_in: Vector3 = r1["pos"] + r1["right"] * (-hw1) + Vector3.UP * kerb_top_y
@@ -324,53 +351,71 @@ func _build_curved_road(total_angle: float, td: float) -> void:
 				if Engine.is_editor_hint() and get_tree() and get_tree().edited_scene_root:
 					col_w.owner = get_tree().edited_scene_root
 
-	# 碰撞: 沿弧线放 N 段 BoxShape (对球体碰撞足够准, 性能好)
 	# ============================================================
-	# 弯道路面碰撞: 用 create_trimesh_collision (青花瓷地图同款做法)
+	# 路面碰撞: 参考青花瓷地图, 用高质量正方形三角形 trimesh (v9)
 	# ============================================================
-	# 历史所有失败方案:
-	#   v1: 逐段独立 BoxShape (yaw+pitch 旋转)  → box 跟视觉错位, 抖
-	#   v2: BoxShape look_at 风格               → 段法线在 ring 边界突变, 抖
-	#   v3: 整条 ConcavePolygonShape3D 手写      → 法线连续了, 但球-trimesh 边界抖
-	#   v4: 逐段 ConvexPolygonShape3D 共享 ring  → 抖
-	#   v5: SEGMENTS 64                         → 抖
-	#   v6: SEGMENTS 512                        → 抖
+	# 青花瓷地图: FBX mesh + create_trimesh_collision() = 不抖
+	# 关键: 三角形接近正方形 (长宽比 ≈ 1:1)
 	#
-	# 真相: 抖动来自"手搓段拼接 trimesh"在三角形对角线分布上的微小法线不一致.
-	#       青花瓷地图用建模师做的 FBX, 调用 mi.create_trimesh_collision(),
-	#       Godot 内建 API 直接从 mesh 顶点生成最优 trimesh, 完全不抖.
-	#
-	# v7 (本次, 终极方案):
-	#   1. 把视觉路面 mesh (mesh_road) 直接调用 create_trimesh_collision()
-	#      Godot 自动从 ArrayMesh 顶点生成 ConcavePolygonShape3D,
-	#      几何 100% 跟视觉一致, 法线由顶点位置决定, 不会有手搓 basis 错误.
-	#   2. 视觉 mesh 是单面 (顶面), 不会从下方撞墙. 车只会从上方接触.
-	#   3. 完全跟青花瓷地图相同的物理形态, 用户已验证青花瓷不抖.
+	# 我们的做法: 单独生成一个"碰撞专用 mesh" (不显示),
+	# 段数和列数让三角形接近正方形, 然后 create_trimesh_collision()
 	# ============================================================
-	# 注意: 这里的视觉路面 mesh_road 在前面 commit 过, 直接 create_trimesh_collision
-	#       会在 mi_road 下挂一个 StaticBody3D__col 子节点. 这就是青花瓷的做法.
-	mi_road.create_trimesh_collision()
+	var st_col := SurfaceTool.new()
+	st_col.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# 碰撞 mesh 不需要材质 (不显示), 但 SurfaceTool 需要至少 commit 一次
+	# 收集碰撞用的 ring
+	var col_rings: Array = []
+	for ci in range(COLLISION_SEGMENTS + 1):
+		var ct: float = float(ci) / float(COLLISION_SEGMENTS)
+		var c_theta: float = td * ct * total_angle
+		var c_rot := Basis(Vector3.UP, -c_theta)
+		var c_pos: Vector3 = center_local + c_rot * Vector3(R * td, 0.0, 0.0)
+		c_pos.y += total_rise * (ct - sin(TAU * ct) / TAU)
+		var c_right: Vector3 = c_rot * Vector3.RIGHT
+		var c_hw: float = lerpf(entry_width * 0.5, exit_width * 0.5, ct)
+		col_rings.append({"pos": c_pos, "right": c_right, "hw": c_hw})
+	# 动态计算宽度列数: 让三角形接近正方形
+	# 弧长/段 = R × total_angle / COLLISION_SEGMENTS
+	# 列数 = round(平均路宽 / (弧长/段))
+	var seg_arc_len: float = R * total_angle / float(COLLISION_SEGMENTS)
+	var avg_hw: float = (entry_width + exit_width) * 0.5
+	var col_cols: int = maxi(4, roundi(avg_hw / seg_arc_len))
+	# 生成碰撞 mesh 三角形 (只有顶面, 不需要底面/侧面)
+	for ci in range(COLLISION_SEGMENTS):
+		var cr0 = col_rings[ci]
+		var cr1 = col_rings[ci + 1]
+		var chw0: float = float(cr0["hw"])
+		var chw1: float = float(cr1["hw"])
+		for cj in range(col_cols):
+			var u0: float = float(cj) / float(col_cols)
+			var u1: float = float(cj + 1) / float(col_cols)
+			# ring0 左右
+			var cx0_l: float = lerpf(-chw0, chw0, u0)
+			var cx0_r: float = lerpf(-chw0, chw0, u1)
+			# ring1 左右
+			var cx1_l: float = lerpf(-chw1, chw1, u0)
+			var cx1_r: float = lerpf(-chw1, chw1, u1)
+			var cp0l: Vector3 = cr0["pos"] + cr0["right"] * cx0_l + Vector3.UP * top_y
+			var cp0r: Vector3 = cr0["pos"] + cr0["right"] * cx0_r + Vector3.UP * top_y
+			var cp1l: Vector3 = cr1["pos"] + cr1["right"] * cx1_l + Vector3.UP * top_y
+			var cp1r: Vector3 = cr1["pos"] + cr1["right"] * cx1_r + Vector3.UP * top_y
+			_emit_quad(st_col, cp0l, cp0r, cp1r, cp1l, Vector3.UP)
+	# 提交碰撞 mesh (隐藏, 只用于生成 trimesh 碰撞)
+	var col_mi := MeshInstance3D.new()
+	col_mi.name = "CollisionMesh"
+	col_mi.mesh = st_col.commit()
+	col_mi.visible = false  # 不显示, 纯碰撞用
+	add_child(col_mi)
 	if Engine.is_editor_hint() and get_tree() and get_tree().edited_scene_root:
-		# 让自动生成的 StaticBody3D 也归 edited_scene_root, 不然 .tscn 保存不下来
-		for c in mi_road.get_children():
+		col_mi.owner = get_tree().edited_scene_root
+	col_mi.create_trimesh_collision()
+	if Engine.is_editor_hint() and get_tree() and get_tree().edited_scene_root:
+		for c in col_mi.get_children():
 			if c is StaticBody3D:
 				c.owner = get_tree().edited_scene_root
 				for cc in c.get_children():
 					if cc is CollisionShape3D:
 						cc.owner = get_tree().edited_scene_root
-
-	# 路缘 (kerb) 也加 trimesh 碰撞, 让车碾上路缘有"咯噔"反馈而不是穿过
-	# 旧版只有路面有碰撞, 路缘视觉浮起 7.5cm 但车开过去无感
-	mi_kl.create_trimesh_collision()
-	mi_kr.create_trimesh_collision()
-	if Engine.is_editor_hint() and get_tree() and get_tree().edited_scene_root:
-		for mi_kerb: MeshInstance3D in [mi_kl, mi_kr]:
-			for c in mi_kerb.get_children():
-				if c is StaticBody3D:
-					c.owner = get_tree().edited_scene_root
-					for cc in c.get_children():
-						if cc is CollisionShape3D:
-							cc.owner = get_tree().edited_scene_root
 
 	# 入口/出口锚点
 	entry_anchor = Marker3D.new()

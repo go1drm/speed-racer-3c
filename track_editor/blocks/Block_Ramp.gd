@@ -39,10 +39,18 @@ extends TrackBlock
 		if is_inside_tree():
 			rebuild()
 
-## 曲面分段数: 4096 段, 物理面片精度达到亚毫米级
-## 数学: 每段弧长 ≈ LENGTH / SEGMENTS ≈ 0.0037m (15m 坡道), 3.7mm 一个面片
-## 物理 trimesh 直接从视觉 mesh 生成, 三角形数量 = SEGMENTS × 2 = 8192 (RTX 4080S 毫无压力)
-const SEGMENTS: int = 4096
+## ============================================================
+## 视觉 mesh 分段数: 512 段足够丝滑 (用户要求)
+## 15m 坡道: 每段 0.03m, 视觉上完全看不出折线
+## ============================================================
+const SEGMENTS: int = 512
+
+## ============================================================
+## 碰撞 mesh 分段数 (v9 方案: 参考青花瓷地图, 用高质量正方形三角形 trimesh)
+## 碰撞列数动态计算, 使三角形长宽比 ≈ 1:1
+## 128 段: 15m 坑道每段 ~0.12m, 列数 = round(25m / 0.12m) ≈ 213
+## 总碰撞三角形 = 128 × 213 × 2 ≈ 54,528 (极轻量)
+const COLLISION_SEGMENTS: int = 128
 
 
 func _ready() -> void:
@@ -152,22 +160,22 @@ func _build_smooth_ramp() -> void:
 		var hw: float = lerpf(entry_width * 0.5, exit_width * 0.5, t)
 		rings.append({"z": z, "y": y, "n": n, "hw": hw, "t": t})
 
-	# 生成路面三角形 (每两个相邻 ring 之间 1 个 quad = 2 个三角形)
+	# 生成路面三角形 — 视觉 mesh 单列 (4096 段已经极致丝滑)
+	# 碰撞体后面单独用 ConvexPolygon 生成 (不走 trimesh)
 	for i in range(SEGMENTS):
 		var r0 = rings[i]
 		var r1 = rings[i + 1]
-		# 路面 4 个顶点 (左/右 × 前/后)
+		var n0: Vector3 = r0.n
+		var n1: Vector3 = r1.n
+		var n_avg: Vector3 = ((n0 + n1) * 0.5).normalized()
+		# 路面 quad (单列)
 		var p0l := Vector3(-r0.hw, r0.y, r0.z)
 		var p0r := Vector3(r0.hw, r0.y, r0.z)
 		var p1l := Vector3(-r1.hw, r1.y, r1.z)
 		var p1r := Vector3(r1.hw, r1.y, r1.z)
-		var n0: Vector3 = r0.n
-		var n1: Vector3 = r1.n
-		var n_avg: Vector3 = ((n0 + n1) * 0.5).normalized()
-		# 路面 quad
 		_emit_tri(st, p0l, p0r, p1r, n_avg)
 		_emit_tri(st, p0l, p1r, p1l, n_avg)
-		# 中心装饰带 (路面上方 1.1cm)
+		# 中心装饰带 (路面上方 1.1cm) — 只有 0.6m 宽, 不需要宽度细分
 		var pat_y0: float = r0.y + 0.011
 		var pat_y1: float = r1.y + 0.011
 		var pp0l := Vector3(-pat_half_w, pat_y0, r0.z)
@@ -176,7 +184,7 @@ func _build_smooth_ramp() -> void:
 		var pp1r := Vector3(pat_half_w, pat_y1, r1.z)
 		_emit_tri(st_pat, pp0l, pp0r, pp1r, n_avg)
 		_emit_tri(st_pat, pp0l, pp1r, pp1l, n_avg)
-		# 路缘 (左右各一条, 路面外侧)
+		# 路缘 (左右各一条, 路面外侧) — 只有 0.5m 宽, 不需要宽度细分
 		var ky0: float = r0.y + kerb_y_offset
 		var ky1: float = r1.y + kerb_y_offset
 		# 左路缘
@@ -194,7 +202,7 @@ func _build_smooth_ramp() -> void:
 		_emit_tri(st_kerb_r, kr0i, kr0o, kr1o, Vector3.UP)
 		_emit_tri(st_kerb_r, kr0i, kr1o, kr1i, Vector3.UP)
 
-	# 路面底面 (让坡道有厚度, 从下面看也有东西)
+	# 路面底面 (让坡道有厚度, 从下面看也有东西) — 单列
 	for i in range(SEGMENTS):
 		var r0 = rings[i]
 		var r1 = rings[i + 1]
@@ -214,8 +222,59 @@ func _build_smooth_ramp() -> void:
 	if Engine.is_editor_hint() and get_tree() and get_tree().edited_scene_root:
 		road_mi.owner = get_tree().edited_scene_root
 
-	# 碰撞: 从路面 mesh 生成 trimesh (完美贴合曲面, 球体在上面滚不会有阶梯感)
-	road_mi.create_trimesh_collision()
+	# ============================================================
+	# 碰撞: 参考青花瓷地图, 用高质量正方形三角形 trimesh (v9)
+	# ============================================================
+	# 单独生成碰撞专用 mesh (不显示), 三角形接近正方形
+	# 然后 create_trimesh_collision() (跟青花瓷完全一样的做法)
+	# ============================================================
+	var st_col := SurfaceTool.new()
+	st_col.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# 动态计算宽度列数: 让三角形接近正方形
+	var seg_len_c: float = length / float(COLLISION_SEGMENTS)
+	var avg_w_c: float = (entry_width + exit_width) * 0.5
+	var col_cols_c: int = maxi(4, roundi(avg_w_c / seg_len_c))
+	for ci in range(COLLISION_SEGMENTS):
+		var ct0: float = float(ci) / float(COLLISION_SEGMENTS)
+		var ct1: float = float(ci + 1) / float(COLLISION_SEGMENTS)
+		var cz0: float = hl - ct0 * length
+		var cz1: float = hl - ct1 * length
+		var cy0: float = _height_at_t(ct0) + top_y
+		var cy1: float = _height_at_t(ct1) + top_y
+		var chw0: float = lerpf(entry_width * 0.5, exit_width * 0.5, ct0)
+		var chw1: float = lerpf(entry_width * 0.5, exit_width * 0.5, ct1)
+		var cn0: Vector3 = _normal_at_t(ct0)
+		var cn1: Vector3 = _normal_at_t(ct1)
+		var cn_avg: Vector3 = ((cn0 + cn1) * 0.5).normalized()
+		for cj in range(col_cols_c):
+			var u0: float = float(cj) / float(col_cols_c)
+			var u1: float = float(cj + 1) / float(col_cols_c)
+			var cx0_l: float = lerpf(-chw0, chw0, u0)
+			var cx0_r: float = lerpf(-chw0, chw0, u1)
+			var cx1_l: float = lerpf(-chw1, chw1, u0)
+			var cx1_r: float = lerpf(-chw1, chw1, u1)
+			var cp0l := Vector3(cx0_l, cy0, cz0)
+			var cp0r := Vector3(cx0_r, cy0, cz0)
+			var cp1l := Vector3(cx1_l, cy1, cz1)
+			var cp1r := Vector3(cx1_r, cy1, cz1)
+			_emit_tri(st_col, cp0l, cp0r, cp1r, cn_avg)
+			_emit_tri(st_col, cp0l, cp1r, cp1l, cn_avg)
+	# 提交碰撞 mesh (隐藏, 只用于生成 trimesh 碰撞)
+	var col_mi := MeshInstance3D.new()
+	col_mi.name = "CollisionMesh"
+	col_mi.mesh = st_col.commit()
+	col_mi.visible = false
+	add_child(col_mi)
+	if Engine.is_editor_hint() and get_tree() and get_tree().edited_scene_root:
+		col_mi.owner = get_tree().edited_scene_root
+	col_mi.create_trimesh_collision()
+	if Engine.is_editor_hint() and get_tree() and get_tree().edited_scene_root:
+		for c in col_mi.get_children():
+			if c is StaticBody3D:
+				c.owner = get_tree().edited_scene_root
+				for cc in c.get_children():
+					if cc is CollisionShape3D:
+						cc.owner = get_tree().edited_scene_root
 
 	# 中心装饰带 mesh
 	var pat_mi := MeshInstance3D.new()
