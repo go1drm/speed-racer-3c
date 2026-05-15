@@ -565,6 +565,10 @@ func _start_attach() -> void:
 	if _current_anchor != null and _current_anchor.has_method("play_tug_animation"):
 		var car_pos: Vector3 = car.global_position if car != null else Vector3.ZERO
 		_current_anchor.call("play_tug_animation", car_pos, anchor_tug_distance, anchor_tug_duration)
+	# 通知锚点进入被钩住状态 (停止自转, 面朝玩家)
+	if _current_anchor != null and _current_anchor.has_method("set_hooked"):
+		var car_pos2: Vector3 = car.global_position if car != null else Vector3.ZERO
+		_current_anchor.call("set_hooked", true, car_pos2)
 
 
 func _release(success: bool) -> void:
@@ -607,6 +611,9 @@ func _release(success: bool) -> void:
 		# 释放震动
 		if cam_shake_release > 0.0 and car.has_signal("camera_shake_requested"):
 			car.emit_signal("camera_shake_requested", cam_shake_release, 0.25)
+	# 通知锚点恢复自转 (取消被钩住状态)
+	if _current_anchor != null and _current_anchor.has_method("set_hooked"):
+		_current_anchor.call("set_hooked", false)
 	# 取消高亮
 	if _current_anchor != null and _current_anchor.has_method("set_highlighted"):
 		_current_anchor.set_highlighted(false)
@@ -808,6 +815,10 @@ func _update_attached(delta: float) -> void:
 	if cam_shake_intensity > 0.0 and car.has_signal("camera_shake_requested"):
 		# 用极短 duration 0.08, 让 camera 的 _on_shake 不断刷新, 形成持续抖动
 		car.emit_signal("camera_shake_requested", cam_shake_intensity, 0.08)
+
+	# 每帧更新锚点面朝玩家方向 (被钩住时锚点跟随绳子上的赛车改变面朝方向)
+	if _current_anchor != null and _current_anchor.has_method("update_hook_target"):
+		_current_anchor.call("update_hook_target", car_pos)
 
 	# 绳子重绘 (始终可见)
 	_redraw_rope(1.0)

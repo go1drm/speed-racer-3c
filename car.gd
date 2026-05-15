@@ -1107,10 +1107,10 @@ func _ready() -> void:
 	# 用 timer 延迟 1.5s, 等 Tuner 的 cfg 完全加载完之后再打 log, 看到的才是真正运行时值
 	get_tree().create_timer(1.5).timeout.connect(_log_wall_physics_status)
 
-	# 记录 CarMesh 的初始位置和朝向(由 glb/tscn 设置, 代表美术摆好的出生点)
-	_initial_car_mesh_basis = car_mesh.global_transform.basis
-	_initial_car_mesh_position = car_mesh.global_position
-	_initial_recorded = true
+	# 记录 CarMesh 的初始位置和朝向 — 延迟到帧末执行
+	# 原因: TrackRunner 在 add_child(car) 之后才设置 CarMesh 的 global_position (因为 top_level=true)
+	# 如果在 _ready 里直接记录, 拿到的是 tscn 默认值而非 spawn_position
+	call_deferred("_record_initial_position")
 
 	# 出生时: 直接把刚体对齐到 CarMesh 的位置(你在编辑器里调好的位置)
 	call_deferred("_snap_to_car_mesh_origin")
@@ -1132,6 +1132,16 @@ func _ready() -> void:
 	_rewind_buffer.resize(_rewind_capacity)
 	_rewind_write_idx = 0
 	_rewind_size = 0
+
+
+func _record_initial_position() -> void:
+	# 延迟记录 CarMesh 的初始位置和朝向
+	# 此时 TrackRunner 已经设置好了 CarMesh 的 global_position (top_level=true 需要手动同步)
+	if car_mesh:
+		_initial_car_mesh_basis = car_mesh.global_transform.basis
+		_initial_car_mesh_position = car_mesh.global_position
+		_initial_recorded = true
+		print("[Car] 记录出生点位置: ", _initial_car_mesh_position)
 
 
 func _snap_to_car_mesh_origin() -> void:

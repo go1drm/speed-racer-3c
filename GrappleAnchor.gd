@@ -190,6 +190,12 @@ func _apply_highlight() -> void:
 # 运行时动画: 自转 + 浮动
 # ------------------------------------------------------------
 # ------------------------------------------------------------
+# 被钩住状态 (停止自转, 面朝玩家)
+# ------------------------------------------------------------
+var _is_hooked: bool = false
+var _hook_target_pos: Vector3 = Vector3.ZERO  # 被钩住时跟踪的玩家位置
+
+# ------------------------------------------------------------
 # 被扯动画 (钩住时模型朝玩家方向被扯一下再回弹)
 # ------------------------------------------------------------
 var _tug_active: bool = false
@@ -210,11 +216,34 @@ func play_tug_animation(player_pos: Vector3, tug_dist: float, tug_dur: float) ->
 	_tug_active = true
 
 
+## 设置被钩住状态 (由 GrappleHook 调用)
+## hooked=true 时停止自转, 面朝玩家; hooked=false 时恢复自转
+func set_hooked(hooked: bool, target_pos: Vector3 = Vector3.ZERO) -> void:
+	_is_hooked = hooked
+	_hook_target_pos = target_pos
+
+
+## 每帧更新玩家位置 (被钩住期间由 GrappleHook 调用, 让锚点持续面朝玩家)
+func update_hook_target(target_pos: Vector3) -> void:
+	_hook_target_pos = target_pos
+
+
 func _process(delta: float) -> void:
 	if not Engine.is_editor_hint():
 		# 运行时让锚点缓慢自转 + 上下浮动, 视觉更醒目
 		if _vis_root:
-			_vis_root.rotation.y += delta * 0.8
+			if _is_hooked:
+				# 被钩住: 停止自转, 面朝玩家方向 (符合物理: 被绳子拽住会朝拽的方向)
+				var dir_to_player: Vector3 = _hook_target_pos - global_position
+				dir_to_player.y = 0.0  # 只在水平面旋转
+				if dir_to_player.length() > 0.01:
+					var target_angle: float = atan2(dir_to_player.x, dir_to_player.z)
+					# 平滑插值旋转, 不要瞬间跳变
+					_vis_root.rotation.y = lerp_angle(_vis_root.rotation.y, target_angle, delta * 8.0)
+			else:
+				# 未被钩住: 正常自转
+				_vis_root.rotation.y += delta * 0.8
+
 			# 浮动动画: ±0.15m
 			var float_y: float = sin(Time.get_ticks_msec() / 600.0) * 0.15
 

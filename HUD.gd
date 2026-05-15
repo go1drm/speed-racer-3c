@@ -418,13 +418,13 @@ func _on_songqian_state_changed(active: bool) -> void:
 
 func _on_air_boost_triggered(air_time: float) -> void:
 	# 【炫点文案】中文. 气泡时长参数保留原 default (不带 hold/fade 参数)
-	_show_boost_popup("空喷  %.1f秒飞跃" % air_time, Color(1.0, 0.5, 0.95, 1.0))
+	_show_boost_popup("空喷", Color(1.0, 0.5, 0.95, 1.0))
 	_combo_protect_until = Time.get_ticks_msec() / 1000.0 + 0.4
 
 
 func _on_landing_boost_triggered(air_time: float) -> void:
 	# 【炫点文案】中文.
-	_show_boost_popup("落地喷  +%.1f秒" % air_time, Color(0.5, 1.0, 0.7, 1.0), 0.9, 0.4)
+	_show_boost_popup("落地喷", Color(0.5, 1.0, 0.7, 1.0), 0.9, 0.4)
 
 
 # 三喷 (松前后退喷) 触发: 弹红色"三喷"字, 突出高级技巧感
@@ -606,14 +606,24 @@ func _build_anchor_indicator() -> void:
 	_anchor_dist_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_anchor_indicator.add_child(_anchor_dist_label)
 
-	# "按空格发射钩爪" 提示文字 (蓝色状态时显示)
+	# "按空格发射钩爪" 提示文字 (蓝色状态时显示, 固定位置白字黑边)
 	_anchor_hint_label = Label.new()
 	_anchor_hint_label.text = "按空格发射钩爪"
-	_anchor_hint_label.add_theme_font_size_override("font_size", 18)
-	_anchor_hint_label.add_theme_color_override("font_color", Color(0.3, 0.85, 1.0, 1.0))
+	_anchor_hint_label.add_theme_font_size_override("font_size", 22)
+	_anchor_hint_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 1.0))
+	# 黑色描边
+	_anchor_hint_label.add_theme_constant_override("outline_size", 3)
+	_anchor_hint_label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 1.0))
 	_anchor_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_anchor_hint_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_anchor_hint_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_anchor_hint_label.visible = false
+	# 固定位置: 使用锚点定位在屏幕右侧中间偏上 (不跟随锚点图标)
+	_anchor_hint_label.set_anchors_preset(Control.PRESET_CENTER_RIGHT)
+	_anchor_hint_label.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_anchor_hint_label.grow_vertical = Control.GROW_DIRECTION_BOTH
+	_anchor_hint_label.position = Vector2(-200, -40)
+	# 挂在 _anchor_indicator 上层, 不受图标位置影响
 	_anchor_indicator.add_child(_anchor_hint_label)
 
 	# 初始隐藏
@@ -832,9 +842,8 @@ func _update_anchor_indicator() -> void:
 	_anchor_dist_label.text = "%dm" % int(nearest_dist)
 	_anchor_dist_label.position = icon_center + Vector2(-15, ANCHOR_ICON_SIZE * 0.5 * _anchor_icon.scale.y + 2)
 
-	# "按空格发射钩爪" 提示文字 (显示在图标右侧)
-	if _anchor_hint_label and _anchor_hint_label.visible:
-		_anchor_hint_label.position = icon_center + Vector2(ANCHOR_ICON_SIZE * 0.5 * _anchor_icon.scale.x + 8, -12)
+	# "按空格发射钩爪" 提示文字 (固定位置, 不跟随图标)
+	# 位置已在 _build_anchor_indicator 中通过锚点预设固定, 无需每帧更新位置
 
 
 ## 计算从屏幕中心沿 dir 方向到屏幕边缘的交点 (留 margin)

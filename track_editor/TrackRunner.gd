@@ -149,6 +149,12 @@ func _spawn_default_car_and_camera(spawn_pos: Vector3, spawn_yaw: float) -> void
 	# 设置 transform: 位置 + yaw 旋转
 	var car_basis := Basis(Vector3.UP, spawn_yaw)
 	car.global_transform = Transform3D(car_basis, spawn_pos)
+	# CarMesh 是 top_level=true, 不会自动跟随父节点, 必须手动同步位置和朝向
+	var car_mesh_node: Node3D = car.get_node_or_null("CarMesh")
+	if car_mesh_node:
+		var sphere_off: Vector3 = car.get("sphere_offset") if "sphere_offset" in car else Vector3.DOWN
+		car_mesh_node.global_position = spawn_pos + sphere_off
+		car_mesh_node.global_transform.basis = car_basis
 	# Camera (复用现有 Camera3D.gd)
 	var cam_script := load("res://Camera3D.gd")
 	var cam := Camera3D.new()
