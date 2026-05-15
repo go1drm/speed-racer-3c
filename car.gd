@@ -398,6 +398,10 @@ extends RigidBody3D
 @export var double_boost_shake: float = 0.0
 @export var nitro_boost_shake: float = 0.0
 
+## 空中喷射效率: 所有喷射(小喷/双喷/氮气/空喷/落地喷/钩索弹射等)在空中时推力的缩放比例
+## 1.0 = 空中和地面推力一样; 0.6 = 空中只有地面 60% 的推力; 1.5 = 空中比地面强 50%
+@export var boost_air_efficiency: float = 1.0
+
 # ---------------- 叠喷(连喷) ----------------
 @export_group("Stack Boost")
 ## 叠喷链接续判定窗口: 前一段 boost 结束后多少秒内开新 boost 算"接力"
@@ -842,6 +846,15 @@ var _stack_chain_index: int = 0               # 当前在叠喷链中是第几�
 var _stack_breakthrough_count: int = 0        # 当前叠喷链已成功突破极速的次数
 var _stack_current_breakthrough: bool = false # 当前 boost 段本身是否处于"突破"状态
 var _stack_chain_seq: Array[String] = []      # 叠喷链中每段的字母序: ["c", "w", "w"] 等
+var _stack_chain_types: Array[String] = []    # 叠喷链中每段的具体 boost type: ["grapple_nitro", "grapple_boost", "air"] 等
+
+# ---- 钩索叠喷 (独立系统, 不走普通叠喷逻辑) ----
+var _grapple_stack_chain_index: int = 0               # 钩索叠喷链中当前段索引
+var _grapple_stack_breakthrough_count: int = 0        # 钩索叠喷已突破次数
+var _grapple_stack_current_breakthrough: bool = false  # 当前段是否处于钩索叠喷突破状态
+var _grapple_stack_chain_seq: Array[String] = []      # 钩索叠喷链字母序: ["c", "w", "w"]
+var _grapple_stack_chain_types: Array[String] = []    # 钩索叠喷链具体类型
+var _grapple_stack_cww_done: bool = false              # CWW 终结后禁止再触发空喷
 
 # Q 输入宽限期: 按 Q 时方向键还没到位 → 给一段时间等方向键, 期间一旦满足就入漂
 var _drift_input_grace_left: float = 0.0
@@ -1073,6 +1086,18 @@ var _grapple_hook: Node = null
 # 正常从跳台飞出不会触发 (因为 _grapple_active 从未为 true, GrappleHook 不会设此值)
 var _grapple_release_align_left: float = 0.0
 
+# 增压弹射窗口: 释放钩索后一定时间内按 W 可触发独立的增压弹射
+# _grapple_boost_window_left > 0 表示当前在窗口内
+var _grapple_boost_window_left: float = 0.0
+# 增压弹射是否已消耗 (每次释放只能用一次)
+var _grapple_boost_used: bool = false
+# 起钩绳长比例 (由 GrappleHook 释放时传入, 用于缩放弹射推力)
+var _grapple_boost_dist_ratio: float = 0.0
+# 钩索氮气弹射是否已触发 (每次释放只能用一次)
+var _grapple_nitro_boost_used: bool = false
+# 本次钩索拉动时间 (秒, 由 GrappleHook 释放时传入, 用于增压弹射最小时间判定)
+var _grapple_pull_time: float = 0.0
+
 # 初始朝向(由 _ready 记录, 用于复位时恢复)
 var _initial_car_mesh_basis: Basis = Basis.IDENTITY
 var _initial_car_mesh_position: Vector3 = Vector3.ZERO
@@ -1273,13 +1298,32 @@ func _spawn_grapple_hook() -> void:
 		return
 	if find_child("GrappleHook", false, false):
 		_grapple_hook = get_node_or_null("GrappleHook")
+		if _grapple_hook != null and _grapple_hook.has_signal("grapple_boost_window_opened"):
+			if not _grapple_hook.is_connected("grapple_boost_window_opened", _on_grapple_boost_window_opened):
+				_grapple_hook.connect("grapple_boost_window_opened", _on_grapple_boost_window_opened)
 		return
 	var hook: Node = grapple_hook_scene.instantiate()
 	hook.name = "GrappleHook"
 	add_child(hook)
 	# 让 GrappleHook 自动用父节点(本 car)作为 RigidBody3D, 不需要额外设 car_path
 	_grapple_hook = hook
+	# 连接钩索弹射窗口信号
+	if hook.has_signal("grapple_boost_window_opened"):
+		hook.connect("grapple_boost_window_opened", _on_grapple_boost_window_opened)
 	print("[Car] GrappleHook 已挂载")
+
+
+func _on_grapple_boost_window_opened(dist_ratio: float, pull_time: float = 0.0) -> void:
+	# 钩索释放成功后, 开启弹射窗口
+	if _grapple_hook == null:
+		return
+	var window_time: float = float(_grapple_hook.get("grapple_boost_window"))
+	_grapple_boost_window_left = window_time
+	_grapple_boost_used = false
+	_grapple_nitro_boost_used = false
+	_grapple_boost_dist_ratio = dist_ratio
+	_grapple_pull_time = pull_time
+	print("[Car] 弹射窗口开启: %.2fs, 绳长比例=%.2f, 拉动时间=%.2f" % [window_time, dist_ratio, pull_time])
 
 
 # ============================================================
@@ -1367,6 +1411,9 @@ func _physics_process(delta: float) -> void:
 		_apply_engine_and_brake(delta)
 		_apply_friction(delta)
 		_apply_ground_stick(delta)
+
+	# 喷射推力: 无论空中/地面都施加(空中时按 boost_air_efficiency 缩放)
+	_apply_boost_thrust(delta)
 
 	_update_drift_charge(delta)
 	_check_drift_timeout(delta)
@@ -1748,6 +1795,12 @@ func _apply_engine_and_brake(_delta: float) -> void:
 	# 叠喷突破: 当前段处于突破状态时, 极速被临时拔高
 	if is_boosting and _stack_current_breakthrough and _stack_breakthrough_count > 0:
 		effective_top *= pow(stack_breakthrough_top_mult, _stack_breakthrough_count)
+	# 钩索叠喷突破 (独立参数)
+	if is_boosting and _grapple_stack_current_breakthrough and _grapple_stack_breakthrough_count > 0:
+		var g_mult: float = 1.25
+		if _grapple_hook:
+			g_mult = float(_grapple_hook.get("grapple_stack_breakthrough_mult"))
+		effective_top *= pow(g_mult, _grapple_stack_breakthrough_count)
 	# 漂移上限叠加(取较小者). 漂移氮气时上限提升, 让过弯更快
 	if state == State.DRIFT and drift_max_speed > 0.0:
 		var drift_top: float = drift_max_speed
@@ -1845,49 +1898,8 @@ func _apply_engine_and_brake(_delta: float) -> void:
 			var brake_time_k: float = _sample_curve_safe(drift_speed_brake_curve, brake_t_norm, 1.0)
 			apply_central_force(-v_horiz.normalized() * drift_speed_brake_strength * over_ratio * brake_time_k * mass)
 
-	# 喷射推力沿惯性方向(但同样受 effective_top 限制)
-	if is_boosting and current_speed < effective_top:
-		var vel_dir: Vector3 = v_horiz
-		if vel_dir.length() > 1.0:
-			vel_dir = vel_dir.normalized()
-		else:
-			vel_dir = forward
-		# 喷射推力也投影到坡面切向(防止上坡时喷射向斜上, 导致飞车/脱地)
-		if slope_align_thrust:
-			var vel_on_slope: Vector3 = vel_dir - ground_n * vel_dir.dot(ground_n)
-			if vel_on_slope.length() > 0.001:
-				vel_dir = vel_on_slope.normalized()
-		# 【三喷特殊】songqian_back 的推力沿车头反方向 (-forward), 不沿 velocity
-		# 这是"后退喷"的本质: 车在松前打滑, 车头朝侧面, "后退"= 朝车头反方向推
-		# 实际效果是把赛车朝运动方向继续推, 但来源是车尾喷射, 视觉/音效上有"反向爆发"感
-		if boost_type == "songqian_back":
-			vel_dir = car_mesh.global_transform.basis.z   # +Z 是车尾方向 (= -forward)
-			vel_dir.y = 0.0
-			if vel_dir.length() > 0.001:
-				vel_dir = vel_dir.normalized()
-		apply_central_force(vel_dir * boost_power * mass)
-
-	# ============ 加速带 / 弹射器 持续推力 ============
-	# 两段式加速带: apply_speed_pad_boost() 启动时给了瞬时冲量, 这里再给短暂持续推力
-	# 数学: F = speed_pad_boost_power × (t_left / t_total) × mass × forward  // 线性衰减
-	# 条件: 持续时间未到 + 速度未超过顶速 + 沿车头方向
-	if _speed_pad_boost_left > 0.0 and current_speed < effective_top:
-		var pad_dir: Vector3 = forward
-		# 坡面切向对齐 (防止上坡时往天上推)
-		if slope_align_thrust:
-			var pad_on_slope: Vector3 = pad_dir - ground_n * pad_dir.dot(ground_n)
-			if pad_on_slope.length() > 0.001:
-				pad_dir = pad_on_slope.normalized()
-		var pad_progress: float = clampf(_speed_pad_boost_left / maxf(_speed_pad_boost_total, 0.01), 0.0, 1.0)
-		apply_central_force(pad_dir * _speed_pad_boost_power * pad_progress * mass)
-
-	# ============ 空喷滞空感 (下压力) ============
-	# 只在空喷进行中 + 离地时施加一个向下的力
-	# 数学: F = (0, -air_boost_downforce, 0) * mass    (相当于额外重力)
-	# 效果: 赛车在空中不会被水平推力推飞, 会更快回到地面, 给"悬浮滑翔"的手感
-	# 不生效条件: 不在空喷 / 落地后(压地窗口和正常重力接管)
-	if is_boosting and boost_type == "air" and _is_airborne and air_boost_downforce > 0.0:
-		apply_central_force(Vector3(0.0, -air_boost_downforce, 0.0) * mass)
+	# 【已移至 _apply_boost_thrust】喷射推力 / 加速带持续推力 / 空喷下压力
+	# 现在独立于 on_ground 判定, 空中也能施加喷射推力
 
 	# ============ 反打减速 (旧机制, drift_counter_enabled=true 时绕过) ============
 	# 【2026-05-13 重构说明】此段是旧"反打=刹车"机制, 新真实反打机制不需要它.
@@ -1908,6 +1920,104 @@ func _apply_engine_and_brake(_delta: float) -> void:
 
 
 # ============================================================
+#  喷射推力: 独立于引擎/摩擦, 空中/地面都施加
+#  空中时按 boost_air_efficiency 缩放推力
+# ============================================================
+func _apply_boost_thrust(_delta: float) -> void:
+	var forward: Vector3 = -car_mesh.global_transform.basis.z
+	forward.y = 0.0
+	if forward.length() > 0.001:
+		forward = forward.normalized()
+	else:
+		forward = Vector3.FORWARD
+
+	var v_horiz: Vector3 = linear_velocity
+	v_horiz.y = 0.0
+	var current_speed: float = v_horiz.length()
+
+	# ============ 空中喷射: 直接给当前速度方向一个冲量 ============
+	# 简化逻辑: 空中不走持续力/极速限制, 直接 impulse 加到水平速度上
+	if _is_airborne and is_boosting and boost_power > 0.0:
+		var vel_dir: Vector3 = v_horiz
+		if vel_dir.length() > 1.0:
+			vel_dir = vel_dir.normalized()
+		else:
+			vel_dir = forward
+		# 冲量 = boost_power × air_efficiency × delta (等效加速度直接加到速度)
+		var impulse_strength: float = boost_power * boost_air_efficiency * _delta
+		apply_central_impulse(vel_dir * impulse_strength * mass)
+		# 空中喷射不走下面的地面逻辑, 直接处理加速带后返回
+		if _speed_pad_boost_left > 0.0:
+			var pad_dir: Vector3 = forward
+			var pad_progress: float = clampf(_speed_pad_boost_left / maxf(_speed_pad_boost_total, 0.01), 0.0, 1.0)
+			apply_central_impulse(pad_dir * _speed_pad_boost_power * pad_progress * _delta * mass)
+		# 空喷滞空感 (下压力)
+		if boost_type == "air" and air_boost_downforce > 0.0:
+			apply_central_force(Vector3(0.0, -air_boost_downforce, 0.0) * mass)
+		return
+
+	# ============ 地面喷射: 持续力 + 极速限制 ============
+	# 当前生效的极速
+	var effective_top: float = top_speed_boosted if is_boosting else max_speed
+	if _speed_pad_boost_left > 0.0:
+		effective_top = maxf(effective_top, top_speed_boosted)
+	if is_boosting and _stack_current_breakthrough and _stack_breakthrough_count > 0:
+		effective_top *= pow(stack_breakthrough_top_mult, _stack_breakthrough_count)
+	# 钩索叠喷突破 (独立参数)
+	if is_boosting and _grapple_stack_current_breakthrough and _grapple_stack_breakthrough_count > 0:
+		var g_mult2: float = 1.25
+		if _grapple_hook:
+			g_mult2 = float(_grapple_hook.get("grapple_stack_breakthrough_mult"))
+		effective_top *= pow(g_mult2, _grapple_stack_breakthrough_count)
+	if state == State.DRIFT and drift_max_speed > 0.0:
+		var dms: float = drift_max_speed
+		if _is_drift_nitro():
+			dms *= drift_nitro_max_speed_mult
+		effective_top = minf(effective_top, dms)
+	effective_top = maxf(effective_top, 1.0)
+
+	# 地面法线
+	var ground_n: Vector3 = Vector3.UP
+	if ground_ray and ground_ray.is_colliding():
+		var raw_gn: Vector3 = ground_ray.get_collision_normal().normalized()
+		if raw_gn.length_squared() >= 0.01:
+			ground_n = raw_gn
+
+	# 喷射推力沿惯性方向(受 effective_top 限制)
+	if is_boosting and current_speed < effective_top:
+		var vel_dir: Vector3 = v_horiz
+		if vel_dir.length() > 1.0:
+			vel_dir = vel_dir.normalized()
+		else:
+			vel_dir = forward
+		# 喷射推力投影到坡面切向(防止上坡时喷射向斜上, 导致飞车/脱地)
+		if slope_align_thrust:
+			var vel_on_slope: Vector3 = vel_dir - ground_n * vel_dir.dot(ground_n)
+			if vel_on_slope.length() > 0.001:
+				vel_dir = vel_on_slope.normalized()
+		# 【三喷特殊】songqian_back 的推力沿车头反方向 (-forward), 不沿 velocity
+		if boost_type == "songqian_back":
+			vel_dir = car_mesh.global_transform.basis.z   # +Z 是车尾方向 (= -forward)
+			vel_dir.y = 0.0
+			if vel_dir.length() > 0.001:
+				vel_dir = vel_dir.normalized()
+		apply_central_force(vel_dir * boost_power * mass)
+
+	# ============ 加速带 / 弹射器 持续推力 ============
+	if _speed_pad_boost_left > 0.0 and current_speed < effective_top:
+		var pad_dir: Vector3 = forward
+		if slope_align_thrust and not _is_airborne:
+			var pad_on_slope: Vector3 = pad_dir - ground_n * pad_dir.dot(ground_n)
+			if pad_on_slope.length() > 0.001:
+				pad_dir = pad_on_slope.normalized()
+		var pad_progress: float = clampf(_speed_pad_boost_left / maxf(_speed_pad_boost_total, 0.01), 0.0, 1.0)
+		apply_central_force(pad_dir * _speed_pad_boost_power * pad_progress * mass)
+
+	# ============ 空喷滞空感 (下压力) ============
+	if is_boosting and boost_type == "air" and _is_airborne and air_boost_downforce > 0.0:
+		apply_central_force(Vector3(0.0, -air_boost_downforce, 0.0) * mass)
+
+# ============================================================
 #  V2 - 摩擦: 速度分解 + 曲线调制
 #  所有摩擦沿"该速度分量反方向"施加, 即惯性反向 ✓
 # ============================================================
@@ -1921,6 +2031,12 @@ func _apply_friction(delta: float) -> void:
 	var ref_speed: float = top_speed_boosted if is_boosting else max_speed
 	if is_boosting and _stack_current_breakthrough and _stack_breakthrough_count > 0:
 		ref_speed *= pow(stack_breakthrough_top_mult, _stack_breakthrough_count)
+	# 钩索叠喷突破 (独立参数)
+	if is_boosting and _grapple_stack_current_breakthrough and _grapple_stack_breakthrough_count > 0:
+		var g_mult3: float = 1.25
+		if _grapple_hook:
+			g_mult3 = float(_grapple_hook.get("grapple_stack_breakthrough_mult"))
+		ref_speed *= pow(g_mult3, _grapple_stack_breakthrough_count)
 	ref_speed = maxf(ref_speed, 1.0)
 	var speed_ratio: float = clampf(total_speed / ref_speed, 0.0, 1.2)
 
@@ -2550,6 +2666,11 @@ func _update_visuals(delta: float) -> void:
 		_grapple_release_align_left -= delta
 		if _grapple_release_align_left < 0.0:
 			_grapple_release_align_left = 0.0
+	# 钩索弹射窗口倒计时
+	if _grapple_boost_window_left > 0.0:
+		_grapple_boost_window_left -= delta
+		if _grapple_boost_window_left < 0.0:
+			_grapple_boost_window_left = 0.0
 	var _do_airborne_align: bool = _grapple_active or _grapple_release_align_left > 0.0
 	if _is_airborne and linear_velocity.length() > 0.5 and _do_airborne_align:
 		var v_xz: Vector3 = linear_velocity
@@ -3020,6 +3141,14 @@ func _try_start_drift() -> bool:
 	_stack_breakthrough_count = 0
 	_stack_current_breakthrough = false
 	_stack_chain_seq.clear()
+	_stack_chain_types.clear()
+	# 钩索叠喷链也一并清零
+	_grapple_stack_chain_index = 0
+	_grapple_stack_breakthrough_count = 0
+	_grapple_stack_current_breakthrough = false
+	_grapple_stack_chain_seq.clear()
+	_grapple_stack_chain_types.clear()
+	_grapple_stack_cww_done = false
 	# 记录入漂时车头方向(XZ 投影), 后续每帧以此为基准算 yaw 变化
 	var _fwd0: Vector3 = -car_mesh.global_transform.basis.z
 	_prev_forward_xz = Vector2(_fwd0.x, _fwd0.z).normalized()
@@ -3245,6 +3374,32 @@ func angle_difference(a: float, b: float) -> float:
 #  喷射
 # ============================================================
 func _try_boost_w() -> void:
+	# -1) 增压弹射: 释放钩索后窗口内按 W, 触发独立的增压弹射 (与空喷互不干扰)
+	#     优先级最高: 如果在弹射窗口内, 直接消耗窗口触发弹射, 不走后续逻辑
+	#     额外条件: 在钩索上待够 grapple_boost_min_pull_time 才能触发
+	if _grapple_boost_window_left > 0.0 and not _grapple_boost_used and _grapple_hook != null:
+		if bool(_grapple_hook.get("grapple_boost_enabled")):
+			var min_pull: float = float(_grapple_hook.get("grapple_boost_min_pull_time"))
+			if _grapple_pull_time >= min_pull:
+				_grapple_boost_used = true
+				var g_power: float = float(_grapple_hook.get("grapple_boost_power"))
+				var g_time: float = float(_grapple_hook.get("grapple_boost_time"))
+				var g_shake: float = float(_grapple_hook.get("grapple_boost_shake"))
+				# 绳长曲线缩放推力
+				var length_curve: Curve = _grapple_hook.get("grapple_boost_length_curve") as Curve
+				var length_mult: float = 1.0
+				if length_curve != null:
+					length_mult = length_curve.sample(_grapple_boost_dist_ratio)
+				var final_power: float = g_power * length_mult
+				_start_boost("grapple_boost", final_power, g_time)
+				if g_shake > 0.0:
+					emit_signal("camera_shake_requested", g_shake, 0.2)
+				emit_signal("boost_triggered", "grapple_boost")
+				print("[Car] 增压弹射! power=%.1f (绳长倍率=%.2f), time=%.2f" % [final_power, length_mult, g_time])
+				return
+			else:
+				print("[Car] 增压弹射条件不足: 拉动时间 %.2fs < 最小 %.2fs, 跳过" % [_grapple_pull_time, min_pull])
+
 	# 0) 空中按 W: 【新规则】离地瞬间按 W 立刻触发空喷推力, 不再等落地
 	#    旧逻辑: 缓存意图 → 落地瞬间释放. 玩家反馈"在空中按 W 没感觉, 落地才爆发, 操作脱节"
 	#    新逻辑: 空中按 W 立即 _start_boost("air", ...) 给推力, 让"飞起来再加速"成为可感知的操作
@@ -3255,7 +3410,8 @@ func _try_boost_w() -> void:
 	#        c) 落地预输入回放 _pending_landing_w_left 也跳过空喷只走落地喷/窗口路径)
 	#      触发条件: air_boost_enabled + 离地 + 当前腾空时间 ≥ air_boost_min_air_time
 	#      不满足 min_air_time 的: 不空喷, 也不缓存(因为没法及时反馈), 走原本的"空中无效 W"
-	if air_boost_enabled and _is_airborne and not _air_boost_armed:
+	# 钩索叠喷 CWW 终结后, 本次窗口期内禁止再触发空喷
+	if air_boost_enabled and _is_airborne and not _air_boost_armed and not _grapple_stack_cww_done:
 		if _air_time >= air_boost_min_air_time:
 			_air_boost_armed = true                  # 标记"本次腾空空喷资格已消费"
 			_air_boost_armed_left = 0.0              # 不再用倒计时, 留 0 兼容旧字段
@@ -3441,13 +3597,43 @@ func _try_nitro() -> void:
 	#   1) 不能在氮气进行中再放氮气(防 CC / 氮气叠氮气)
 	#   2) 小喷/双喷进行中可以放氮气(支持 WCW 路径)
 	#   3) 漂移中可以放氮气(漂移氮气过弯增强)
-	if is_boosting and boost_type == "nitro":
+	if is_boosting and (boost_type == "nitro" or boost_type == "grapple_nitro"):
 		print("[Car] 氮气进行中, 不能再放氮气")
 		emit_signal("boost_triggered", "blocked_boosting")
 		return
+
+	# 钩索氮气弹射: 在钩索弹射窗口内释放氮气, 叠加形成强力推进
+	var is_grapple_nitro: bool = false
+	if _grapple_boost_window_left > 0.0 and not _grapple_nitro_boost_used and _grapple_hook != null:
+		if bool(_grapple_hook.get("grapple_nitro_boost_enabled")):
+			is_grapple_nitro = true
+			_grapple_nitro_boost_used = true
+
 	nitro_stock -= 1
 	emit_signal("nitro_stock_changed", nitro_stock, max_nitro_stock)
-	_start_boost("nitro", nitro_power, nitro_time)
+
+	if is_grapple_nitro:
+		# 钩索氮气弹射: 氮气基础 + 额外推力/时间
+		var extra_power: float = float(_grapple_hook.get("grapple_nitro_extra_power"))
+		var extra_time: float = float(_grapple_hook.get("grapple_nitro_extra_time"))
+		var g_shake: float = float(_grapple_hook.get("grapple_nitro_shake"))
+		var g_fov: float = float(_grapple_hook.get("grapple_nitro_fov_boost"))
+		# 绳长曲线也影响额外推力
+		var length_curve: Curve = _grapple_hook.get("grapple_boost_length_curve") as Curve
+		var length_mult: float = 1.0
+		if length_curve != null:
+			length_mult = length_curve.sample(_grapple_boost_dist_ratio)
+		var final_power: float = nitro_power + extra_power * length_mult
+		var final_time: float = nitro_time + extra_time
+		_start_boost("grapple_nitro", final_power, final_time)
+		if g_shake > 0.0:
+			emit_signal("camera_shake_requested", g_shake, 0.3)
+		# 额外 FOV 效果通过临时增加 cam_fov_boost 实现 (由 Camera3D 读取)
+		# 这里直接用 boost_triggered 信号通知 HUD
+		emit_signal("boost_triggered", "grapple_nitro")
+		print("[Car] 钩索氮气弹射! power=%.1f (绳长倍率=%.2f), time=%.2f" % [final_power, length_mult, final_time])
+	else:
+		_start_boost("nitro", nitro_power, nitro_time)
 
 
 # ============================================================
@@ -3488,12 +3674,21 @@ func _try_nitro() -> void:
 #   · 例 stack_power_decay = [1.0, 0.85, 0.72, 0.6]: 第 0 段 100%, 第 1 段 85%...
 # ============================================================
 func _check_and_apply_stack_boost(new_type: String) -> void:
+	# === 钩索叠喷分流: 钩索相关类型走独立系统 ===
+	# 钩索叠喷的参与者: grapple_nitro(C), grapple_boost(W), air(W, 仅在钩索链进行中)
+	var is_grapple_type: bool = (new_type == "grapple_nitro" or new_type == "grapple_boost")
+	# 如果当前钩索叠喷链已经在进行中, air 也加入钩索叠喷链
+	var grapple_chain_active: bool = _grapple_stack_chain_seq.size() > 0
+	if is_grapple_type or (new_type == "air" and grapple_chain_active):
+		_check_grapple_stack_boost(new_type)
+		return
+
 	var now: float = Time.get_ticks_msec() / 1000.0
 
 	# === 1. 计算 letter (本段在叠喷序列里的字母) ===
-	# c = nitro; w = 其他所有 (mini/double/air/landing)
-	# 即: 空喷和落地喷也作为 w 加入叠喷链, 这样 "漂移退漂小喷 → 落地喷" 也算合法的 ww 续接
-	var letter: String = "c" if new_type == "nitro" else "w"
+	# c = nitro / grapple_nitro; w = 其他所有 (mini/double/air/landing/grapple_boost)
+	# 即: 空喷/落地喷/钩索弹射也作为 w 加入叠喷链
+	var letter: String = "c" if (new_type == "nitro" or new_type == "grapple_nitro") else "w"
 
 	# === 2. 接力判定 ===
 	# prev_type: 串接的前一段类型
@@ -3510,6 +3705,10 @@ func _check_and_apply_stack_boost(new_type: String) -> void:
 	var cur_seq: String = ""
 	for ch in _stack_chain_seq:
 		cur_seq += ch
+
+	# [DEBUG] 叠喷判定详细日志
+	print("[Stack DEBUG] new_type=%s letter=%s is_boosting=%s boost_type=%s prev_type=%s time_linked=%s cur_seq='%s' chain_types=%s" % [
+		new_type, letter, str(is_boosting), boost_type, prev_type, str(time_linked), cur_seq, str(_stack_chain_types)])
 
 	# === 4. 合法续接白名单 ===
 	# 哪些 (cur_seq + letter) 是允许"接在原链后面"的:
@@ -3540,12 +3739,14 @@ func _check_and_apply_stack_boost(new_type: String) -> void:
 		_stack_breakthrough_count = 0
 		_stack_current_breakthrough = false
 		_stack_chain_seq = [letter] as Array[String]
+		_stack_chain_types = [new_type] as Array[String]
 		print("[Stack] 新链开始: ", new_type, " seq=", _stack_chain_seq)
 		return
 
 	# === 6. 合法续接 → 链 +1 ===
 	_stack_chain_index += 1
 	_stack_chain_seq.append(letter)
+	_stack_chain_types.append(new_type)
 
 	# === 7. 突破计数表 (按"完成型/中间型"分别配置) ===
 	# 这是叠喷数学核心, 改动这里务必对照下表逐行算:
@@ -3581,6 +3782,7 @@ func _check_and_apply_stack_boost(new_type: String) -> void:
 
 	# === 8. 弹字提示 (HUD 自己过滤哪些 combo_name 真的弹) ===
 	# combo_name = 序列字母大写, 例如 "cw" → "CW", "wcw" → "WCW"
+	# 注: 钩索叠喷已走独立系统 (_check_grapple_stack_boost), 这里只处理普通叠喷
 	var combo_name: String = next_seq.to_upper()
 	emit_signal("combo_triggered", combo_name, _stack_breakthrough_count)
 
@@ -3588,6 +3790,131 @@ func _check_and_apply_stack_boost(new_type: String) -> void:
 		prev_type, new_type, next_seq, _stack_breakthrough_count,
 		"(本段享受突破)" if should_set_breakthrough else "(本段不享受突破)"
 	])
+
+
+# ============================================================
+#  钩索叠喷 (独立系统, 与普通叠喷完全分离)
+#
+#  规则 (2026-05-15 重新定义):
+#   【钩索释放】接【氮气】→ 显示"氮气弹射" (不算叠喷, 仅弹字)
+#   【钩索释放】接【氮气】接【空喷】→ 显示"弹射CW" (突破1)
+#   【钩索释放】接【氮气】接【增压弹射】→ 显示"增压弹射CW" (突破1)
+#   【钩索释放】接【氮气】接【增压弹射】接【空喷】→ 显示"增压弹射CWW" (突破2)
+#   【钩索释放】接【增压弹射】→ 显示"增压弹射" (不算叠喷)
+#   【钩索释放】接【增压弹射】接【空喷】→ 不形成叠喷, 各自独立
+#
+#  字母约定:
+#   c = grapple_nitro (氮气弹射)
+#   w = grapple_boost (增压弹射) 或 air (空喷)
+#
+#  合法叠喷链 (必须以 c 开头):
+#   "cw"  → 弹射CW 或 增压弹射CW (取决于 W 段是 air 还是 grapple_boost)
+#   "cww" → 增压弹射CWW (第一个 W 必须是 grapple_boost, 第二个 W 必须是 air)
+#
+#  参数全部从 GrappleHook 节点读取, 与普通叠喷参数完全独立
+# ============================================================
+func _check_grapple_stack_boost(new_type: String) -> void:
+	var now: float = Time.get_ticks_msec() / 1000.0
+
+	# === 1. 计算 letter ===
+	var letter: String = "c" if new_type == "grapple_nitro" else "w"
+
+	# === 2. 接力判定 ===
+	var prev_type: String = boost_type if is_boosting else _last_boost_type
+	var time_since_last: float = now - _last_boost_end_time
+	var grapple_window: float = 0.5
+	if _grapple_hook:
+		grapple_window = float(_grapple_hook.get("grapple_stack_link_window"))
+	var time_linked: bool = prev_type != "" and (is_boosting or time_since_last <= grapple_window)
+
+	# === 3. 当前序列 ===
+	var cur_seq: String = ""
+	for ch in _grapple_stack_chain_seq:
+		cur_seq += ch
+
+	print("[GrappleStack] new_type=%s letter=%s prev_type=%s time_linked=%s cur_seq='%s' types=%s" % [
+		new_type, letter, prev_type, str(time_linked), cur_seq, str(_grapple_stack_chain_types)])
+
+	# === 4. 合法续接判定 ===
+	var next_seq: String = cur_seq + letter
+	var legal_extension: bool = false
+	if time_linked:
+		match next_seq:
+			"cw":
+				# c 后接 w: 合法 (氮气弹射后接增压弹射或空喷)
+				legal_extension = true
+			"cww":
+				# cw 后接 w: 只有当第一个 w 是 grapple_boost 且第二个 w 是 air 时才合法
+				if _grapple_stack_chain_types.size() >= 2:
+					var first_w_type: String = _grapple_stack_chain_types[1]
+					if first_w_type == "grapple_boost" and new_type == "air":
+						legal_extension = true
+
+	# === 5. 不合法 → 新开链 ===
+	if not legal_extension:
+		_grapple_stack_chain_index = 0
+		_grapple_stack_breakthrough_count = 0
+		_grapple_stack_current_breakthrough = false
+		_grapple_stack_chain_seq = [letter] as Array[String]
+		_grapple_stack_chain_types = [new_type] as Array[String]
+		# grapple_nitro 单独开链时弹"氮气弹射"
+		if new_type == "grapple_nitro":
+			emit_signal("combo_triggered", "氮气弹射", 0)
+			print("[GrappleStack] 氮气弹射 (新链开始)")
+		# grapple_boost 单独不弹叠喷字 (HUD 会通过 boost_triggered 弹"增压弹射")
+		return
+
+	# === 6. 合法续接 → 链 +1 ===
+	_grapple_stack_chain_index += 1
+	_grapple_stack_chain_seq.append(letter)
+	_grapple_stack_chain_types.append(new_type)
+
+	# === 7. 突破计数 + 弹字 ===
+	var should_set_breakthrough: bool = false
+	var max_bt: int = 2
+	if _grapple_hook:
+		max_bt = int(_grapple_hook.get("grapple_stack_max_breakthrough"))
+
+	var combo_name: String = ""
+	match next_seq:
+		"cw":
+			_grapple_stack_breakthrough_count = 1
+			should_set_breakthrough = true
+			# 根据 W 段类型决定弹字
+			if new_type == "grapple_boost":
+				combo_name = "增压弹射CW"
+			else:
+				combo_name = "弹射CW"
+		"cww":
+			_grapple_stack_breakthrough_count = 2
+			should_set_breakthrough = true
+			combo_name = "增压弹射CWW"
+			_grapple_stack_cww_done = true  # CWW 终结, 禁止后续空喷
+
+	if _grapple_stack_breakthrough_count > max_bt:
+		_grapple_stack_breakthrough_count = max_bt
+	_grapple_stack_current_breakthrough = should_set_breakthrough
+
+	# === 8. 弹字 ===
+	if combo_name != "":
+		emit_signal("combo_triggered", combo_name, _grapple_stack_breakthrough_count)
+
+	print("[GrappleStack] 接力 %s->%s seq=%s combo='%s' 突破=%d" % [
+		prev_type, new_type, next_seq, combo_name, _grapple_stack_breakthrough_count
+	])
+
+
+## 钩索叠喷推力衰减 (从 GrappleHook 节点读取独立参数)
+func _grapple_stack_decayed_power(base_power: float) -> float:
+	var decay_arr: Array[float] = [1.0, 0.9, 0.8]
+	if _grapple_hook:
+		var arr = _grapple_hook.get("grapple_stack_power_decay")
+		if arr is Array and arr.size() > 0:
+			decay_arr = arr
+	if decay_arr.is_empty():
+		return base_power
+	var idx: int = clampi(_grapple_stack_chain_index, 0, decay_arr.size() - 1)
+	return base_power * decay_arr[idx]
 
 
 func _stack_decayed_power(base_power: float) -> float:
@@ -3609,14 +3936,27 @@ func _update_stack_chain_timeout() -> void:
 	if _last_boost_type == "":
 		return
 	var now: float = Time.get_ticks_msec() / 1000.0
+	# --- 普通叠喷链超时 ---
 	if now - _last_boost_end_time > stack_link_window:
-		# 链已断: 清零(下次 _start_boost 会被识别为新链)
 		if _stack_chain_index > 0 or _stack_breakthrough_count > 0:
 			print("[Stack] 连喷链超时断开, 链清零")
 		_last_boost_type = ""
 		_stack_chain_index = 0
 		_stack_breakthrough_count = 0
 		_stack_current_breakthrough = false
+	# --- 钩索叠喷链超时 (使用独立窗口参数) ---
+	var grapple_window: float = 0.5
+	if _grapple_hook:
+		grapple_window = float(_grapple_hook.get("grapple_stack_link_window"))
+	if now - _last_boost_end_time > grapple_window:
+		if _grapple_stack_chain_index > 0 or _grapple_stack_breakthrough_count > 0:
+			print("[GrappleStack] 钩索叠喷链超时断开, 链清零")
+		_grapple_stack_chain_index = 0
+		_grapple_stack_breakthrough_count = 0
+		_grapple_stack_current_breakthrough = false
+		_grapple_stack_chain_seq.clear()
+		_grapple_stack_chain_types.clear()
+		_grapple_stack_cww_done = false  # 链清零时解除 CWW 空喷禁止
 
 
 # ============================================================
@@ -3702,8 +4042,10 @@ func _start_boost(type_name: String, power: float, duration: float) -> void:
 	#   ❌ 落地喷 landing     (被动, 落地窗口按 W)
 	#   ❌ 氮气 nitro         (自身, 不能自己蓄自己)
 	#   ❌ 双喷 double        (自身, 防止连续无限蓄)
+	#   ❌ 钩索弹射 grapple_boost / grapple_nitro (窗口触发, 不开放蓄双喷)
 	# 默认清零, 进入各路径后再按需置 true
-	if type_name == "air" or type_name == "landing" or type_name == "nitro" or type_name == "double":
+	if type_name == "air" or type_name == "landing" or type_name == "nitro" or type_name == "double" \
+			or type_name == "grapple_boost" or type_name == "grapple_nitro":
 		_can_charge_double = false
 
 	# 【特殊路径】氮气进行中按 W 释放小喷类: 不打断氮气, 延续之
@@ -3714,10 +4056,18 @@ func _start_boost(type_name: String, power: float, duration: float) -> void:
 	#   · 但走叠喷判定(突破计数+1, combo 弹字)
 	#   · 把小喷/双喷/空喷/落地喷的 duration 加到 boost_time_left, 让氮气延长
 	#   · 推力可以被衰减后的本段推力增强(取较大者保持氮气感)
-	if is_boosting and boost_type == "nitro" and \
-			(type_name == "mini" or type_name == "double" or type_name == "air" or type_name == "landing"):
+	# 【2026-05-15 修订】grapple_nitro 也视为"氮气进行中", 使 grapple_boost/air 等 W 段
+	#   不会打断钩索氮气弹射, 从而保证 grapple_nitro → grapple_boost → air 能形成完整的 CWW 链
+	if is_boosting and (boost_type == "nitro" or boost_type == "grapple_nitro") and \
+			(type_name == "mini" or type_name == "double" or type_name == "air" or type_name == "landing" or type_name == "grapple_boost"):
+		print("[Boost DEBUG] 走氮气延续路径: boost_type=%s type_name=%s" % [boost_type, type_name])
 		_check_and_apply_stack_boost(type_name)
-		var dp_extend: float = _stack_decayed_power(power)
+		# 钩索类型使用独立的推力衰减
+		var dp_extend: float
+		if type_name == "grapple_boost" or (type_name == "air" and _grapple_stack_chain_seq.size() > 0):
+			dp_extend = _grapple_stack_decayed_power(power)
+		else:
+			dp_extend = _stack_decayed_power(power)
 		boost_time_left += duration
 		boost_total_time += duration
 		boost_base_power = maxf(boost_base_power, nitro_power) + dp_extend * 0.5
@@ -3735,8 +4085,12 @@ func _start_boost(type_name: String, power: float, duration: float) -> void:
 
 	# 叠喷判定: 在覆盖 boost_type 之前先判断
 	_check_and_apply_stack_boost(type_name)
-	# 应用推力衰减(根据当前在链中的位置)
-	var dp: float = _stack_decayed_power(power)
+	# 应用推力衰减(根据当前在链中的位置, 钩索类型使用独立衰减)
+	var dp: float
+	if type_name == "grapple_boost" or type_name == "grapple_nitro" or (type_name == "air" and _grapple_stack_chain_seq.size() > 0):
+		dp = _grapple_stack_decayed_power(power)
+	else:
+		dp = _stack_decayed_power(power)
 
 	boost_type = type_name
 	boost_base_power = dp

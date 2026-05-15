@@ -221,12 +221,19 @@ func _apply_state(type_name: String) -> void:
 			nitro_fx.emitting = true
 			nitro_star.emitting = stars_enabled
 			nitro_light.visible = true
-		"air":
+		"air", "grapple_boost":
 			air_fx.emitting = true
 			air_light.visible = true
 		"landing":
 			landing_fx.emitting = true
 			landing_light.visible = true
+		"grapple_nitro":
+			# 钩索氮气弹射: 同时播放氮气焰柱 + 空喷特效 (双重视觉表现强力推进)
+			nitro_fx.emitting = true
+			nitro_star.emitting = stars_enabled
+			nitro_light.visible = true
+			air_fx.emitting = true
+			air_light.visible = true
 
 
 func play_boost(type_name: String, _duration: float) -> void:
@@ -236,6 +243,7 @@ func play_boost(type_name: String, _duration: float) -> void:
 	var visual_type: String = type_name
 	if type_name == "speed_pad":
 		visual_type = "nitro"
+	# grapple_boost 和 grapple_nitro 已在 _apply_state 中有对应分支, 直接传入
 	_apply_state(visual_type)
 	_shown_type = visual_type
 

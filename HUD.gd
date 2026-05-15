@@ -324,6 +324,12 @@ func _on_boost_triggered(type_name: String) -> void:
 			"nitro":
 				txt = "氮气"
 				col = _nitro_color_for_variant(_current_nitro_variant)
+			"grapple_boost":
+				txt = "增压弹射"
+				col = Color(0.3, 0.85, 1.0, 1.0)
+			"grapple_nitro":
+				txt = "氮气弹射"
+				col = Color(1.0, 0.6, 0.1, 1.0)
 			"speed_pad":
 				# 加速带触发: 视为氮气类型炫点 (用户要求), 但弹专属"加速带"文案
 				# 颜色用黄橙色 (跟加速带视觉色一致), 时长稍短一点 (它是路面机关而非主动技巧)
@@ -346,8 +352,14 @@ func _on_boost_triggered(type_name: String) -> void:
 #   "WC"  → WCW 的过渡前缀, 不弹 (玩家还没完成 WCW)
 #   其他  → 不弹
 func _on_combo_triggered(combo_name: String, breakthrough_count: int) -> void:
-	# 只有这三个 combo 弹字, 其他过渡前缀(WC) 静默
-	if combo_name != "CW" and combo_name != "CWW" and combo_name != "WCW":
+	# 弹字白名单:
+	# 普通叠喷: CW / CWW / WCW
+	# 钩索叠喷: 氮气弹射 / 弹射CW / 增压弹射CW / 增压弹射CWW
+	var valid_combos: Array[String] = [
+		"CW", "CWW", "WCW",
+		"氮气弹射", "弹射CW", "增压弹射CW", "增压弹射CWW"
+	]
+	if combo_name not in valid_combos:
 		return
 	# 颜色按突破次数:
 	#   2 次突破(CWW)        → 红色 (最强)
@@ -360,10 +372,16 @@ func _on_combo_triggered(combo_name: String, breakthrough_count: int) -> void:
 		col = NITRO_COLOR_GOLD
 	else:
 		col = W_COLOR_BLUE
-	# CW 是 2 段叠喷, 持续时间略短; CWW/WCW 是终结型, 持续更长
-	var combo_hold: float = popup_hold_time + (0.4 if combo_name != "CW" else 0.2)
-	# 【炫点文案】"叠喷" 为中文前缀, CWW 等序列名保留英文 (就是玩家识别的技巧代号)
-	_show_boost_popup("叠喷  %s" % combo_name, col, combo_hold, popup_fade_time)
+	# CW/氮气弹射 是短叠喷; CWW/WCW/增压弹射CW/增压弹射CWW 是终结型, 持续更长
+	var is_short_combo: bool = (combo_name == "CW" or combo_name == "氮气弹射" or combo_name == "弹射CW")
+	var combo_hold: float = popup_hold_time + (0.2 if is_short_combo else 0.4)
+	# 【炫点文案】钩索叠喷直接显示中文名; 普通叠喷用 "叠喷 CW" 格式
+	var display_text: String
+	if combo_name == "CW" or combo_name == "CWW" or combo_name == "WCW":
+		display_text = "叠喷  %s" % combo_name
+	else:
+		display_text = combo_name
+	_show_boost_popup(display_text, col, combo_hold, popup_fade_time)
 	_combo_protect_until = Time.get_ticks_msec() / 1000.0 + combo_hold + popup_fade_time * 0.5
 	print("[HUD] combo: %s 突破=%d" % [combo_name, breakthrough_count])
 
@@ -418,12 +436,20 @@ func _on_songqian_state_changed(active: bool) -> void:
 
 func _on_air_boost_triggered(air_time: float) -> void:
 	# 【炫点文案】中文. 气泡时长参数保留原 default (不带 hold/fade 参数)
+	# combo 保护期内不覆盖叠喷弹字 (例如"增压弹射CWW"不应被"空喷"覆盖)
+	var now: float = Time.get_ticks_msec() / 1000.0
+	if now < _combo_protect_until:
+		return
 	_show_boost_popup("空喷", Color(1.0, 0.5, 0.95, 1.0))
 	_combo_protect_until = Time.get_ticks_msec() / 1000.0 + 0.4
 
 
 func _on_landing_boost_triggered(air_time: float) -> void:
 	# 【炫点文案】中文.
+	# combo 保护期内不覆盖叠喷弹字
+	var now: float = Time.get_ticks_msec() / 1000.0
+	if now < _combo_protect_until:
+		return
 	_show_boost_popup("落地喷", Color(0.5, 1.0, 0.7, 1.0), 0.9, 0.4)
 
 

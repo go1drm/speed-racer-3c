@@ -204,6 +204,18 @@ var _logged_attached_rope: bool = false
 ## 绳子起点偏移 (相对车 transform 本地坐标). 让绳子从车头/车顶发出, 而不是车球心
 @export var rope_origin_offset: Vector3 = Vector3(0.0, 0.5, -0.5)
 
+@export_group("Rope Charged FX (增压充能电光)")
+## 充能电光颜色 (金黄色)
+@export var rope_charged_color: Color = Color(1.0, 0.85, 0.1, 1.0)
+## 充能电光 emission 强度 (越大越亮, 会 bloom)
+@export_range(0.0, 20.0, 0.1) var rope_charged_emission: float = 6.0
+## 充能电光脉冲速度 (Hz, 越大闪烁越快)
+@export_range(1.0, 30.0, 0.5) var rope_charged_pulse_speed: float = 12.0
+## 充能电光脉冲幅度 (emission 在 [base - amp, base + amp] 间波动)
+@export_range(0.0, 10.0, 0.1) var rope_charged_pulse_amp: float = 3.0
+## 充能时绳子粗细倍率 (让绳子膨胀一点, 表示蓄力)
+@export_range(1.0, 3.0, 0.05) var rope_charged_thickness_mult: float = 1.4
+
 @export_group("Anchor UI (锚点指示器)")
 ## 锚点 UI 图标相对于锚点投影位置的水平偏移 (像素). 正数=向右
 @export_range(-200.0, 200.0, 1.0) var anchor_ui_offset_x: float = 0.0
@@ -222,6 +234,45 @@ var _logged_attached_rope: bool = false
 ## 被扯动画持续时间 (秒, 来回总时长)
 @export_range(0.05, 2.0, 0.05) var anchor_tug_duration: float = 0.3
 
+@export_group("Grapple Boost (钩索弹射)")
+## 增压弹射开关: 释放钩索后一定时间内按 W 可触发一次独立喷射
+@export var grapple_boost_enabled: bool = true
+## 增压弹射窗口 (秒): 释放钩索后多久内按 W 可触发增压弹射
+@export_range(0.1, 3.0, 0.05) var grapple_boost_window: float = 0.8
+## 增压弹射最小拉动时间 (秒): 在钩索上待够这么久才能触发增压弹射, 否则无法触发
+@export_range(0.0, 3.0, 0.05) var grapple_boost_min_pull_time: float = 0.3
+## 增压弹射推进力 (m/s² × mass)
+@export_range(5.0, 200.0, 1.0) var grapple_boost_power: float = 50.0
+## 增压弹射持续时间 (秒)
+@export_range(0.1, 3.0, 0.05) var grapple_boost_time: float = 0.5
+## 增压弹射震屏强度
+@export_range(0.0, 3.0, 0.05) var grapple_boost_shake: float = 0.6
+## 绳长冲量倍率曲线 (X=起钩距离/max_distance 0~1, Y=增压弹射推力倍率 0~3)
+## 长绳释放后增压弹射更强, 短绳弱一些
+@export var grapple_boost_length_curve: Curve
+
+@export_group("Grapple Nitro Boost (钩索氮气弹射)")
+## 钩索氮气弹射开关: 钩索弹射窗口内同时释放氮气, 形成叠加强力推进
+@export var grapple_nitro_boost_enabled: bool = true
+## 钩索氮气弹射额外推力 (在氮气基础推力之上叠加)
+@export_range(5.0, 300.0, 1.0) var grapple_nitro_extra_power: float = 80.0
+## 钩索氮气弹射额外持续时间 (在氮气基础时间之上叠加)
+@export_range(0.0, 3.0, 0.05) var grapple_nitro_extra_time: float = 0.4
+## 钩索氮气弹射震屏强度
+@export_range(0.0, 5.0, 0.05) var grapple_nitro_shake: float = 1.5
+## 钩索氮气弹射 FOV 额外增量 (度)
+@export_range(0.0, 30.0, 0.5) var grapple_nitro_fov_boost: float = 15.0
+
+@export_group("Grapple Stack Boost (钩索叠喷)")
+## 钩索叠喷接力窗口 (秒): 钩索链中前一段结束后多久内接下一段算"接力"
+@export_range(0.0, 2.0, 0.05) var grapple_stack_link_window: float = 0.5
+## 钩索叠喷突破极速倍率: 每次钩索叠喷突破时极速的乘法加成
+@export_range(1.0, 3.0, 0.01) var grapple_stack_breakthrough_mult: float = 1.25
+## 钩索叠喷最大突破次数
+@export_range(0, 5, 1) var grapple_stack_max_breakthrough: int = 2
+## 钩索叠喷推力衰减: 链中第 N 段的推力倍率 [第1段, 第2段, 第3段]
+@export var grapple_stack_power_decay: Array[float] = [1.0, 0.9, 0.8]
+
 # (检测区域3D可视化已删除, 改用 HUD 2D 锚点指示器)
 
 # ---------------- 信号 ----------------
@@ -234,6 +285,8 @@ signal grapple_progress(progress: float, anchor_pos: Vector3, pull_dir: Vector3)
 ## 钩索触发(锁定锚点) 和 释放
 signal grapple_started(anchor_pos: Vector3)
 signal grapple_released(success: bool)
+## 钩索释放后通知 car 进入弹射窗口 (携带起钩绳长比例和拉动时间, 供弹射推力缩放和增压弹射条件判定)
+signal grapple_boost_window_opened(dist_ratio: float, pull_time: float)
 
 # ---------------- 内部状态 ----------------
 var _current_anchor: Node = null
@@ -250,6 +303,8 @@ var _attach_initial_speed: float = 0.0   # 钩住瞬间记录的车速, 用于�
 # 给玩家一段缓冲时间不触发 stall 检测 (刚钩住时车会先沿径向加速一段时间, 不算 stall)
 var _stall_grace_left: float = 0.0
 const _STALL_GRACE_TIME: float = 0.25   # 钩住后 0.25s 内不做 stall 自动甩出判定
+# 增压充能状态: 在钩索上待够 min_pull_time 后为 true, 绳子显示金黄电光
+var _rope_charged: bool = false
 
 # ============================================================
 # 检测区域可视化 (L 键切换)
@@ -325,6 +380,13 @@ func _init_default_curves() -> void:
 		release_distance_curve.add_point(Vector2(0.0, 0.4))
 		release_distance_curve.add_point(Vector2(0.5, 1.0))
 		release_distance_curve.add_point(Vector2(1.0, 1.8))
+	if grapple_boost_length_curve == null:
+		# 钩索弹射-绳长曲线: x=起钩距离/max_distance (0~1), y=弹射推力倍率 (0~3)
+		# 默认: 短绳 0.5 (近距离弹射弱), 中距离 1.0, 远距离 1.8 (长绳弹射更强)
+		grapple_boost_length_curve = Curve.new()
+		grapple_boost_length_curve.add_point(Vector2(0.0, 0.5))
+		grapple_boost_length_curve.add_point(Vector2(0.5, 1.0))
+		grapple_boost_length_curve.add_point(Vector2(1.0, 1.8))
 
 
 # ============================================================
@@ -531,6 +593,7 @@ func _start_shoot(anchor: Node) -> void:
 		anchor.set_highlighted(true)
 	state = State.SHOOTING
 	_shoot_elapsed = 0.0
+	_rope_charged = false  # 新一次钩索重置充能状态
 	# SHOOTING 阶段时间 = 距离 / attach_speed, 至少 0.05s 让视觉看到绳子飞出
 	var dist: float = (anchor as Node3D).global_position.distance_to(_rope_origin_world())
 	_shoot_total = maxf(dist / maxf(attach_speed, 1.0), 0.05)
@@ -622,10 +685,16 @@ func _release(success: bool) -> void:
 		car.set("_grapple_active", false)
 	# 隐藏绳子
 	_rope_mesh_inst.visible = false
+	_rope_charged = false  # 重置充能状态
 	state = State.IDLE
+	var _pull_time_before_reset: float = _pull_elapsed  # 保存释放前的拉动时间
 	_pull_elapsed = 0.0
 	_shoot_elapsed = 0.0
 	emit_signal("grapple_released", success)
+	# 通知 car 进入钩索弹射窗口 (只有成功释放才开窗口)
+	if success and grapple_boost_enabled:
+		var boost_dist_ratio: float = clampf(_initial_grapple_distance / maxf(max_distance, 0.001), 0.0, 1.0)
+		emit_signal("grapple_boost_window_opened", boost_dist_ratio, _pull_time_before_reset)
 	emit_signal("grapple_state_changed", "IDLE", Vector3.ZERO)
 	_current_anchor = null
 
@@ -677,6 +746,12 @@ func _update_attached(delta: float) -> void:
 		return
 	_pull_elapsed += delta
 	var progress: float = clampf(_pull_elapsed / maxf(pull_duration, 0.001), 0.0, 1.0)
+
+	# === 增压充能检测: 在钩索上待够 min_pull_time 后绳子亮金光 ===
+	if not _rope_charged and grapple_boost_enabled and grapple_boost_min_pull_time > 0.0:
+		if _pull_elapsed >= grapple_boost_min_pull_time:
+			_rope_charged = true
+			print("[Grapple] 增压充能完成! 绳子电光激活 (%.2fs)" % _pull_elapsed)
 
 	# === 拉力计算 ===
 	var anchor_pos: Vector3 = (_current_anchor as Node3D).global_position
@@ -884,13 +959,32 @@ func _redraw_rope(t: float) -> void:
 	# 注意: 不要乘 (1, 1, rope_len), 因为 look_at 已经设过 basis, 直接用 scale 属性
 	_rope_mesh_inst.scale = Vector3(1.0, 1.0, rope_len)
 	_rope_mesh_inst.visible = true
-	# 实时跟随颜色/粗细参数变化
-	# 粗细变了要重建 mesh (因为 ArrayMesh 顶点写死了半径); 颜色变了改 material 即可
-	if _rope_array_mesh != null and not is_equal_approx(_get_current_rope_radius(), rope_thickness):
-		_rope_array_mesh = _build_rope_cylinder_mesh(rope_thickness)
-		_rope_mesh_inst.mesh = _rope_array_mesh
-	if _rope_mat and _rope_mat.albedo_color != rope_color:
-		_rope_mat.albedo_color = rope_color
+	# === 充能电光效果 ===
+	if _rope_charged and _rope_mat:
+		# 金黄色发光 + 脉冲闪烁
+		var time_now: float = Time.get_ticks_msec() / 1000.0
+		var pulse: float = sin(time_now * rope_charged_pulse_speed * TAU) * rope_charged_pulse_amp
+		var emission_energy: float = maxf(rope_charged_emission + pulse, 0.5)
+		_rope_mat.albedo_color = rope_charged_color
+		_rope_mat.emission_enabled = true
+		_rope_mat.emission = rope_charged_color
+		_rope_mat.emission_energy_multiplier = emission_energy
+		# 充能时绳子膨胀
+		var charged_radius: float = rope_thickness * rope_charged_thickness_mult
+		if _rope_array_mesh != null and not is_equal_approx(_get_current_rope_radius(), charged_radius):
+			_rope_array_mesh = _build_rope_cylinder_mesh(charged_radius)
+			_rope_mesh_inst.mesh = _rope_array_mesh
+	else:
+		# 普通状态: 黑色无发光
+		if _rope_mat:
+			if _rope_mat.emission_enabled:
+				_rope_mat.emission_enabled = false
+			if _rope_mat.albedo_color != rope_color:
+				_rope_mat.albedo_color = rope_color
+		# 实时跟随粗细参数变化
+		if _rope_array_mesh != null and not is_equal_approx(_get_current_rope_radius(), rope_thickness):
+			_rope_array_mesh = _build_rope_cylinder_mesh(rope_thickness)
+			_rope_mesh_inst.mesh = _rope_array_mesh
 	# 调试日志: 进入 ATTACHED 第一帧打印 p0/p1, 帮助排查"绳子没贴合"
 	if t >= 0.999 and not _logged_attached_rope:
 		print("[GrappleHook] 绳子 ATTACHED p0(车)=%s p1(锚)=%s len=%.2f" % [p0, p1, rope_len])
