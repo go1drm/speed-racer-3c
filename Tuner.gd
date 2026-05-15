@@ -314,23 +314,23 @@ const PARAMS := [
 		"反打入漂时, 横向速度超过此值则进入侧身漂(否则甩尾漂)。", ""],
 
 	["__page", "⛰️ 地面物理"],
-	["__group", "防弹 + 贴附 (统一机制)"],
+	["__group", "防弹 + 贴附 (V6 统一法线投影)"],
 	["ground_stick_enabled",      "防弹+贴附总开关",    0,    1,     1,
 		"1=启用统一的防弹/贴附机制; 0=纯物理, 会有弹跳。", ""],
-	["plain_slope_threshold_deg", "平地/坡面切换(度)",  0.0,  30.0,  0.5,
-		"小于此坡度视为平地(走强防弹), 大于等于则视为坡面(走温和贴附)。8 度合理。", ""],
-	["plain_vy_zero_threshold",   "平地向上速度归零阈值", 0.0, 20.0, 0.1,
-		"平地上 Y 向上速度 < 此值时直接置 0, 消除橡皮球效应。5 推荐。", ""],
-	["plain_downforce",           "平地持续下压力",     0.0,  40.0,  0.5,
-		"平地上向下施加的力(N/kg), 主动消除三角网格微弹。8 推荐, 太大会'粘地板'。", ""],
-	["plain_downforce_vy_gate",   "下压力触发阈值",     0.0,  5.0,   0.05,
-		"只在 Y 速度 > 此值时施加下压力。0.3=轻微抬起就压(推荐), 0=永远压(会干扰爬坡助力), 2+=只压大弹跳。", ""],
-	["plain_vy_down_clamp",       "平地下坠速度上限",   0.0,  50.0,  0.5,
-		"0=不限; >0 时限制平地上下坠速度绝对值。防止从高空砸地又弹飞。", ""],
+	["plain_slope_threshold_deg", "[废弃]平地/坡面切换",  0.0,  30.0,  0.5,
+		"[V6废弃] 旧版用此阈值切换平地/坡面两套策略. V6统一法线投影后不再使用, 保留兼容旧cfg。", ""],
+["plain_vy_zero_threshold",   "法线分离速度归零阈值", 0.0, 20.0, 0.1,
+		"V6: 速度沿地面法线分量 > 0 且 < 此值时清零, 消除弹跳。平地/坡面统一生效。5 推荐。", ""],
+["plain_downforce",           "法线方向下压力",     0.0,  40.0,  0.5,
+		"V6: 沿地面法线反向施加的力(N/kg), 只在车弹起时生效。平地/坡面统一。8 推荐。", ""],
+["plain_downforce_vy_gate",   "下压力触发阈值",     0.0,  5.0,   0.05,
+		"V6: 法线分离速度 > 此值时施加下压力。0.3=轻微弹起就压(推荐), 0=永远压(干扰爬坡), 2+=只压大弹跳。", ""],
+["plain_vy_down_clamp",       "法线下坠速度上限",   0.0,  50.0,  0.5,
+		"V6: 0=不限; >0 时限制沿法线方向的下坠速度。平地/坡面统一生效。", ""],
 	["slope_stick_force",         "坡面贴附力",         0.0,  40.0,  0.5,
 		"坡面上沿法线反向加力, 防止过坎/接缝飞车。8 推荐。", ""],
-	["slope_stick_max_vy",        "坡面贴附 Y 速度上限", 0.0,  10.0,  0.1,
-		"Y 速度绝对值小于此值才贴附, 保护真跳跃/空喷不被吸回。2.5 合理。", ""],
+["slope_stick_max_vy",        "贴附法线速度上限",    0.0,  10.0,  0.1,
+		"V6: 法线方向速度绝对值 < 此值才贴附, 保护真跳跃/空喷不被吸回。2.5 合理。", ""],
 	["slope_stick_max_deg",       "坡面贴附最大坡度(度)", 5.0, 90.0,  1.0,
 		"超过此坡度(峭壁)不再贴附, 避免拉住爬墙车。60 合理。", ""],
 
@@ -895,6 +895,11 @@ static func _stable_cfg_dir() -> String:
 static func _stable_cfg_path() -> String:
 	return _stable_cfg_dir().path_join("tune.cfg")
 
+## 默认配置路径: 首次启动时用 @export 默认值创建, "默认"按钮从这里加载
+## 与 tune.cfg 分离: tune.cfg 是运行时状态 (切场景保护), defaults.cfg 是出厂默认
+static func _defaults_cfg_path() -> String:
+	return _stable_cfg_dir().path_join("defaults.cfg")
+
 ## 该常量保留给老代码引用; 实际读写走 _stable_cfg_path()
 const SAVE_PATH := "user://tune.cfg"
 
@@ -934,10 +939,9 @@ func _auto_load_on_start() -> void:
 	else:
 		# 没 cfg 也要启用图形参数自动持久化 (但不启用 autosave, 用户要求手动保存)
 		_graphics_autosave_enabled = true
-		# 首次启动无 cfg, 自动把当前 @export 默认值保存为默认配置 (tune.cfg)
-		# 这样“默认”按钮有东西可加载
-		_save_to_path(_stable_cfg_path())
-		print("[Tuner] cfg 不存在, 已用当前默认值创建 tune.cfg")
+		# 首次启动无 tune.cfg, 自动把当前 @export 默认值保存为运行时配置
+		_save_to_path(p)
+		print("[Tuner] tune.cfg 不存在, 已用当前默认值创建")
 
 
 ## cfg 迁移: 首次启动 (或改完项目名后第一次启动) 时,
@@ -1120,7 +1124,22 @@ func _bind_car() -> void:
 			_defaults[gk] = float(_GRAPHICS_DEFAULTS[gk])
 
 	_defaults_initialized = true
+
+	# 首次绑定时创建 defaults.cfg (此时 UI 上还是 @export 默认值, _load_from_path 还没执行)
+	# 必须在 _load_from_path 之前做, 否则 UI 被 cfg 覆盖后保存的就不是真正的出厂默认了
+	if first_bind:
+		var dp := _defaults_cfg_path()
+		if not FileAccess.file_exists(dp):
+			_save_to_path(dp)
+			print("[Tuner] 首次启动, 已用 @export 默认值创建 defaults.cfg")
+
 	_load_from_path(_stable_cfg_path())
+	# 关键: 加载完成后立即回写 tune.cfg, 确保新加的参数 (cfg 中不存在的) 被写入
+	# 场景: 旧 tune.cfg 不包含 landing_settle_duration 等新参数 → _load_from_path 跳过它们
+	#        → UI 上保持 @export 默认值 → 此时回写一次 → tune.cfg 就包含所有参数了
+	# 这样后续 _exit_tree 保存时, 即使 spin 已无效 (被 continue 跳过),
+	# 旧 cfg 中已有这些参数的值 (增量更新不会丢)
+	_save_to_path(_stable_cfg_path())
 
 
 # 预读 cfg 的 [tune] 段所有 key, 用于 _bind_car 判断"哪些参数玩家已经调过"
@@ -1717,7 +1736,7 @@ func _build_ui() -> void:
 	var btn_reset := Button.new(); btn_reset.text = "重置"; btn_reset.add_theme_font_size_override("font_size", 11); btn_reset.pressed.connect(_on_reset); tools.add_child(btn_reset)
 	var btn_save := Button.new(); btn_save.text = "保存"; btn_save.add_theme_font_size_override("font_size", 11); btn_save.tooltip_text = "保存当前参数到备份1 (backup1.cfg)"; btn_save.pressed.connect(_on_save_backup); tools.add_child(btn_save)
 	var btn_load := Button.new(); btn_load.text = "加载"; btn_load.add_theme_font_size_override("font_size", 11); btn_load.tooltip_text = "从备份1 (backup1.cfg) 加载参数"; btn_load.pressed.connect(_on_load_backup); tools.add_child(btn_load)
-	var btn_default := Button.new(); btn_default.text = "默认"; btn_default.add_theme_font_size_override("font_size", 11); btn_default.tooltip_text = "还原默认配置 (tune.cfg)"; btn_default.add_theme_color_override("font_color", Color(1.0, 0.6, 0.3)); btn_default.pressed.connect(_on_default_confirm); tools.add_child(btn_default)
+	var btn_default := Button.new(); btn_default.text = "默认"; btn_default.add_theme_font_size_override("font_size", 11); btn_default.tooltip_text = "还原出厂默认配置 (defaults.cfg)"; btn_default.add_theme_color_override("font_color", Color(1.0, 0.6, 0.3)); btn_default.pressed.connect(_on_default_confirm); tools.add_child(btn_default)
 
 	# === 竖排 tab: 左侧 ItemList 做侧边栏, 右侧 VBox 装参数页 ===
 	var body := HBoxContainer.new()
@@ -2482,9 +2501,11 @@ func _on_autosave_timeout() -> void:
 #          change_scene_to_file 销毁了 Tuner → 没保存 → 新场景从旧 cfg 加载 → 看起来"重置"了.
 # Godot 节点销毁前会调 _exit_tree, 我们在这里强制保存一次, 保证用户改的值不丢.
 func _exit_tree() -> void:
-	# 已禁用自动保存, 不再在退出时强制保存
-	# 用户必须手动点保存按钮才会写盘
-	pass
+	# 切场景保护: 把当前 UI 状态保存到 tune.cfg, 防止切场景后参数丢失
+	# 这不是"自动保存" (用户手动保存仍然写 backup1.cfg), 而是运行时状态持久化:
+	#   切场景 → _exit_tree 写 tune.cfg → 新场景 _bind_car → _load_from_path(tune.cfg) → 恢复
+	# 用户的 backup1.cfg 不受影响, 仍然是手动保存的安全备份
+	_save_to_path(_stable_cfg_path())
 
 
 func _on_save() -> void:
@@ -2510,18 +2531,24 @@ func _on_load_backup() -> void:
 	print("[Tuner] 已从备份1 加载 ← ", path)
 
 
-## 默认按钮: 弹出二次确认弹窗, 确认后从 tune.cfg 加载默认配置
+## 默认按钮: 弹出二次确认弹窗, 确认后从 defaults.cfg 加载出厂默认配置
 func _on_default_confirm() -> void:
 	# 创建二次确认弹窗
 	var dialog := AcceptDialog.new()
 	dialog.title = "还原默认配置"
-	dialog.dialog_text = "确定要还原为默认配置吗？\n\n这会把所有参数恢复到 tune.cfg 中保存的值。\n如果你有未保存的修改会丢失！"
+	dialog.dialog_text = "确定要还原为出厂默认配置吗？\n\n这会把所有参数恢复到首次启动时的 @export 默认值。\n如果你有未保存的修改会丢失！"
 	dialog.ok_button_text = "确定还原"
 	# 添加取消按钮
 	dialog.add_cancel_button("取消")
 	dialog.confirmed.connect(func():
-		_load_from_path(_stable_cfg_path())
-		print("[Tuner] 已还原默认配置 ← ", _stable_cfg_path())
+		var dp := _defaults_cfg_path()
+		if FileAccess.file_exists(dp):
+			_load_from_path(dp)
+			print("[Tuner] 已还原出厂默认配置 ← ", dp)
+		else:
+			# defaults.cfg 不存在 (极端情况), fallback 到重置按钮逻辑
+			push_warning("[Tuner] defaults.cfg 不存在, 使用 _on_reset 兜底")
+			_on_reset()
 		dialog.queue_free()
 	)
 	dialog.canceled.connect(func():
@@ -2552,6 +2579,9 @@ func _save_to_path(save_path: String) -> void:
 		# ★ 关键修复: 从 UI (spin.value) 读值而不是从节点读
 		# 原来从节点读 → 节点 null/属性不存在/切场景重建时值回到 @export 默认 → cfg 被污染
 		# 改成从 UI 读: spin.value 才是用户最终看到并认可的值, 保存永远不丢
+		# 安全检查: _exit_tree 时 UI 控件可能已被释放, 跳过无效控件 (不写入 = 保留旧 cfg 值)
+		if not is_instance_valid(row.spin):
+			continue
 		var ui_value: float = row.spin.value
 		cfg.set_value("tune", prop, ui_value)
 		# 同时保存范围

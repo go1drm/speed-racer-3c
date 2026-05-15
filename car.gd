@@ -431,13 +431,14 @@ extends RigidBody3D
 
 # ---------------- 地面物理(统一模块: 防弹 + 坡道) ----------------
 # 机制说明:
-#   · 平地(坡度 < plain_slope_threshold_deg): 强防弹 -> 每帧把 Y 向上速度归零 + 向下压力
-#   · 坡面(坡度 >= 阈值): 温和贴附 -> 只加沿法线的贴附力, 不强制改 Y 速度
-#   · 两套机制用坡度平滑切换, 不干扰爬坡/飞跃
+#   · V6 统一法线投影: 不再区分平地/坡面, 所有判断基于速度沿法线的投影
+#   · 平地(法线≈UP): 法线投影 ≈ v.y, 效果和旧平地分支一样
+#   · 坡面(法线沿坡面): 投影自然正确, 不存在策略切换边界
+#   · plain_slope_threshold_deg 已废弃(V6不再使用), 保留变量兼容旧 cfg
 @export_group("Ground Physics")
 ## 防弹跳总开关
 @export var ground_stick_enabled: bool = true
-## 平地/坡面切换阈值(度): 小于此值视为"平地", 执行强防弹
+## [V6 废弃] 旧版平地/坡面切换阈值. V6 统一法线投影后不再使用, 保留兼容旧 cfg
 @export var plain_slope_threshold_deg: float = 8.0
 ## 平地上"向上速度"归零阈值: v.y > 0 且 < 此值 => 直接置 0 (防橡皮球效应)
 @export var plain_vy_zero_threshold: float = 5.0
@@ -2264,7 +2265,8 @@ func _maybe_trigger_landing_boost_if_armed(air_time: float) -> void:
 
 
 func _apply_ground_stick(_delta: float) -> void:
-	# 统一的"防弹 + 贴附"逻辑. 根据坡度自动切换两种策略, 互不干扰.
+	# V6 统一法线投影防弹+贴附. 不再区分平地/坡面两套策略.
+	# 所有判断都基于速度沿地面法线的投影, 平地(法线≈UP)和坡面行为自然统一.
 	if not ground_stick_enabled:
 		return
 	# === 钩索抑制防弹/贴附 ===
@@ -2319,37 +2321,48 @@ func _apply_ground_stick(_delta: float) -> void:
 		if landing_settle_downforce > 0.0:
 			apply_central_force(-n * landing_settle_downforce * mass)
 
-	if slope_deg < plain_slope_threshold_deg:
-		# ============ 平地: 强防弹 ============
-		# 核心原则: 下压力只在车"真的弹起来"(Y 速度 > 0)时施加
-		# 这样才不会干扰上坡助力/重力补偿(它们沿 thrust_dir 施力, 不产生 Y>0)
-		# 1) 向上速度超阈值的"小弹"直接归零
-		if v.y > 0.0 and v.y < plain_vy_zero_threshold:
-			v.y = 0.0
+	# ============ V6 统一法线投影防弹 (不再区分平地/坡面) ============
+	# 旧方案: 用 plain_slope_threshold_deg 切换两套策略 (平地用 v.y, 坡面用法线投影)
+	# 问题: trimesh 法线帧间跳变 (7°→9°→6°→10°), 导致每帧在两套策略间反复切换,
+	#        平地分支 v.y=0 吃掉上坡 Y 分量, 坡面分支又放开 → 上坡抖动/阶梯感
+	# V6 修复: 统一用法线投影, 不管坡度多少都走同一套逻辑:
+	#   1) 速度沿法线分量 > 0 (远离地面) 且 < 阈值 → 清零 (防弹)
+	#   2) 沿法线方向施加下压力 (贴附)
+	# 平地时法线 ≈ UP, 法线投影 ≈ v.y, 效果和旧平地分支一样
+	# 坡面时法线沿坡面, 投影自然正确, 不存在策略切换边界
+	# plain_slope_threshold_deg 参数保留兼容旧 cfg, 但不再影响行为
+
+	# --- 1) 法线投影防弹: 远离地面的小速度直接清零 ---
+	# 数学: v_along_n = v · n, > 0 表示球正在远离地面 (弹起)
+	# 清掉后球只保留切向滑行, 不影响转向/加速/漂移
+	var v_along_n_unified: float = v.dot(n)
+	if v_along_n_unified > 0.0 and v_along_n_unified < plain_vy_zero_threshold:
+		v -= n * v_along_n_unified
+		linear_velocity = v
+
+	# --- 2) 下坠速度上限 (沿法线方向) ---
+	# 旧方案只限 v.y, 现在改为限法线分量, 坡面上也能正确限速
+	if plain_vy_down_clamp > 0.0:
+		var v_along_n_down: float = v.dot(n)
+		if v_along_n_down < -plain_vy_down_clamp:
+			v -= n * (v_along_n_down + plain_vy_down_clamp)
 			linear_velocity = v
-		# 2) 下坠速度上限
-		if plain_vy_down_clamp > 0.0 and v.y < -plain_vy_down_clamp:
-			v.y = -plain_vy_down_clamp
-			linear_velocity = v
-		# 3) 向下压力: 只在车处于"刚弹起 or 悬浮微抬"状态时施加
-		#    Y 速度 > 小阈值 → 主动压回地面
-		#    Y 速度 <= 0 (贴地或正在下落) → 不压 (让引擎/重力自由发挥)
-		if plain_downforce > 0.0 and v.y > plain_downforce_vy_gate:
-			apply_central_force(Vector3.DOWN * plain_downforce * mass)
-	else:
-		# ============ 坡面: 温和贴附 + V4 法向小弹归零 ============
-		# 用户反馈钩爪落地在下坡斜面多次弹跳 → 平地分支的"v.y > 0 归零"在斜面用不上,
-		# 因为车在斜面上速度法向分量不是纯 v.y. 这里改成沿法线投影:
-		#   v_along_n > 0 (远离斜面) 且 < plain_vy_zero_threshold → 清掉分离速度
-		# 这样斜面落地的微弹也能被压住, 不依赖 V4 settle 窗口 (settle 0.18s 后还有持续保护)
-		var v_along_n_slope: float = v.dot(n)
-		if v_along_n_slope > 0.0 and v_along_n_slope < plain_vy_zero_threshold:
-			v -= n * v_along_n_slope
-			linear_velocity = v
-		# 只在"未起跳"(沿法线分离速度较小)且"非峭壁"时贴附
-		if slope_deg <= slope_stick_max_deg and absf(v.y) < slope_stick_max_vy and slope_stick_force > 0.0:
-			# 沿坡面法线反方向施力, 让车"扣"在坡上
-			apply_central_force(-n * slope_stick_force * mass)
+
+	# --- 3) 沿法线下压力: 只在车"弹起"时施加 ---
+	# v_along_n > gate 表示球正在远离地面 (微弹/悬浮), 沿法线反向压回
+	# 平地时 -n ≈ DOWN, 效果和旧方案一样; 坡面时沿坡面法线压, 更合理
+	# 注意: 重新读 v_along_n (可能被上面清零了)
+	var v_along_n_for_df: float = linear_velocity.dot(n)
+	if plain_downforce > 0.0 and v_along_n_for_df > plain_downforce_vy_gate:
+		apply_central_force(-n * plain_downforce * mass)
+
+	# --- 4) 坡面贴附力: 非峭壁 + 未真跳跃时, 持续沿法线压住 ---
+	# 这里用 slope_stick_force 而不是 plain_downforce, 两者独立可调:
+	#   plain_downforce = 防弹 (只在弹起时), slope_stick_force = 贴附 (持续)
+	# slope_stick_max_vy 用法线投影判断 (而非旧方案的 absf(v.y)), 坡面上更准确
+	var v_normal_abs: float = absf(linear_velocity.dot(n))
+	if slope_deg <= slope_stick_max_deg and v_normal_abs < slope_stick_max_vy and slope_stick_force > 0.0:
+		apply_central_force(-n * slope_stick_force * mass)
 
 
 # ============================================================
