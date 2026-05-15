@@ -89,6 +89,16 @@ var _logged_attached_rope: bool = false
 @export_range(0.0, 30.0, 0.5) var release_kick_impulse: float = 8.0
 ## 释放瞬间额外向上冲量 (m/s × mass). 让玩家被甩起腾空一下
 @export_range(0.0, 20.0, 0.5) var release_upward_kick: float = 4.0
+## 释放冲量与起钩绳长的关系曲线 (X=起钩距离/max_distance 0~1, Y=冲量倍率 0~3)
+## 数学: 实际释放冲量 = release_kick_impulse × curve.sample(initial_distance / max_distance)
+## 默认: 近距离 0.4 (短绳冲量小), 中距离 1.0 (标准), 远距离 1.8 (长绳甩得更猛)
+## 设计意图: 长绳积累的动能更大, 释放时应该获得更大的甩出速度, 类似 Apex 远距离钩索的爆发感
+@export var release_distance_curve: Curve
+## 释放后车头摆正持续时间 (秒). 钩索释放瞬间, 如果车头没朝速度方向, 会在此时间内平滑摆正
+## 数学: 释放后 car._grapple_release_align_left = 此值, 每帧递减, >0 时做车头→速度方向的 slerp
+## 0 = 不摆正 (释放后车头保持原样); 0.3~0.5 = 推荐 (丝滑摆正, 不突兀)
+## 注意: 正常从跳台飞出不会触发 (因为 _grapple_active 从未为 true, 不走此逻辑)
+@export_range(0.0, 2.0, 0.05) var release_align_duration: float = 0.4
 ## 玩家松开空格是否能提前释放. 1=松开就释放, 0=必须等到时间到/距离够
 @export var release_on_button_release: bool = true
 ## 【自动甩出: 反向拽保护】当车直线钩正前方锚点 + 玩家无侧向输入时, 拉力会把车减速到反向
@@ -277,6 +287,16 @@ func _init_default_curves() -> void:
 		distance_force_curve.add_point(Vector2(0.0, 0.6))
 		distance_force_curve.add_point(Vector2(0.5, 1.0))
 		distance_force_curve.add_point(Vector2(1.0, 1.5))
+	if release_distance_curve == null:
+		# 释放冲量-绳长曲线: x=起钩距离/max_distance (0~1), y=冲量倍率 (0~3)
+		# 默认: 近距离 0.4 (短绳冲量小, 不需要甩太远);
+		#       中距离 1.0 (标准冲量);
+		#       远距离 1.8 (长绳积累动能大, 释放甩得更猛).
+		# 设计: 模拟真实钩索物理 — 绳越长, 摆动弧越大, 释放时切线速度越高
+		release_distance_curve = Curve.new()
+		release_distance_curve.add_point(Vector2(0.0, 0.4))
+		release_distance_curve.add_point(Vector2(0.5, 1.0))
+		release_distance_curve.add_point(Vector2(1.0, 1.8))
 
 
 # ============================================================
@@ -534,10 +554,23 @@ func _release(success: bool) -> void:
 			v_dir = -car.global_transform.basis.z
 			v_dir.y = 0.0
 			v_dir = v_dir.normalized()
+		# === 释放冲量与起钩绳长正相关 ===
+		# 数学: kick = release_kick_impulse × release_distance_curve.sample(initial_distance / max_distance)
+		# 长绳积累动能大 → 释放甩出速度更大 (Apex 远距离钩索爆发感)
+		var dist_ratio: float = clampf(_initial_grapple_distance / maxf(max_distance, 0.001), 0.0, 1.0)
+		var dist_kick_mult: float = _sample_curve_safe(release_distance_curve, dist_ratio, 1.0)
+		var actual_kick: float = release_kick_impulse * dist_kick_mult
 		# 沿运动方向冲量
-		car.apply_central_impulse(v_dir * release_kick_impulse * car.mass)
-		# 向上冲量 (腾空感)
-		car.apply_central_impulse(Vector3.UP * release_upward_kick * car.mass)
+		car.apply_central_impulse(v_dir * actual_kick * car.mass)
+		# 向上冲量 (腾空感) — 也受距离曲线影响
+		car.apply_central_impulse(Vector3.UP * release_upward_kick * dist_kick_mult * car.mass)
+		# === 通知 car 进入释放后车头摆正状态 ===
+		# 钩索释放时车头可能没朝速度方向 (swing 过程中车头跟随锚点切线),
+		# 需要在释放后短暂时间内帮车头平滑转向速度方向, 让玩家出钩索后能直线跑
+		# 注意: 正常从跳台飞出不触发 (因为 _grapple_active 从未为 true)
+		if release_align_duration > 0.0 and "_grapple_release_align_left" in car:
+			car.set("_grapple_release_align_left", release_align_duration)
+			print("[Grapple] 释放: 车头摆正 %.2fs, 冲量倍率 %.2f (起钩距离 %.1fm)" % [release_align_duration, dist_kick_mult, _initial_grapple_distance])
 		# 释放震动
 		if cam_shake_release > 0.0 and car.has_signal("camera_shake_requested"):
 			car.emit_signal("camera_shake_requested", cam_shake_release, 0.25)

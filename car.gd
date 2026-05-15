@@ -691,8 +691,25 @@ extends RigidBody3D
 @export var landing_stable_max_vy: float = 4.0
 
 ## 落地缓冲: 落地瞬间 Y 方向冲击吸收比例 (0=完全保留下落动能造成弹跳, 1=完全吸收平稳落地)
+## V5 改进: 不仅清当前帧法向速度, 还施加预抵消冲量对抗 solver 反弹
+## 数学: 预抵消冲量 = fall_speed × absorb × landing_anti_bounce_mult × mass
 ## 注: 当 landing_hard_stick = true 时, 此参数被忽略(直接强制 Y=0)
 @export var landing_impact_absorb: float = 0.85
+
+## 【落地稳压窗口时长】落地后持续 N 秒, 每帧清法向分离速度 + 施加向下压力, 彻底消除弹跳
+## 数学: 窗口内每帧 v_along_n > 0 → 清零; 同时施加 -n × landing_settle_downforce × mass
+## 0.35 推荐 (覆盖物理引擎 settle 全过程). 太短压不住高速落地反弹, 太长会影响起跳响应
+@export_range(0.05, 1.0, 0.01) var landing_settle_duration: float = 0.35
+
+## 【落地稳压向下压力】settle 窗口内每帧沿法线向下施加的力 (N/kg)
+## 主动把球压回地面, 对抗 Godot 物理 solver 在碰撞后产生的反弹分离速度
+## 8 推荐. 太小压不住高速落地, 太大会让车"粘"在地上影响起跳
+@export_range(0.0, 40.0, 0.5) var landing_settle_downforce: float = 8.0
+
+## 【预抵消反弹冲量系数】落地帧额外施加向下冲量 = fall_speed × absorb × 此值 × mass
+## 预存一个向下动量, 抵消 solver 在下一帧产生的反弹速度
+## 0.5 推荐 (solver 反弹通常是落地速度的 30~60%, 取中间值). 0=不施加预抵消
+@export_range(0.0, 2.0, 0.05) var landing_anti_bounce_mult: float = 0.5
 
 ## 【硬落地】落地瞬间是否直接把 Y 速度归零 (不留任何下落动量, 杜绝弹跳)
 ## 默认 false: 因为原生 _apply_ground_stick 的 plain_vy_zero_threshold + plain_downforce 已经能防弹
@@ -902,7 +919,7 @@ var _landing_stick_left: float = 0.0
 # 这个窗口在落地后 0.18s 内每帧执行"沿法线分离速度清零", 直到完全稳定.
 # 不走 _landing_stick_left / landing_stick_duration 的 export 路径, 避免"用户改了 cfg 关闭 → V4 失效"
 var _v4_landing_settle_left: float = 0.0
-const V4_LANDING_SETTLE_DURATION: float = 0.18   # 18 帧 @ 60fps, 足够物理引擎 settle
+# V5: settle 窗口时长现在走 @export landing_settle_duration, 不再用 const
 
 # ============================================================
 # 路面法线低通滤波 — 解决弯坡 trimesh 抖动
@@ -1050,6 +1067,10 @@ var _pending_landing_q_left: float = 0.0   # 预输入 Q 剩余有效秒数 (倒
 var _grapple_active: bool = false
 # 钩索系统节点引用 (由 _spawn_grapple_hook 在 _ready 后填入, 给 _read_input 路由空格键用)
 var _grapple_hook: Node = null
+# 钩索释放后车头摆正倒计时 (秒). GrappleHook._release() 设置此值, 每帧递减
+# > 0 时在空中朝向对齐代码段中做车头→速度方向的平滑 slerp
+# 正常从跳台飞出不会触发 (因为 _grapple_active 从未为 true, GrappleHook 不会设此值)
+var _grapple_release_align_left: float = 0.0
 
 # 初始朝向(由 _ready 记录, 用于复位时恢复)
 var _initial_car_mesh_basis: Basis = Basis.IDENTITY
@@ -2157,6 +2178,20 @@ func _apply_landing_physics() -> void:
 			var v_along_n: float = linear_velocity.dot(n)
 			var v: Vector3 = linear_velocity - n * v_along_n
 			linear_velocity = v
+			# 【V5 改进】预抵消物理引擎 solver 反弹:
+			# 问题: 落地帧清了法向速度, 但 Godot 物理引擎在下一个物理步的碰撞 solver
+			#       会根据穿透深度重新计算接触响应, 产生新的"分离速度"(反弹).
+			#       landing_impact_absorb 名义上是"吸收比例", 但之前只清了当前帧的法向速度,
+			#       没有预防 solver 在后续帧产生的反弹.
+			# 修复: 落地帧额外施加一个沿法线向下的瞬时冲量, 主动抵消 solver 将要产生的反弹.
+			#       冲量大小 = fall_speed × landing_impact_absorb × mass × 0.5
+			#       (0.5 是经验系数: solver 反弹通常是落地速度的 30~60%, 取中间值)
+			#       这样 solver 产生的反弹速度被这个"预存"的向下动量抵消, 球不会弹起.
+			# 数学: impulse = -n × fall_speed × absorb × mass × 0.5
+			#       fall_speed > 0 表示砸下来的速度 (已取反), 越大说明砸得越狠, 需要越大的预抵消
+			if fall_speed > 0.5 and landing_impact_absorb > 0.0 and landing_anti_bounce_mult > 0.0:
+				var anti_bounce_impulse: float = fall_speed * landing_impact_absorb * landing_anti_bounce_mult
+				apply_central_impulse(-n * anti_bounce_impulse * mass)
 			# 2) 位置沿法线 clamp: 球心 = hit_point + n * sphere_radius
 			# 仅当 (车心 - hit_point) · n < sphere_radius 时才推 (避免把已经合理悬空的车往下拽)
 			var car_to_hit: Vector3 = global_position - hit_point
@@ -2193,7 +2228,7 @@ func _apply_landing_physics() -> void:
 
 	# 启动 V4 落地稳压窗口 (0.18s, 内部独立, 与已废弃的 _landing_stick_left 不冲突)
 	# 见 _apply_v4_landing_settle 函数 — 在 _physics_process 每帧调
-	_v4_landing_settle_left = V4_LANDING_SETTLE_DURATION
+	_v4_landing_settle_left = landing_settle_duration
 
 	# 水平速度补偿: 飞行过程中空气阻力可能让 horizontal speed 缩水, 落地把它拉回起飞前
 	if air_landing_speed_recover > 0.0 and _pre_airborne_horizontal_speed > 0.5:
@@ -2255,28 +2290,34 @@ func _apply_ground_stick(_delta: float) -> void:
 	var slope_deg: float = rad_to_deg(acos(cos_a))
 	var v: Vector3 = linear_velocity
 
-	# === V4 落地稳压窗口 (落地后 0.18s) ===
-	# 用户反馈"钩爪落地多次弹跳, 尤其下坡斜面". _apply_landing_physics 已经在落地这一帧
-	# 把"沿法线分离速度"和"穿透位置"都修了, 但接下来 1~3 帧物理引擎接触约束 settle 时还可能有微弹.
-	# 这里在 settle 窗口内每帧把"沿法线方向远离地面"的速度分量持续清掉, 直到完全稳定.
-	# 注意: 切向分量保留, 不影响转向/加速/漂移.
+	# === V5 落地稳压窗口 (落地后 0.35s) ===
+	# 用户反馈: 高处落地仍有 1 次弹跳. V4 的 0.18s 窗口 + 0.05 阈值不够压住高速碰撞.
+	# V5 改进:
+	#   1) 窗口加到 0.35s, 覆盖物理引擎 settle 全过程
+	#   2) 取消 0.05 阈值, 任何 > 0 的法向分离速度都清零 (零弹跳)
+	#   3) 位置 clamp 放宽 push 上限 (0.5 → 2.0), 高速砸地穿透也能修正
+	#   4) 额外施加向下冲量, 主动把球压回地面 (对抗 solver 反弹)
+	# 注意: 切向分量保留, 不影响转向/加速/漂移. 钩索期间已在上面 return 了.
 	if _v4_landing_settle_left > 0.0:
 		_v4_landing_settle_left -= _delta
 		var v_along_n2: float = v.dot(n)
-		# 只清"远离地面"的法向分量 (v_along_n > 0). 砸下分量 < 0 让重力自然处理.
-		# 阈值 0.05 避免数值噪声反复触发, 但小弹也照样清.
-		if v_along_n2 > 0.05:
+		# V5: 任何远离地面的法向速度都清零 (> 0 即清, 不留阈值)
+		# 数学: v_along_n > 0 表示球正在远离地面 (弹起), 清掉后球只保留切向滑行
+		if v_along_n2 > 0.0:
 			v -= n * v_along_n2
 			linear_velocity = v
-			# 同时位置也轻微 clamp 一下, 避免 ray 帧间命中点跳变让车浮空
-			# (这里用比较保守的阈值, 不是抢着把车按死)
-			var hit_pt: Vector3 = ground_ray.get_collision_point()
-			var d_along_n: float = (global_position - hit_pt).dot(n)
-			var sphere_radius: float = 1.5
-			if d_along_n < sphere_radius - 0.02:
-				var push: float = (sphere_radius - d_along_n)
-				if push < 0.5:   # 只做小修正, 大穿透交给 _apply_landing_physics 处理
-					global_position += n * push
+		# V5: 位置 clamp — 确保球心距地面 = sphere_radius, 不浮空也不穿透
+		var hit_pt: Vector3 = ground_ray.get_collision_point()
+		var d_along_n: float = (global_position - hit_pt).dot(n)
+		var sphere_radius: float = 1.5
+		if d_along_n < sphere_radius - 0.01:
+			var push: float = (sphere_radius - d_along_n)
+			if push < 2.0:   # V5: 放宽到 2m, 高速砸地穿透也能修正
+				global_position += n * push
+		# V5: 额外施加沿法线向下的力, 主动对抗 solver 在下一帧产生的反弹
+		# 力度 = landing_settle_downforce × mass (温和但持续, settle 窗口内每帧都压)
+		if landing_settle_downforce > 0.0:
+			apply_central_force(-n * landing_settle_downforce * mass)
 
 	if slope_deg < plain_slope_threshold_deg:
 		# ============ 平地: 强防弹 ============
@@ -2474,8 +2515,15 @@ func _update_visuals(delta: float) -> void:
 	#           漂移中起跳保留漂移姿态, 直跑起跳保留直跑姿态, 完全符合直觉.
 	# ============================================================
 	# 共同实现: 计算 target_fwd 后, 用 base_rate 的角速度平滑 lerp 车头朝它转
-	# 触发条件: _is_airborne 且速度 > 0.5 m/s 且 (钩索激活 — 只对钩索做朝向对齐)
-	if _is_airborne and linear_velocity.length() > 0.5 and _grapple_active:
+	# 触发条件: _is_airborne 且速度 > 0.5 m/s 且 (钩索激活 OR 钩索释放后摆正倒计时 > 0)
+	# 钩索释放后摆正: _grapple_release_align_left > 0 时, 车头朝速度方向平滑对齐
+	# 正常从跳台飞出不触发 (因为 _grapple_active 从未为 true, _grapple_release_align_left 始终为 0)
+	if _grapple_release_align_left > 0.0:
+		_grapple_release_align_left -= delta
+		if _grapple_release_align_left < 0.0:
+			_grapple_release_align_left = 0.0
+	var _do_airborne_align: bool = _grapple_active or _grapple_release_align_left > 0.0
+	if _is_airborne and linear_velocity.length() > 0.5 and _do_airborne_align:
 		var v_xz: Vector3 = linear_velocity
 		v_xz.y = 0.0
 		if v_xz.length() > 0.5:
@@ -2521,6 +2569,12 @@ func _update_visuals(delta: float) -> void:
 					var mult: float = float(_grapple_hook.get("swing_yaw_speed_mult"))
 					max_rate = float(_grapple_hook.get("facing_max_rate_rad")) * mult
 					smooth_t = float(_grapple_hook.get("facing_smooth_time"))
+				elif _grapple_release_align_left > 0.0:
+					# 钩索释放后摆正: 用温和的速率让车头平滑转向速度方向
+					# 比钩索期间慢 (不突兀), 但比普通空中快 (有明确的"摆正"意图)
+					# 数学: max_rate=4 rad/s ≈ 230°/s, smooth_t=0.2 给丝滑过渡
+					max_rate = 4.0
+					smooth_t = 0.2
 				else:
 					# 非钩索空中 (正常起跳) 用较慢的 base 速率
 					max_rate = 2.0

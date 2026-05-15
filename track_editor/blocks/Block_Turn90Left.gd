@@ -56,11 +56,9 @@ extends TrackBlock
 			rebuild()
 
 # 弯道分段数: 控制视觉 mesh 圆弧的"圆滑程度" + 物理 trimesh 顶点密度
-# v7 改用 create_trimesh_collision (青花瓷做法) 后, 段数主要影响视觉圆滑度
-# 32 段: 90° 弯每段 2.8°, 视觉看着圆滑 (人眼分不出比 64 段更圆); 半径 20m 时弧长 ~1m
-# 物理 trimesh 直接从视觉 mesh 顶点生成, 三角形数量足够细
-# 性能: 视觉 mesh ~32 个 quad, 物理 trimesh ~64 个三角形, 相当轻量
-const SEGMENTS: int = 32
+# 4096 段: 90° 弯每段 0.022°, 半径 20m 时弧长 ~0.008m, 物理面片精度亚毫米级
+# 用户要求: 不要省小性能, RTX 4080S 完全无压力
+const SEGMENTS: int = 4096
 
 func _ready() -> void:
 	if get_child_count() > 0 and not Engine.is_editor_hint():
@@ -170,16 +168,19 @@ func _build_curved_road(total_angle: float, td: float) -> void:
 		st_wall_r.set_material(_make_wall_material())
 
 	# 收集 (N+1) ring 的"中心点 + right_dir + 半宽"
-	# 每个 ring 的 Y 偏移按弧长进度 (i / N) × total_rise 线性抬升, 让弯道有上下坡效果
+	# 每个 ring 的 Y 偏移用正弦曲线平滑过渡 (入口/出口切线水平, 中间最陡)
+	# 数学: y(t) = total_rise × (t - sin(2πt) / (2π))
+	#   y(0) = 0, y(1) = total_rise, y'(0) = 0, y'(1) = 0
+	#   这样弯道入口/出口与前后平地无缝衔接, 不会有阶梯感
 	# 每个 ring 的半宽 = lerp(entry_width/2, exit_width/2, t)  (路宽渐变)
 	var rings: Array = []
 	for i in range(SEGMENTS + 1):
 		var theta: float = td * float(i) * seg_angle
 		var rot := Basis(Vector3.UP, -theta)
 		var p_center: Vector3 = center_local + rot * Vector3(R * td, 0.0, 0.0)
-		# 加坡度 Y 偏移: 进度 t ∈ [0, 1], y = t × total_rise
+		# 正弦曲线坡度 Y 偏移: 入口/出口切线水平, 中间最陡
 		var t: float = float(i) / float(SEGMENTS)
-		p_center.y += t * total_rise
+		p_center.y += total_rise * (t - sin(TAU * t) / TAU)
 		var right_dir: Vector3 = rot * Vector3.RIGHT
 		var fwd_dir: Vector3 = rot * Vector3(0.0, 0.0, -1.0)
 		# 当前 ring 的半宽 (lerp 入口出口)

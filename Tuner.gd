@@ -334,6 +334,16 @@ const PARAMS := [
 	["slope_stick_max_deg",       "坡面贴附最大坡度(度)", 5.0, 90.0,  1.0,
 		"超过此坡度(峭壁)不再贴附, 避免拉住爬墙车。60 合理。", ""],
 
+	["__group", "落地缓冲"],
+	["landing_impact_absorb",     "落地冲击吸收",       0.0,  1.0,   0.05,
+		"落地瞬间冲击吸收比例。0=保留下落动能造成弹跳, 1=完全吸收平稳落地, 0.85 推荐。V5: 同时施加预抵消冲量对抗 solver 反弹。", ""],
+	["landing_settle_duration",   "稳压窗口时长(秒)",   0.05, 1.0,   0.01,
+		"落地后持续 N 秒, 每帧清法向分离速度 + 施加向下压力, 彻底消除弹跳。0.35 推荐。太短压不住高速落地, 太长影响起跳响应。", ""],
+	["landing_settle_downforce",  "稳压向下压力(N/kg)", 0.0,  40.0,  0.5,
+		"稳压窗口内每帧沿法线向下施加的力。主动把球压回地面, 对抗 solver 反弹。8 推荐。0=不施压(仅靠速度清零), 太大会让车'粘'地面。", ""],
+	["landing_anti_bounce_mult",  "预抵消反弹系数",     0.0,  2.0,   0.05,
+		"落地帧额外向下冲量 = 下落速度 × 吸收比例 × 此值 × mass。预存向下动量抵消 solver 反弹。0.5 推荐。0=不施加预抵消。", ""],
+
 	["__page", "🧱 撞墙物理"],
 	["__group", "墙判定 + 总开关"],
 	["slope_as_wall_enabled",     "斜面视为墙",         0,    1,     1,
@@ -463,8 +473,6 @@ const PARAMS := [
 		"Y 速度绝对值超过此值就不算'稳定'(还在砸地过程中)。4 合理。", ""],
 	["landing_boost_shake",       "落地喷震屏强度",     0.0,  2.0,   0.05,
 		"落地喷触发时震屏强度。", ""],
-	["landing_impact_absorb",     "落地冲击吸收",       0.0,  1.0,   0.05,
-		"落地瞬间 Y 方向冲击吸收比例。0=保留下落动能造成弹跳, 1=完全吸收平稳落地, 0.85 推荐。", ""],
 
 	# ========================================================
 	# 🕒 倒带 / 自定义位置  (用户高压线: 新功能也必须有 Tuner 配置)
@@ -701,7 +709,9 @@ const GRAPPLE_PARAMS := [
 	["release_kick_impulse",         "释放沿运动方向冲量",        0.0,  30.0,  0.5,
 		"释放瞬间沿当前速度方向的冲量(m/s × mass). 让玩家被甩出去. 推荐 6~12.", ""],
 	["release_upward_kick",          "释放向上冲量",              0.0,  20.0,  0.5,
-		"释放瞬间额外向上冲量. 让被甩起腾空一下, 准备空喷/落地喷. 推荐 3~6.", ""],
+		"释放瞬间额外向上冲量. 让被甩起腾空一下, 准备空喷/落地喷. 推荐 3~6. 也受释放冲量-绳长曲线影响.", "release_distance_curve"],
+	["release_align_duration",       "释放后车头摆正时长(秒)",    0.0,  2.0,   0.05,
+		"钩索释放后车头没朝速度方向时, 在此时间内平滑摆正. 0=不摆正(释放后车头保持原样). 0.3~0.5 推荐. 正常跳台飞出不触发.", ""],
 	["release_on_button_release",    "松开空格提前释放",          0, 1, 1,
 		"1=松开空格立即释放, 0=必须等到距离够/时间到才释放.", ""],
 	["__sub", "反向拽自动甩出 (Stall Protection)"],
@@ -855,6 +865,7 @@ const CURVE_PROPS := {
 	"cam_fov_curve":                      {"target": "grapple"},
 	"cam_roll_curve":                     {"target": "grapple"},
 	"distance_force_curve":               {"target": "grapple"},
+	"release_distance_curve":             {"target": "grapple"},
 }
 
 ## cfg 保存路径
@@ -919,12 +930,14 @@ func _ready() -> void:
 func _auto_load_on_start() -> void:
 	var p := _stable_cfg_path()
 	if FileAccess.file_exists(p):
-		_load_from_file()
+		_load_from_path(p)
 	else:
-		# 没 cfg 也要启用 autosave, 让用户改第一个值就立刻被保存 (不然要等到点过保存按钮一次才生效)
+		# 没 cfg 也要启用图形参数自动持久化 (但不启用 autosave, 用户要求手动保存)
 		_graphics_autosave_enabled = true
-		_autosave_enabled = true
-		print("[Tuner] cfg 不存在, 启用 autosave 等待首次写入")
+		# 首次启动无 cfg, 自动把当前 @export 默认值保存为默认配置 (tune.cfg)
+		# 这样“默认”按钮有东西可加载
+		_save_to_path(_stable_cfg_path())
+		print("[Tuner] cfg 不存在, 已用当前默认值创建 tune.cfg")
 
 
 ## cfg 迁移: 首次启动 (或改完项目名后第一次启动) 时,
@@ -1107,7 +1120,7 @@ func _bind_car() -> void:
 			_defaults[gk] = float(_GRAPHICS_DEFAULTS[gk])
 
 	_defaults_initialized = true
-	_load_from_file()
+	_load_from_path(_stable_cfg_path())
 
 
 # 预读 cfg 的 [tune] 段所有 key, 用于 _bind_car 判断"哪些参数玩家已经调过"
@@ -1702,8 +1715,9 @@ func _build_ui() -> void:
 	tools.add_theme_constant_override("separation", 4)
 	root.add_child(tools)
 	var btn_reset := Button.new(); btn_reset.text = "重置"; btn_reset.add_theme_font_size_override("font_size", 11); btn_reset.pressed.connect(_on_reset); tools.add_child(btn_reset)
-	var btn_save := Button.new(); btn_save.text = "保存"; btn_save.add_theme_font_size_override("font_size", 11); btn_save.pressed.connect(_on_save); tools.add_child(btn_save)
-	var btn_load := Button.new(); btn_load.text = "加载"; btn_load.add_theme_font_size_override("font_size", 11); btn_load.pressed.connect(_on_load); tools.add_child(btn_load)
+	var btn_save := Button.new(); btn_save.text = "保存"; btn_save.add_theme_font_size_override("font_size", 11); btn_save.tooltip_text = "保存当前参数到备份1 (backup1.cfg)"; btn_save.pressed.connect(_on_save_backup); tools.add_child(btn_save)
+	var btn_load := Button.new(); btn_load.text = "加载"; btn_load.add_theme_font_size_override("font_size", 11); btn_load.tooltip_text = "从备份1 (backup1.cfg) 加载参数"; btn_load.pressed.connect(_on_load_backup); tools.add_child(btn_load)
+	var btn_default := Button.new(); btn_default.text = "默认"; btn_default.add_theme_font_size_override("font_size", 11); btn_default.tooltip_text = "还原默认配置 (tune.cfg)"; btn_default.add_theme_color_override("font_color", Color(1.0, 0.6, 0.3)); btn_default.pressed.connect(_on_default_confirm); tools.add_child(btn_default)
 
 	# === 竖排 tab: 左侧 ItemList 做侧边栏, 右侧 VBox 装参数页 ===
 	var body := HBoxContainer.new()
@@ -2448,29 +2462,19 @@ func _on_reset() -> void:
 
 
 # ============================================================
-# Autosave 系统 (修复"参数保存不了"反馈)
+# Autosave 系统 (已禁用 — 用户要求手动保存)
 # ============================================================
-# 设计:
-#   1) 玩家拖滑块 / 改 SpinBox → _request_autosave() 启动 / 重置 0.5s timer
-#   2) timer 不再被打断后 timeout → _on_autosave_timeout() → 调 _on_save()
-#   3) _autosave_enabled 在 _load_from_file 完成后才打开, 避免启动期间 cfg 加载过程中
-#      的 set_value_no_signal 误触发 (其实 set_value_no_signal 不会触发 value_changed,
-#      但 _bind_car 里的同步会, 仍然要把开关守好)
-# 启动安全: _autosave_enabled = false 时, _request_autosave 静默忽略
-# 副作用: 玩家任何改动都会在 0.5s 内自动写盘, 不再需要手动点保存按钮
-#   保存按钮保留 (用户可以立即强制保存, 不必等 timer)
+# 用户反馈: 自动保存太强, 不小心改错参数没处找问题
+# 改为手动保存: 保存按钮 → backup1.cfg, 加载按钮 → backup1.cfg, 默认按钮 → tune.cfg
+# autosave timer 保留但永远不启动 (_autosave_enabled 始终为 false)
 func _request_autosave() -> void:
-	if not _autosave_enabled:
-		return
-	if _autosave_timer == null:
-		return
-	# 重启 timer (debounce): 拖动期间反复重启, 拖完静默 0.5s 才真正保存
-	_autosave_timer.start()
+	# 已禁用自动保存, 此函数不再做任何事
+	return
 
 
 func _on_autosave_timeout() -> void:
-	# 0.5s 内没新输入 → 全量保存到 cfg
-	_on_save()
+	# 已禁用自动保存, 不再自动触发保存
+	pass
 
 
 # 关键修复: 切场景时 (F2 切赛道) 立即 flush autosave timer, 防止"改了值还没等 0.5s 就 F2 → 丢失"
@@ -2478,24 +2482,64 @@ func _on_autosave_timeout() -> void:
 #          change_scene_to_file 销毁了 Tuner → 没保存 → 新场景从旧 cfg 加载 → 看起来"重置"了.
 # Godot 节点销毁前会调 _exit_tree, 我们在这里强制保存一次, 保证用户改的值不丢.
 func _exit_tree() -> void:
-	# autosave_enabled 才走 flush, 启动期间 (cfg 还没加载完) 不要写, 否则可能用初始 0/默认值覆盖 cfg
-	if not _autosave_enabled:
-		return
-	# timer 还在 running, 说明有未保存的改动 → 立即触发一次 _on_save
-	if _autosave_timer != null and not _autosave_timer.is_stopped():
-		_autosave_timer.stop()
-		_on_save()
-		print("[Tuner] _exit_tree: 检测到未完成的 autosave 倒计时, 已强制 flush 保存")
+	# 已禁用自动保存, 不再在退出时强制保存
+	# 用户必须手动点保存按钮才会写盘
+	pass
 
 
 func _on_save() -> void:
+	# 保存到默认配置 (tune.cfg) — 仅在启动时自动加载时使用
+	_save_to_path(_stable_cfg_path())
+
+
+## 保存到备份1 (backup1.cfg) — 用户手动点保存按钮触发
+func _on_save_backup() -> void:
+	var path := _stable_cfg_dir().path_join("backup1.cfg")
+	_save_to_path(path)
+	print("[Tuner] 已保存备份1 → ", path)
+
+
+## 从备份1 (backup1.cfg) 加载 — 用户手动点加载按钮触发
+func _on_load_backup() -> void:
+	var path := _stable_cfg_dir().path_join("backup1.cfg")
+	if not FileAccess.file_exists(path):
+		push_warning("[Tuner] 备份1 不存在: %s" % path)
+		print("[Tuner] 备份1 不存在, 请先点保存创建备份")
+		return
+	_load_from_path(path)
+	print("[Tuner] 已从备份1 加载 ← ", path)
+
+
+## 默认按钮: 弹出二次确认弹窗, 确认后从 tune.cfg 加载默认配置
+func _on_default_confirm() -> void:
+	# 创建二次确认弹窗
+	var dialog := AcceptDialog.new()
+	dialog.title = "还原默认配置"
+	dialog.dialog_text = "确定要还原为默认配置吗？\n\n这会把所有参数恢复到 tune.cfg 中保存的值。\n如果你有未保存的修改会丢失！"
+	dialog.ok_button_text = "确定还原"
+	# 添加取消按钮
+	dialog.add_cancel_button("取消")
+	dialog.confirmed.connect(func():
+		_load_from_path(_stable_cfg_path())
+		print("[Tuner] 已还原默认配置 ← ", _stable_cfg_path())
+		dialog.queue_free()
+	)
+	dialog.canceled.connect(func():
+		dialog.queue_free()
+	)
+	# 挂到当前场景树上显示
+	add_child(dialog)
+	dialog.popup_centered()
+
+
+## 通用保存函数: 把当前 UI 参数写入指定路径的 cfg 文件
+func _save_to_path(save_path: String) -> void:
 	# 关键 bug 修复: 旧实现 cfg = ConfigFile.new() 全新空 cfg, 写完后丢掉所有未由本函数管理的段
 	# (尤其 [color] 段 — 颜色由 ColorPickerButton 行通过 _save_color_to_cfg 单独写, _on_save
 	#  不知道这些值 → 每次 _on_save 都把颜色清空了 → 用户感受到"颜色保存不了").
 	# 修复: 先 load 旧 cfg, 在它基础上 set_value 增量更新, 这样未管理段保留下来.
 	var cfg := ConfigFile.new()
-	var save_path := _stable_cfg_path()
-	cfg.load(save_path)   # 失败也无所谓 (cfg 不存在), 当成空 cfg 处理
+	cfg.load(save_path)   # 先加载旧 cfg 做增量更新, 失败也无所谓 (cfg 不存在), 当成空 cfg 处理
 	for prop in _rows.keys():
 		var row = _rows[prop]
 		var kind: String = row.get("kind", "car")
@@ -2527,12 +2571,12 @@ func _on_save() -> void:
 
 
 func _on_load() -> void:
-	_load_from_file()
+	_load_from_path(_stable_cfg_path())
 
 
-func _load_from_file() -> void:
+## 通用加载函数: 从指定路径的 cfg 文件加载参数
+func _load_from_path(load_path: String) -> void:
 	var cfg := ConfigFile.new()
-	var load_path := _stable_cfg_path()
 	var err := cfg.load(load_path)
 	if err != OK:
 		print("[Tuner] _load_from_file: cfg.load 失败 err=%d 路径=%s" % [err, load_path])
@@ -2620,9 +2664,7 @@ func _load_from_file() -> void:
 			_apply_curve_to_target(cprop, c)
 	# 加载颜色配置 (走 [color] 段, 由 ColorPickerButton 行管理)
 	_load_colors_from_cfg(cfg)
-	# 加载完成后启用图形参数 + 普通参数的自动持久化:
-	# 之后玩家在 UI 拖任何滑块 / 改 SpinBox / 改图形选项都会自动写盘
-	# (启动到这一步之前, autosave 一直为 false, 避免初始化期间的无用 IO)
+	# 加载完成后启用图形参数自动持久化 (图形参数改了立即生效, 不走 autosave)
+	# 注意: _autosave_enabled 保持 false — 用户要求手动保存, 不自动写盘
 	_graphics_autosave_enabled = true
-	_autosave_enabled = true
 	print("[Tuner] 已从 ", load_path, " 加载")
