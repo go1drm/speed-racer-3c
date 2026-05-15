@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://track_editor/blocks/Block_Turn90Right.gd" id="1_block"]
+
+[node name="turn_90_right" type="Node3D"]
+script = ExtResource("1_block")

@@ -711,6 +711,42 @@ extends RigidBody3D
 ## 单位 m/s, 推荐 1.5~3.0. 设 0 = 任何落地都压
 @export var landing_stick_min_fall_speed: float = 1.5
 
+# ---------------- 时间回溯 (Rewind) ----------------
+# 用户要求: 按住 R 键 → 不停倒退到之前的位置, 状态/速度都消失
+# 实现: 每物理帧把 (position, basis) 写到环形 buffer, 按 R 时从 buffer 末尾向前回放
+# 多按越久回放速度越快 (rewind_speed_ramp_per_sec 累加)
+@export_group("Rewind (R 键)")
+## 回溯开关
+@export var rewind_enabled: bool = true
+## 历史 buffer 长度 (秒). 默认 8 秒 = 480 帧 @ 60fps. 越长内存占越多但能倒得越远
+@export_range(1.0, 30.0, 0.5) var rewind_buffer_seconds: float = 8.0
+## 回放基础速度 (倍率). 1.0 = 1 秒回放消耗 1 秒历史; 2.0 = 1 秒消耗 2 秒
+@export_range(0.5, 8.0, 0.5) var rewind_speed_base: float = 2.0
+## 回放速度斜坡: 按住 R 越久, 回放速度每秒额外增加这么多 (上限 rewind_speed_max)
+@export_range(0.0, 4.0, 0.1) var rewind_speed_ramp_per_sec: float = 0.8
+## 回放速度上限
+@export_range(1.0, 12.0, 0.5) var rewind_speed_max: float = 6.0
+## 回溯时是否冻结物理 (true = freeze + 看不到颠簸; false = 仅每帧覆盖位置)
+@export var rewind_freeze_physics: bool = true
+
+# ---------------- 自定义位置模式 (FreeFly) ----------------
+# 用户要求: 按小键盘 0 进入【自定义位置模式】, 不再受任何物理影响
+#   方向键改水平面坐标, Shift 升高, Ctrl 下降, 速度可配置, 越按越快, 相机拉远
+#   再按 0 退出, 回到 3C 状态
+@export_group("FreeFly (小键盘 0)")
+## FreeFly 开关
+@export var freefly_enabled: bool = true
+## FreeFly 基础移动速度 (m/s)
+@export_range(2.0, 60.0, 1.0) var freefly_speed_base: float = 12.0
+## FreeFly 持续按方向键, 每秒速度额外增加这么多 m/s (上限 freefly_speed_max)
+@export_range(0.0, 60.0, 1.0) var freefly_speed_ramp_per_sec: float = 16.0
+## FreeFly 速度上限
+@export_range(5.0, 120.0, 1.0) var freefly_speed_max: float = 50.0
+## Shift 升高速度 (m/s, 也按同样的 ramp 累加)
+@export_range(2.0, 30.0, 1.0) var freefly_lift_speed: float = 10.0
+## FreeFly 模式下相机距离的额外乘数 (Camera3D.gd 读这个)
+@export_range(1.0, 4.0, 0.1) var freefly_camera_distance_mult: float = 1.6
+
 # ---------------- 节点 ----------------
 @onready var car_mesh: Node3D = get_node_or_null("CarMesh")
 @onready var body_mesh: Node3D = get_node_or_null("CarMesh/suv2")
@@ -724,6 +760,10 @@ extends RigidBody3D
 @export var drift_fx_scene: PackedScene = preload("res://DriftFX.tscn")
 @export var tuner_scene: PackedScene = preload("res://Tuner.tscn")
 @export var auto_spawn_tuner: bool = true
+## 钩索系统场景. spawn 在 car 节点下作为子节点, 通过 _grapple_active 状态字段
+## 反向影响 car 物理 (引擎抑制 / 摩擦削减), 通过空格键 (project.godot 里的 grapple action) 触发
+@export var grapple_hook_scene: PackedScene = preload("res://GrappleHook.tscn")
+@export var auto_spawn_grapple: bool = true
 
 # ---------------- 信号 ----------------
 signal speed_changed(kmh: float)
@@ -856,6 +896,84 @@ var _pending_landing_air_time: float = 0.0       # 触发本次 pending 的腾�
 var _last_air_time_for_trigger: float = 0.0      # 最近一次可用于触发的腾空时间(给 W 按键判定用)
 # 压地窗口: 落地后此秒数内, 每帧把向上 Y 速度 clamp 0, 彻底消除二次弹跳
 var _landing_stick_left: float = 0.0
+# 【V4 落地稳压窗口, 与 export 参数无关】
+# 用户反馈钩爪落地多次弹跳, 尤其下坡斜面. _apply_landing_physics 在落地这一帧已经做了
+# "速度法向清零 + 法向位置 clamp", 但接下来 1~3 帧物理引擎的接触约束还在 settle, 可能有微弹.
+# 这个窗口在落地后 0.18s 内每帧执行"沿法线分离速度清零", 直到完全稳定.
+# 不走 _landing_stick_left / landing_stick_duration 的 export 路径, 避免"用户改了 cfg 关闭 → V4 失效"
+var _v4_landing_settle_left: float = 0.0
+const V4_LANDING_SETTLE_DURATION: float = 0.18   # 18 帧 @ 60fps, 足够物理引擎 settle
+
+# ============================================================
+# 路面法线低通滤波 — 解决弯坡 trimesh 抖动
+# ============================================================
+# 用户反馈: 弯坡车身像"上台阶"一样抖. 调研结论:
+#   抖动根因 = ground_ray 命中 trimesh 时, 法线 = 被命中那个三角形的面法线.
+#   trimesh 是无数个三角形拼的, 三角形 A 跟 B 法线虽然差不多, 但有微小差异.
+#   球-trimesh 接触时每帧命中的三角形可能跳变 (saddle 问题), 导致 ground_ray 拿到的法线
+#   每帧抖动几度, 反复触发 _apply_ground_stick 里"沿法线 v 投影 → 清掉分离速度",
+#   产生肉眼可见的"颤动"或"上台阶"感.
+# 修复: 用一阶低通滤波 (指数衰减) 平滑法线 — 这是 GT Sport / Forza 等赛车游戏的标准做法.
+#   smoothed = lerp(smoothed, raw, 1 - exp(-dt / tau))
+#   tau (时间常数) 越大越平滑, 越小越跟手.
+#   tau = 0.06s ≈ 4 帧 @ 60fps, 平滑掉单帧抖动但不影响真实斜坡过渡反应
+var _smoothed_ground_normal: Vector3 = Vector3.UP   # 上一帧平滑后的法线
+var _smoothed_normal_initialized: bool = false
+# 时间常数: 0.06s ≈ 4 帧 @ 60Hz 视觉 / 14 物理帧 @ 240Hz
+# 用户反馈: tau=0.15s 太大, 上坡时法线响应慢 0.15s, 期间 thrust_dir 还是水平的,
+#          going_uphill 判定失败, 重力补偿/上坡助力全跳过 → 车开不上坡.
+# 折中值 0.06s: 单帧抖动 (1~2 帧) 仍能滤掉, 真实坡度切换 (0.3s+) 跟得上.
+const GROUND_NORMAL_SMOOTH_TAU: float = 0.06
+
+
+# 每帧统一更新平滑路面法线, 在 _physics_process 里调一次
+# 之后所有需要"路面法线"的代码 (_apply_ground_stick / _apply_engine_and_brake 的
+# slope_align_thrust 投影 / _update_visuals 的贴坡) 都用 _smoothed_ground_normal,
+# 不再各自调 ground_ray.get_collision_normal() 拿 raw 法线 (那是 trimesh 抖动的源头)
+func _update_smoothed_ground_normal(delta: float, on_ground: bool) -> void:
+	if not on_ground or ground_ray == null or not ground_ray.is_colliding():
+		# 离地: 重置滤波器, 下次贴地从干净状态开始
+		_smoothed_normal_initialized = false
+		return
+	var raw_n: Vector3 = ground_ray.get_collision_normal().normalized()
+	# 防御: 极端情况返回 (0,0,0), 用 UP 兜底
+	if raw_n.length_squared() < 0.01:
+		raw_n = Vector3.UP
+	if not _smoothed_normal_initialized:
+		_smoothed_ground_normal = raw_n
+		_smoothed_normal_initialized = true
+	else:
+		# 一阶低通滤波 (指数衰减): tau 越大越平滑
+		var alpha: float = 1.0 - exp(-delta / GROUND_NORMAL_SMOOTH_TAU)
+		_smoothed_ground_normal = _smoothed_ground_normal.lerp(raw_n, alpha).normalized()
+
+# ---- 时间回溯 (Rewind) 状态 ----
+# 环形 buffer 每帧记 (pos, basis_yaw, mesh_basis, time)
+# capacity = round(rewind_buffer_seconds * 60)  (60 fps)
+# write_index 写入位置, 满了覆盖最旧的
+# size = 当前 buffer 实际填了多少帧
+# rewind_active = 当前是否在回溯中
+# rewind_pressed_t = 按住 R 已经多久 (用来 ramp 回放速度)
+# rewind_cursor = 当前回放到 buffer 里哪一帧 (从最新一帧 size-1 往 0 倒退)
+var _rewind_buffer: Array = []   # Array of {"pos": Vector3, "mesh_xform": Transform3D}
+var _rewind_capacity: int = 480
+var _rewind_write_idx: int = 0
+var _rewind_size: int = 0
+var _rewind_active: bool = false
+var _rewind_pressed_t: float = 0.0
+var _rewind_cursor: float = 0.0   # 用 float 让 ramp 速度可以非整数
+var _last_r_press_t: float = -999.0   # 上一次按 R 时间, 用来检测双击 (双击 = 复位, 单按 = 回溯)
+
+# ---- 自定义位置模式 (FreeFly) 状态 ----
+# 进入: KEY_KP_0 切换 (再按一次退出)
+# 退出后清掉所有速度, 恢复物理
+var _freefly_active: bool = false
+var _freefly_pressed_t: float = 0.0   # 任意方向键累计按住时间, 用来 ramp 速度
+var _freefly_was_freeze: bool = false   # 进入前的 freeze 状态备份
+var _freefly_was_gravity_scale: float = 1.0
+var _freefly_was_collision_layer: int = 1
+var _freefly_was_collision_mask: int = 1
+
 var _landing_boost_arm_left: float = 0.0         # 稳定落地后落地喷的按键窗口剩余时间
 var _wall_drift_protect_left: float = 0.0         # (已废弃, 保留避免其他地方的未来引用) 撞墙断漂已改为立即断+CD
 var _drift_lockout_left: float = 0.0              # 撞墙断漂后的入漂冷却剩余秒数, >0 时按 Q 无法入漂
@@ -924,6 +1042,15 @@ var _songqian_drift_cd_left: float = 0.0
 var _pending_landing_w_left: float = 0.0   # 预输入 W 剩余有效秒数 (倒计时)
 var _pending_landing_q_left: float = 0.0   # 预输入 Q 剩余有效秒数 (倒计时)
 
+# ---- 钩索系统状态 ----
+# _grapple_active = true 表示玩家当前正被钩索拉着 (GrappleHook 进入 ATTACHED 时置 true, 释放时置 false)
+# 这个 flag 让 car 物理 _apply_engine_and_brake / _apply_friction / _apply_friction 末端
+# 决定: 钩索期间是否抑制引擎力, 摩擦削减多少 (具体倍率/开关参数都在 GrappleHook.gd 里, 这里只读 flag)
+# 由 GrappleHook 通过 car.set("_grapple_active", true/false) 直接修改 (而不是走信号), 因为物理读取需要每帧实时
+var _grapple_active: bool = false
+# 钩索系统节点引用 (由 _spawn_grapple_hook 在 _ready 后填入, 给 _read_input 路由空格键用)
+var _grapple_hook: Node = null
+
 # 初始朝向(由 _ready 记录, 用于复位时恢复)
 var _initial_car_mesh_basis: Basis = Basis.IDENTITY
 var _initial_car_mesh_position: Vector3 = Vector3.ZERO
@@ -947,6 +1074,9 @@ func _ready() -> void:
 		return
 
 	contact_monitor = true
+	# 注: 之前为修弯坡抖动加过 lock_rotation=true 和地面每帧清角速度,
+	#     但这两改动会让球完全不滚动, 间接抹掉了 PhysicsMaterial.friction 的效果,
+	#     导致地面摩擦力肉眼可见变弱. 已回滚, 保持原 RigidBody 行为.
 	# trimesh 赛道撞击会同时报告多个三角面 contact, 4 个不够用
 	# 撞墙时常见 6~10 个接触点 (车球底+车球侧+车球前等), 调到 16 保证不丢
 	max_contacts_reported = 16
@@ -967,12 +1097,19 @@ func _ready() -> void:
 		call_deferred("_spawn_hud")
 	if auto_spawn_tuner and tuner_scene:
 		call_deferred("_spawn_tuner")
+	if auto_spawn_grapple and grapple_hook_scene:
+		call_deferred("_spawn_grapple_hook")
 	if fx_scene:
 		# 不在这里 instantiate, 让 _attach_fx 根据 tailpipe 数量决定挂几个
 		call_deferred("_attach_fx")
 	if drift_fx_scene:
 		drift_fx_node = drift_fx_scene.instantiate()
 		call_deferred("_attach_drift_fx")
+	# 时间回溯 buffer 初始化 (capacity = 60fps × 配置秒数)
+	_rewind_capacity = max(60, int(round(rewind_buffer_seconds * 60.0)))
+	_rewind_buffer.resize(_rewind_capacity)
+	_rewind_write_idx = 0
+	_rewind_size = 0
 
 
 func _snap_to_car_mesh_origin() -> void:
@@ -1092,11 +1229,48 @@ func _spawn_tuner() -> void:
 
 
 # ============================================================
+#  钩索系统挂接
+# ============================================================
+# 把 GrappleHook 节点挂在 car 自己下面 (作为子节点), 这样:
+#   1. _grapple_active 状态在 car 自己身上, GrappleHook 通过 get_parent() 反向修改
+#   2. GrappleHook 的 _physics_process 会自然每帧执行
+#   3. 锚点查找走 get_tree().get_nodes_in_group("grapple_anchors") 全局检索
+# 不放在 current_scene 上是因为钩索逻辑必须能拿到 car 引用, 挂在 car 下最直接
+func _spawn_grapple_hook() -> void:
+	if _grapple_hook != null:
+		return
+	if find_child("GrappleHook", false, false):
+		_grapple_hook = get_node_or_null("GrappleHook")
+		return
+	var hook: Node = grapple_hook_scene.instantiate()
+	hook.name = "GrappleHook"
+	add_child(hook)
+	# 让 GrappleHook 自动用父节点(本 car)作为 RigidBody3D, 不需要额外设 car_path
+	_grapple_hook = hook
+	print("[Car] GrappleHook 已挂载")
+
+
+# ============================================================
 #  主循环
 # ============================================================
 func _physics_process(delta: float) -> void:
 	if not car_mesh or not body_mesh:
 		return
+	# === 时间回溯 / 自定义位置模式 优先级最高 ===
+	# 这两个模式下不跑正常 3C 逻辑, 完全接管 transform
+	if _rewind_active:
+		_update_rewind(delta)
+		# 仍然要消化输入事件 (不然按其他键会堆积), 但不做物理
+		_read_input()
+		return
+	if _freefly_active:
+		_update_freefly(delta)
+		_read_input()
+		return
+	# === 正常 3C 流程 ===
+	# 录制当前帧到 rewind buffer (在 _read_input 之前, 这样 R 按下时立即用到的是最新帧)
+	if rewind_enabled:
+		_record_rewind_frame()
 	_read_input()
 	_update_boost_timer(delta)
 	_update_stack_chain_timeout()    # 叠喷链超时清理
@@ -1127,16 +1301,37 @@ func _physics_process(delta: float) -> void:
 		if _drift_lockout_left < 0.0:
 			_drift_lockout_left = 0.0
 
-	car_mesh.position = position + sphere_offset
+	# car_mesh 视觉位置: 用平滑追随 RigidBody 位置, 而不是 1:1 复制
+	# 抖动修复: 球-trimesh 接触每帧让 RigidBody 位置颤动几毫米, 直接复制让视觉车也颤
+	# 用一阶低通追随 (tau=0.02s ≈ 1.2 帧), 对真实运动几乎无延迟感, 但能滤掉单帧位置抖动
+	# 注意: 只对 Y 分量做平滑 (XZ 1:1, 因为玩家会盯着横向位置, 任何延迟都明显)
+	var target_mesh_pos: Vector3 = position + sphere_offset
+	if _is_airborne or not _smoothed_normal_initialized:
+		# 空中或刚贴地: 直接同步, 不平滑 (避免出生 / 落地视觉延迟)
+		car_mesh.position = target_mesh_pos
+	else:
+		# 贴地状态: Y 分量加平滑滤波. 这是抖动最明显的方向 (球 Y 因接触点切换抖)
+		const MESH_POS_TAU: float = 0.02
+		var alpha: float = 1.0 - exp(-delta / MESH_POS_TAU)
+		var cur: Vector3 = car_mesh.position
+		# X/Z 直接同步 (横向运动延迟玩家最敏感), Y 用低通
+		car_mesh.position = Vector3(target_mesh_pos.x, lerpf(cur.y, target_mesh_pos.y, alpha), target_mesh_pos.z)
 
 	# 地面判定: 优先 ground_ray, 但如果 ray 因抬升/接缝偶尔脱离, 再做一次"短程宽探测"
 	# 避免一帧物理全跳过造成的顿挫
 	var on_ground: bool = ground_ray != null and ground_ray.is_colliding()
 	if not on_ground:
 		on_ground = _fallback_ground_check()
+	# === 关键: 每帧更新平滑路面法线, 让所有用法都拿到去抖后的法线 ===
+	# 这是抖动修复的核心 — trimesh 三角形切换让 raw 法线每帧抖几度,
+	# 这里统一过滤一次, 后面 _apply_ground_stick / _apply_engine_and_brake (slope_align_thrust)
+	# / _update_visuals (贴坡) 全都用 _smoothed_ground_normal 而不是各自重新读 raw.
+	_update_smoothed_ground_normal(delta, on_ground)
 	# 起飞/落地检测 + 空喷/落地喷处理
 	_update_air_state(delta, on_ground)
 	if on_ground:
+		# 注: 之前为修弯坡抖动加过 angular_velocity = Vector3.ZERO,
+		#     但配合 lock_rotation=true 一起会让 friction 失效, 已回滚.
 		_apply_engine_and_brake(delta)
 		_apply_friction(delta)
 		_apply_ground_stick(delta)
@@ -1154,6 +1349,11 @@ func _physics_process(delta: float) -> void:
 #  输入
 # ============================================================
 func _read_input() -> void:
+	# Rewind / FreeFly 期间完全屏蔽 3C 输入 (避免 W 触发氮气, Q 触发漂移等)
+	if _rewind_active or _freefly_active:
+		throttle_input = 0.0
+		steer_input = 0.0
+		return
 	throttle_input = Input.get_axis("brake", "accelerate")
 	steer_input = Input.get_axis("steer_right", "steer_left")
 
@@ -1235,12 +1435,44 @@ func _read_input() -> void:
 	if Input.is_action_just_pressed("nitro"):
 		_try_nitro()
 
+	# 空格 钩索 (GrappleHook 自己管状态机, car 这里只做路由)
+	# 按下 → 试射出钩索 (如果 IDLE 找锚点, 如果 ATTACHED 提前释放)
+	# 松开 → 如果开启了 release_on_button_release, 触发提前释放
+	if _grapple_hook != null:
+		if Input.is_action_just_pressed("grapple"):
+			if _grapple_hook.has_method("try_fire"):
+				_grapple_hook.call("try_fire")
+		elif Input.is_action_just_released("grapple"):
+			if _grapple_hook.has_method("try_release"):
+				_grapple_hook.call("try_release")
+
 
 func _unhandled_input(event: InputEvent) -> void:
-	# R 键复位到初始出生点（回到你在编辑器里调好的 CarMesh 位置）
-	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_R or event.physical_keycode == KEY_R:
-			_reset_to_origin()
+	# R 键: 按住回溯, 松开退出 (用户要求"按住 R 不停倒退")
+	# 双击 R 仍然能复位 (300ms 内连按 2 次 = 旧的复位行为)
+	if event is InputEventKey and not event.echo:
+		var ek: InputEventKey = event
+		if ek.keycode == KEY_R or ek.physical_keycode == KEY_R:
+			if ek.pressed:
+				# 检测双击: 上一次按 R 是不是 < 0.3s 内
+				var now: float = Time.get_ticks_msec() / 1000.0
+				if now - _last_r_press_t < 0.30:
+					# 双击 → 复位到出生点 (旧行为, 给玩家保留)
+					_reset_to_origin()
+					_last_r_press_t = -999.0
+				else:
+					_last_r_press_t = now
+					if rewind_enabled and not _freefly_active:
+						_start_rewind()
+			else:
+				# 松开 R → 退出回溯
+				if _rewind_active:
+					_stop_rewind()
+			get_viewport().set_input_as_handled()
+		# 小键盘 0 (KEY_KP_0): 切换自定义位置模式
+		elif (ek.keycode == KEY_KP_0 or ek.physical_keycode == KEY_KP_0) and ek.pressed:
+			if freefly_enabled and not _rewind_active:
+				_toggle_freefly()
 			get_viewport().set_input_as_handled()
 
 
@@ -1431,6 +1663,13 @@ func _init_default_curves() -> void:
 #  V2 - 引擎动力 + 刹车(带曲线)
 # ============================================================
 func _apply_engine_and_brake(_delta: float) -> void:
+	# === 钩索抑制引擎 ===
+	# 钩索激活时, 如果 GrappleHook 配置了 disable_engine_during_pull, 完全跳过引擎/刹车/助力等
+	# 让钩索拉力主导. 摩擦/重力/碰撞等其他力照常生效, 只是玩家油门不再起作用.
+	# 数学含义: F_total 在钩索期间 = F_grapple + F_friction + F_gravity, 而不再叠加 F_engine
+	# 这避免了"玩家踩油门 vs 钩索拉力"互相打架, 也让玩家能体验到"被绳子拽着无法挣脱"的手感
+	if _grapple_active and _grapple_hook != null and bool(_grapple_hook.get("disable_engine_during_pull")):
+		return
 	# === 视觉车头方向 ===
 	# car_mesh.basis.z = 骨架朝向(被 steer 控制), 但漂移时车壳额外被拧过 drift_yaw_offset
 	# 所以"玩家眼睛看到的车头" = 骨架朝向 × body_mesh.rotation.y
@@ -1440,10 +1679,16 @@ func _apply_engine_and_brake(_delta: float) -> void:
 		var b: Basis = car_mesh.global_transform.basis.rotated(car_mesh.global_transform.basis.y, body_mesh.rotation.y)
 		forward = -b.z
 	# 坡面切向: forward 投影到"地面切平面"上(消除垂直分量), 保证推力沿坡面走
-	# 若 ground_ray 拿到了地面法线, 用它; 否则退化为世界水平(保持老行为)
+	# 用 raw collision_normal 而不是 _smoothed_ground_normal:
+	# 旧 bug: 用平滑法线时, 刚上坡的 1 个 tau 时间窗 (~60ms) 内 thrust_dir.y 仍是 0,
+	#         going_uphill 判定失败 → 重力补偿/上坡助力全跳过 → 车开不上坡.
+	# 修复: 物理力相关的法线读 raw, 拿到当前帧的真实坡度. 只有视觉贴坡 (_update_visuals)
+	#       才用平滑法线避免视觉颤抖.
 	var ground_n: Vector3 = Vector3.UP
 	if ground_ray and ground_ray.is_colliding():
-		ground_n = ground_ray.get_collision_normal().normalized()
+		var raw_gn: Vector3 = ground_ray.get_collision_normal().normalized()
+		if raw_gn.length_squared() >= 0.01:
+			ground_n = raw_gn
 	var thrust_dir: Vector3 = forward
 	if slope_align_thrust:
 		# 把 forward 投影到垂直于 ground_n 的平面上
@@ -1702,6 +1947,15 @@ func _apply_friction(delta: float) -> void:
 				var grip_mult: float = lerpf(1.0, drift_counter_lat_grip_mult, cs)
 				lat_k *= grip_mult
 
+	# === 钩索摩擦削减 ===
+	# 钩索激活时, 按 friction_mult_during_pull 倍率削减前后/侧向摩擦
+	# 让车被拉得更顺, 不至于摩擦把拉力吃掉
+	# 数学: long_k *= mult, lat_k *= mult.   mult=0 → 完全无摩擦; mult=1 → 不变; mult=0.2 → 削 80%
+	if _grapple_active and _grapple_hook != null:
+		var grapple_friction_mult: float = float(_grapple_hook.get("friction_mult_during_pull"))
+		long_k *= grapple_friction_mult
+		lat_k  *= grapple_friction_mult
+
 	# 沿各自速度分量反方向施加冲量
 	var long_impulse: Vector3 = -forward * v_long * long_k * delta
 	var lat_impulse: Vector3  = -right   * v_lat  * lat_k  * delta
@@ -1857,32 +2111,89 @@ func _update_air_state(delta: float, on_ground: bool) -> void:
 func _apply_landing_physics() -> void:
 	# 落地缓冲: Y 方向下落动量 + 角动量统一清理
 	#
-	# 【新规则】只要 landing_impact_absorb > 0 就直接强制归零 Y 速度 + 清角速度
-	#   设计理由:
-	#     · 用户反馈"落地还是一次弹跳" → 根因是保留的 15% 下落速度被接触约束反弹
-	#     · 把 landing_impact_absorb 当成"开关"用最简单粗暴: >0 就完全吸收, =0 才走原物理
-	#     · 同时清 angular_velocity, 防止空中累积的角动量在落地瞬间转出"翻滚"
-	#   旧规则保留: landing_hard_stick = true 时也走相同路径(它原本就是"强制归零"语义)
+	# 【V4 - 斜面也零弹跳, 钩爪落地修复】
+	# 用户反馈 "用钩爪释放落地后还是多次弹跳, 尤其落在下坡斜面上"
+	# 根因诊断:
+	#   1) 之前 V3 把车 clamp 到 hit_point.y + sphere_radius (垂直 +Y), 但下坡斜面上
+	#      ground_ray 垂直向下打到斜面得到的 hit_point 与"球真正接触斜面的最近点"不在同一位置.
+	#      正确做法是沿斜面 **法线** 抬升: 球心 = hit_point + normal * sphere_radius
+	#      这样无论斜面多陡, 球都精确贴在斜面上, 不会浮空.
+	#   2) _apply_ground_stick 在斜面上只施加微弱拉力 (slope_stick_force), 压不住高速落地的反弹.
+	#      需要在落地这一帧把"沿法线方向的速度分量"也清掉, 而不只是 v.y=0.
+	#      数学: v_normal = v.dot(n) * n   (速度沿法线的投影)
+	#            如果 v_normal 是"远离地面"的(即 v.dot(n) > 0), 把它从 v 里减掉
+	#            v = v - v_normal      (保留切向分量, 消除法向分离速度)
+	#   3) 钩爪释放后 V3 路径的"v.y=0 + Y clamp" 在斜面上没用 → 现在 V4 的法向投影 + 法向 clamp 处理了.
 	#
 	# 数学:
-	#   v.y = 0 (强制, 无下落动量 → 无反弹源)
-	#   angular_velocity = Vector3.ZERO (无翻滚)
-	#
-	# 不会和原生 _apply_ground_stick 打架的原因:
-	#   _apply_ground_stick 的 plain_vy_zero_threshold 是处理"v.y > 0 的弹起", 我们这里是"v.y < 0 的下落归零"
-	#   两者方向相反, 各管各的, 不冲突 (这次和"压地窗口"那次不一样, 那次是同方向重复 clamp)
-	var fall_speed: float = -linear_velocity.y   # 下落速度(正数 = 在向下)
+	#   if ground_ray.is_colliding():
+	#       n = ground_ray.collision_normal.normalized()    (斜面外法线, 朝上)
+	#       hit_point = ground_ray.get_collision_point()
+	#       # 1) 速度法向分量清零: 消除"沿法线弹起"的速度
+	#       v_along_n = linear_velocity.dot(n)
+	#       if v_along_n > 0:                              (在远离地面)
+	#           linear_velocity -= n * v_along_n           (保留切向, 消除法向)
+	#       else:                                            (砸下来)
+	#           linear_velocity -= n * v_along_n           (砸下分量也清, 让车落"稳", 不要继续往下穿)
+	#       (其实统一减掉就行, 不分情况)
+	#       # 2) 位置沿法线抬升, 让球精确贴在斜面上
+	#       target_pos = hit_point + n * sphere_radius
+	#       if (current_pos - hit_point).dot(n) < sphere_radius:    (穿透 / 浮空)
+	#           移动到 target_pos
+	#   3) 角速度清零 (避免空中累积的旋转把车带飞)
+	var fall_speed: float = -linear_velocity.y
 	if landing_hard_stick or landing_impact_absorb > 0.0:
-		var v: Vector3 = linear_velocity
-		v.y = 0.0
-		linear_velocity = v
 		angular_velocity = Vector3.ZERO
-		print("[Car] 落地: Y 速度归零 + 清角速度 (原下落速度 %.1f m/s, 下落动量已吸收, 杜绝弹跳)" % fall_speed)
+		# === V4 修改: 斜面友好的速度法向清零 + 法向位置 clamp ===
+		var sphere_radius: float = 1.5
+		if ground_ray and ground_ray.is_colliding():
+			var n: Vector3 = ground_ray.get_collision_normal().normalized()
+			# 防御: collision_normal 极少数情况返回 0 (打到平面边缘), 兜底用 +Y
+			if n.length_squared() < 0.01:
+				n = Vector3.UP
+			var hit_point: Vector3 = ground_ray.get_collision_point()
+			# 1) 速度沿法线分量整个清掉 (消除分离速度 + 砸地穿透速度)
+			# 切向分量保留 → 车继续按"沿斜面方向"的水平动能滑行, 该走还走
+			var v_along_n: float = linear_velocity.dot(n)
+			var v: Vector3 = linear_velocity - n * v_along_n
+			linear_velocity = v
+			# 2) 位置沿法线 clamp: 球心 = hit_point + n * sphere_radius
+			# 仅当 (车心 - hit_point) · n < sphere_radius 时才推 (避免把已经合理悬空的车往下拽)
+			var car_to_hit: Vector3 = global_position - hit_point
+			var dist_along_n: float = car_to_hit.dot(n)
+			if dist_along_n < sphere_radius:
+				# 穿透了或者贴太近, 沿法线方向推到 sphere_radius
+				var push_dist: float = sphere_radius - dist_along_n
+				if push_dist < 5.0:   # 防御: > 5m 一般是 ray 命中错的物体
+					global_position += n * push_dist
+					print("[Car] V4 落地法向修正: 沿 n=%s 推 %.3fm (slope=%.0f°, 原下落速度 %.1f m/s)" % [
+						str(n.snapped(Vector3(0.01, 0.01, 0.01))),
+						push_dist,
+						rad_to_deg(acos(clampf(n.y, 0.0, 1.0))),
+						fall_speed,
+					])
+		else:
+			# 兜底: ground_ray 没命中 (车飞太高 / ray 距离不够), 走旧 v.y=0 逻辑
+			var v: Vector3 = linear_velocity
+			v.y = 0.0
+			linear_velocity = v
+			print("[Car] 落地无 ray 命中: 仅清 v.y (原下落速度 %.1f m/s)" % fall_speed)
+		# 【V3 保留】落地瞬间车身姿态立即摆正: 保留 yaw, 清掉 pitch/roll
+		# pitch/roll 在地面上由 _update_visuals 的"贴坡"逻辑接管
+		if car_mesh:
+			var cur_basis: Basis = car_mesh.global_transform.basis
+			var fwd: Vector3 = -cur_basis.z
+			fwd.y = 0.0
+			if fwd.length() > 0.001:
+				fwd = fwd.normalized()
+				var yaw_only: float = atan2(fwd.x, fwd.z) + PI
+				var new_basis := Basis(Vector3.UP, yaw_only)
+				var pos_mesh: Vector3 = car_mesh.global_transform.origin
+				car_mesh.global_transform = Transform3D(new_basis, pos_mesh).orthonormalized()
 
-	# 启动压地窗口: 已废弃 (与原生 _apply_ground_stick 打架, 导致悬浮)
-	# 这段保留 print 兼容旧调试日志, 不再设置 _landing_stick_left
-	# (原生防弹机制已经能处理弹跳, 不需要再叠一层)
-	# 旧 cfg 里 landing_stick_duration / landing_stick_min_fall_speed 还在, 但不再驱动行为
+	# 启动 V4 落地稳压窗口 (0.18s, 内部独立, 与已废弃的 _landing_stick_left 不冲突)
+	# 见 _apply_v4_landing_settle 函数 — 在 _physics_process 每帧调
+	_v4_landing_settle_left = V4_LANDING_SETTLE_DURATION
 
 	# 水平速度补偿: 飞行过程中空气阻力可能让 horizontal speed 缩水, 落地把它拉回起飞前
 	if air_landing_speed_recover > 0.0 and _pre_airborne_horizontal_speed > 0.5:
@@ -1921,13 +2232,51 @@ func _apply_ground_stick(_delta: float) -> void:
 	# 统一的"防弹 + 贴附"逻辑. 根据坡度自动切换两种策略, 互不干扰.
 	if not ground_stick_enabled:
 		return
+	# === 钩索抑制防弹/贴附 ===
+	# 钩索激活时必须跳过整个防弹+贴附逻辑, 让拉力能真正把车拉飞起来:
+	#   1) plain_vy_zero_threshold=5 会在 Y>0 且 <5 时强制 v.y=0, 钩索给的上抬速度全被吞
+	#   2) plain_downforce 下压力抵消 pull_upward_bias / arc_upward_force 往上的力
+	#   3) slope_stick_force 坡面贴附力也会把车按在坡面
+	# 钩索期间车应该完全脱离地面物理, 像飞行道具一样被绳子拽着走.
+	# 释放钩索后 _grapple_active 清 false, 防弹机制自动恢复, 落地正常走 _apply_landing_physics.
+	if _grapple_active:
+		return
 	if ground_ray == null or not ground_ray.is_colliding():
+		# 离开地面时重置滤波器, 下次贴地从新法线开始, 不带历史误差
+		_smoothed_normal_initialized = false
 		return
 
+	# 物理力相关法线读 raw, 不读平滑法线 (滞后会让斜面物理判定失败).
+	# 平滑法线只用于视觉贴坡 / thrust 投影方向 (那里能容忍 60ms 延迟换防抖).
 	var n: Vector3 = ground_ray.get_collision_normal().normalized()
+	if n.length_squared() < 0.01:
+		n = Vector3.UP
 	var cos_a: float = clampf(n.y, 0.0, 1.0)
 	var slope_deg: float = rad_to_deg(acos(cos_a))
 	var v: Vector3 = linear_velocity
+
+	# === V4 落地稳压窗口 (落地后 0.18s) ===
+	# 用户反馈"钩爪落地多次弹跳, 尤其下坡斜面". _apply_landing_physics 已经在落地这一帧
+	# 把"沿法线分离速度"和"穿透位置"都修了, 但接下来 1~3 帧物理引擎接触约束 settle 时还可能有微弹.
+	# 这里在 settle 窗口内每帧把"沿法线方向远离地面"的速度分量持续清掉, 直到完全稳定.
+	# 注意: 切向分量保留, 不影响转向/加速/漂移.
+	if _v4_landing_settle_left > 0.0:
+		_v4_landing_settle_left -= _delta
+		var v_along_n2: float = v.dot(n)
+		# 只清"远离地面"的法向分量 (v_along_n > 0). 砸下分量 < 0 让重力自然处理.
+		# 阈值 0.05 避免数值噪声反复触发, 但小弹也照样清.
+		if v_along_n2 > 0.05:
+			v -= n * v_along_n2
+			linear_velocity = v
+			# 同时位置也轻微 clamp 一下, 避免 ray 帧间命中点跳变让车浮空
+			# (这里用比较保守的阈值, 不是抢着把车按死)
+			var hit_pt: Vector3 = ground_ray.get_collision_point()
+			var d_along_n: float = (global_position - hit_pt).dot(n)
+			var sphere_radius: float = 1.5
+			if d_along_n < sphere_radius - 0.02:
+				var push: float = (sphere_radius - d_along_n)
+				if push < 0.5:   # 只做小修正, 大穿透交给 _apply_landing_physics 处理
+					global_position += n * push
 
 	if slope_deg < plain_slope_threshold_deg:
 		# ============ 平地: 强防弹 ============
@@ -1947,8 +2296,16 @@ func _apply_ground_stick(_delta: float) -> void:
 		if plain_downforce > 0.0 and v.y > plain_downforce_vy_gate:
 			apply_central_force(Vector3.DOWN * plain_downforce * mass)
 	else:
-		# ============ 坡面: 温和贴附 ============
-		# 只在"未起跳"(Y 速度较小)且"非峭壁"时贴附
+		# ============ 坡面: 温和贴附 + V4 法向小弹归零 ============
+		# 用户反馈钩爪落地在下坡斜面多次弹跳 → 平地分支的"v.y > 0 归零"在斜面用不上,
+		# 因为车在斜面上速度法向分量不是纯 v.y. 这里改成沿法线投影:
+		#   v_along_n > 0 (远离斜面) 且 < plain_vy_zero_threshold → 清掉分离速度
+		# 这样斜面落地的微弹也能被压住, 不依赖 V4 settle 窗口 (settle 0.18s 后还有持续保护)
+		var v_along_n_slope: float = v.dot(n)
+		if v_along_n_slope > 0.0 and v_along_n_slope < plain_vy_zero_threshold:
+			v -= n * v_along_n_slope
+			linear_velocity = v
+		# 只在"未起跳"(沿法线分离速度较小)且"非峭壁"时贴附
 		if slope_deg <= slope_stick_max_deg and absf(v.y) < slope_stick_max_vy and slope_stick_force > 0.0:
 			# 沿坡面法线反方向施力, 让车"扣"在坡上
 			apply_central_force(-n * slope_stick_force * mass)
@@ -1960,7 +2317,9 @@ func _apply_ground_stick(_delta: float) -> void:
 func _update_visuals(delta: float) -> void:
 	if not car_mesh or not body_mesh:
 		return
-	if linear_velocity.length() < turn_stop_limit:
+	# 低速时不转向 (避免 0 速时视觉 yaw 抖动), 但钩索期间即使速度很低也要能转
+	# 因为钩索悬停/接近锚点时速度可能很低, 但玩家依然需要用方向键调整车头
+	if linear_velocity.length() < turn_stop_limit and not _grapple_active:
 		prev_yaw = car_mesh.rotation.y
 		return
 
@@ -2023,6 +2382,9 @@ func _update_visuals(delta: float) -> void:
 	# 【空中禁止转向】起飞期间车身朝向锁定为起飞瞬间的方向
 	# 转向需要轮胎抓地才合理, 空中凭空转车头不符合物理直觉, 也会破坏"落地延续漂移"的感觉
 	# 落地瞬间恢复正常转向
+	# 【例外: 钩索期间】真实飞行物理: 空中没有摩擦咬方向, 车头应该被惯性带着跟随速度向量
+	#   玩家按方向键 → swing 侧向力推速度向量偏转 → 车头跟着偏 (自然正反馈)
+	#   所以这里 turn_rad 置 0 禁用"方向键直接转车头", 车头朝向由下面的"追随速度向量"段接管
 	if _is_airborne:
 		turn_rad = 0.0
 
@@ -2088,6 +2450,100 @@ func _update_visuals(delta: float) -> void:
 		new_basis, turn_speed * delta
 	)
 	car_mesh.global_transform = car_mesh.global_transform.orthonormalized()
+
+	# ============================================================
+	# 【空中车头跟随速度方向 / 钩索切线对齐】(真实飞行物理 / Apex swing)
+	# ============================================================
+	# 三种空中情况, 三套朝向逻辑:
+	#   情况 A: 钩索激活 + 玩家有方向键输入 → 车头朝 "圆弧切线" 方向
+	#     物理直觉: 玩家用钩索 swing 转圈时, 切线方向 = 圆周运动的瞬时速度方向
+	#     数学: 切线 = (anchor → car).cross(Vector3.UP) 的水平分量
+	#           方向符号由 steer_input 决定: 左打 = 顺时针(从上往下看), 右打 = 逆时针
+	#           tangent = (car_pos - anchor).cross(Vector3.UP).normalized() × signf(-steer_input)
+	#           注: 这里 steer_input 左为正 (Godot Input.get_axis 在 car.gd 第 1158 行的约定)
+	#           所以"按左 → 想顺时针绕锚点"对应 -steer_input 为负 → tangent 取反 (顺时针正向)
+	#
+	#   情况 B: 钩索激活 + 无方向输入 → 车头朝速度向量 (退化为正常空中漂)
+	#
+	#   情况 C: 非钩索空中 (起跳/落地阶段) → 【保持起飞瞬间车头朝向, 不强制对齐速度】
+	#     用户反馈: 飞出高台时车头被强制摆正成速度方向 → 出现一次意料外的镜头摆动.
+	#     原因: 起跳后水平速度 v_xz 方向不一定跟原本车头朝向完全一致 (高速时确实大致同向,
+	#           但低速 / 漂移中 / 撞过墙后会有偏差), 强制对齐时 max_rate=2 rad/s 也足以产生
+	#           一次明显的视觉转头, 镜头跟着转就是用户感受到的"摆动".
+	#     修复: 非钩索空中跳过 target_fwd 对齐. 车头朝向由起飞前的最后一帧决定, 落地前不动.
+	#           漂移中起跳保留漂移姿态, 直跑起跳保留直跑姿态, 完全符合直觉.
+	# ============================================================
+	# 共同实现: 计算 target_fwd 后, 用 base_rate 的角速度平滑 lerp 车头朝它转
+	# 触发条件: _is_airborne 且速度 > 0.5 m/s 且 (钩索激活 — 只对钩索做朝向对齐)
+	if _is_airborne and linear_velocity.length() > 0.5 and _grapple_active:
+		var v_xz: Vector3 = linear_velocity
+		v_xz.y = 0.0
+		if v_xz.length() > 0.5:
+			var target_fwd: Vector3 = v_xz.normalized()
+			# === 情况 A: 钩索 + 方向键 → 切线对齐 ===
+			# 用一个独立的 dead_zone 避免 steer 微小输入也启动切线模式 (玩家手抖)
+			var grapple_steer_threshold: float = 0.15
+			if _grapple_active and _grapple_hook != null and absf(steer_input) >= grapple_steer_threshold:
+				var anchor_pos: Vector3 = _grapple_hook.call("get_anchor_position") as Vector3 \
+					if _grapple_hook.has_method("get_anchor_position") else Vector3.ZERO
+				if anchor_pos != Vector3.ZERO:
+					# 锚点 → 车 的水平向量
+					var radial: Vector3 = global_position - anchor_pos
+					radial.y = 0.0
+					if radial.length() > 0.5:
+						# 切线 = radial × UP, 然后按 steer 决定方向
+						# radial × UP 给出"沿圆周逆时针(从上往下看)"的切线方向
+						# steer_input 左为正, 玩家按左 = 想绕得"看起来逆时针"在画面上 = 朝负 X 方向
+						# (注: 由于 yaw 朝向和 steer_input 的对应是引擎层的事, 我们让 swing_side_force 的方向和切线一致)
+						var tangent_ccw: Vector3 = radial.cross(Vector3.UP).normalized()
+						# steer 正(按左) → 顺时针(取反) ; steer 负(按右) → 逆时针
+						target_fwd = tangent_ccw * (-signf(steer_input))
+			# else: 沿用 v_xz.normalized() (速度向量)
+
+			var cur_fwd: Vector3 = -car_mesh.global_transform.basis.z
+			cur_fwd.y = 0.0
+			if cur_fwd.length() > 0.001 and target_fwd.length() > 0.001:
+				cur_fwd = cur_fwd.normalized()
+				target_fwd = target_fwd.normalized()
+				# 有符号夹角 (cur → target 的 Y 轴旋转量)
+				var dot_ct: float = clampf(cur_fwd.dot(target_fwd), -1.0, 1.0)
+				var cross_y: float = cur_fwd.cross(target_fwd).y
+				var angle_diff: float = atan2(cross_y, dot_ct)
+				# 对齐速率: 用户反馈车身朝向跳变, 改成"指数衰减平滑 + max rate 限速"双保险
+				# 数学:
+				#   smooth_t > 0: 用 t = 1 - exp(-delta / smooth_t) 做插值, 给"丝滑跟随"感
+				#                 turn = angle_diff × t, 但仍受 max_rate × delta 卡死, 防止瞬时大跳
+				#   smooth_t = 0: 退化到旧行为, 直接用 max_rate × delta 卡死 (线性过渡)
+				# 参数走 GrappleHook 的 facing_max_rate_rad / facing_smooth_time, 玩家可在 Tuner 调
+				var max_rate: float = 6.0
+				var smooth_t: float = 0.15
+				if _grapple_active and _grapple_hook != null:
+					var mult: float = float(_grapple_hook.get("swing_yaw_speed_mult"))
+					max_rate = float(_grapple_hook.get("facing_max_rate_rad")) * mult
+					smooth_t = float(_grapple_hook.get("facing_smooth_time"))
+				else:
+					# 非钩索空中 (正常起跳) 用较慢的 base 速率
+					max_rate = 2.0
+					smooth_t = 0.0   # 普通空中沿用旧行为
+				# 计算这一帧目标转角
+				var turn_this_frame: float = 0.0
+				if smooth_t > 0.0001:
+					# 指数衰减: 离目标越远转得越快, 越近越缓
+					var t: float = 1.0 - exp(-delta / smooth_t)
+					var smooth_step: float = angle_diff * t
+					# 但仍卡 max_rate × delta 上限, 防止 swing_yaw_speed_mult 拉爆时一帧跳变
+					var rate_limit: float = max_rate * delta
+					if absf(smooth_step) > rate_limit:
+						smooth_step = signf(smooth_step) * rate_limit
+					turn_this_frame = smooth_step
+				else:
+					# 旧行为: max_rate × delta 直接限速线性过渡
+					var step_rad: float = clampf(max_rate * delta, 0.0, absf(angle_diff))
+					turn_this_frame = signf(angle_diff) * step_rad
+				car_mesh.global_transform.basis = car_mesh.global_transform.basis.rotated(
+					Vector3.UP, turn_this_frame
+				)
+				car_mesh.global_transform = car_mesh.global_transform.orthonormalized()
 
 	# ============ 松前 (DRIFT 子状态) yaw 偏移 + 状态维护 + 进入小加速 ============
 	# 概念: 漂移中松开前进键(throttle 低), 车头会朝 drift_dir 方向慢慢偏(软性叠加)
@@ -2251,8 +2707,13 @@ func _update_visuals(delta: float) -> void:
 	# 【关键】只在地面时对齐, 空中保持起飞时的车身姿态
 	# 旧 bug: 空中 ground_ray 也可能 is_colliding (默认射 4 米向下),
 	#         飞跃陡坡时下方法线倾斜, 导致车头朝下/朝上, 不符合"飞行中保持水平"的直觉
-	if not _is_airborne and ground_ray.is_colliding():
-		var n: Vector3 = ground_ray.get_collision_normal()
+	# 法线选择: 用 _smoothed_ground_normal (一阶低通滤波过的) 减少 trimesh 三角形切换造成的视觉抖动.
+	# 插值速率: 10×delta 是历史调过的稳定值, 不要改.
+	#   (尝试过降到 6×delta 减少残余颤动, 但 240Hz 物理下 car_mesh.basis 跟物理球姿态脱节,
+	#    导致 _apply_friction 里 right=car_mesh.basis.x 算出来的 v_lat 方向过时, 摩擦投影偏 →
+	#    用户感受到"打滑得厉害". 已改回 10×delta.)
+	if not _is_airborne and ground_ray.is_colliding() and _smoothed_normal_initialized:
+		var n: Vector3 = _smoothed_ground_normal
 		var xform: Transform3D = _align_with_y(car_mesh.global_transform, n)
 		car_mesh.global_transform = car_mesh.global_transform.interpolate_with(xform, 10.0 * delta)
 
@@ -3080,21 +3541,72 @@ func _update_stack_chain_timeout() -> void:
 #  加速带 / 弹射器 对外接口 (被 SpeedPad.gd 的 Area3D 调用)
 # ============================================================
 func apply_speed_pad_boost(speed_kick: float, duration: float, pad_type: String = "addspeed") -> void:
-	# 1) 瞬时冲量: 沿当前车头水平方向施加 speed_kick m/s 的增速
-	#    用 apply_central_impulse(dir × m/s × mass), 因为 impulse 单位是 kg·m/s
+	# ============================================================
+	# 加速带触发: "视为释放了一个氮气", 但不参与叠喷链
+	# ============================================================
+	# 用户要求:
+	# 1) 踩到加速带要弹炫点 (复用 boost_triggered 信号 → HUD 自动弹中文 "加速带")
+	# 2) 视为释放氮气: 走 _start_boost("speed_pad", power, duration) 路径,
+	#    boost_type=speed_pad 让 fx_node.play_boost("speed_pad") 放喷射特效
+	# 3) 但不触发叠喷判定: 跳过 _check_and_apply_stack_boost (不让加速带计入 CW/CWW 链)
+	#    实现: 临时绕过 _start_boost, 直接手写一份"无叠喷版"
+	# 4) 中断松前: _is_in_songqian=true 时, 加速带触发 → 退漂 + 清松前
+	#    (松前是 DRIFT 子态, 加速带应该把车从漂移状态拉出来到正常喷射)
+	# ============================================================
 	var fwd: Vector3 = -car_mesh.global_transform.basis.z if car_mesh else -global_transform.basis.z
 	fwd.y = 0.0
 	if fwd.length() < 0.001:
 		return
 	fwd = fwd.normalized()
+
+	# ----- 1. 中断松前 (松前 = DRIFT 子状态), 顺便退漂 -----
+	# 直接清 _is_in_songqian + 通知 HUD; 如果还在 DRIFT 状态, 调 _end_drift(true) 走断漂路径
+	# (true = manual, 让退漂走"主动结束"分支, 不开小喷窗口避免和加速带氮气冲突)
+	if _is_in_songqian:
+		_is_in_songqian = false
+		_songqian_kick_given = false
+		_songqian_yaw_offset = 0.0
+		emit_signal("songqian_state_changed", false)
+		print("[Car] 加速带打断松前")
+	if state == State.DRIFT:
+		# end_drift 内部会清松前 + 关漂移视觉. manual=true 不开小喷窗口
+		_end_drift(true)
+
+	# ----- 2. 瞬时冲量 (沿车头水平方向 +speed_kick m/s) -----
 	apply_central_impulse(fwd * speed_kick * mass)
-	# 2) 启动持续推力段
+
+	# ----- 3. "氮气式"喷射: 不走 _start_boost (它会触发叠喷), 手写无叠喷版 -----
+	# 关键: 不调 _check_and_apply_stack_boost, 不动 _stack_chain_index/_stack_breakthrough_count
+	# 这样 CW/CWW/WCW 链不被加速带打断也不计入
+	# boost_type 用 "speed_pad" 让 fx_node 能针对性出特效 (FX 默认 fallback 到 nitro 视觉)
+	boost_type = "speed_pad"
+	boost_base_power = speed_pad_sustain_power
+	boost_power = speed_pad_sustain_power
+	boost_total_time = duration
+	boost_time_left = duration
+	is_boosting = true
+	# 蓄双喷资格清零 (加速带是被动触发, 不是玩家主动 W 操作, 不开放蓄能)
+	_can_charge_double = false
+
+	# ----- 4. 持续推力段 (复用旧的 _speed_pad_boost_left / _apply_engine_and_brake 逻辑) -----
 	if duration > 0.0 and speed_pad_sustain_power > 0.0:
 		_speed_pad_boost_left = duration
 		_speed_pad_boost_total = duration
 		_speed_pad_boost_power = speed_pad_sustain_power
-	# 3) 视觉/音效钩子 (可选): 摇屏
-	emit_signal("camera_shake_requested", 0.25, 0.2)
+
+	# ----- 5. 触发炫点 + 喷射特效 + 摇屏 -----
+	# boost_triggered 信号 → HUD._on_boost_triggered → 中文炫点 (需要 HUD 加 "speed_pad" 文案分支)
+	emit_signal("boost_triggered", "speed_pad")
+	# fx_node.play_boost: 让喷管喷射 (FX 没有 "speed_pad" 时会 fallback 到 nitro 视觉)
+	if fx_node and fx_node.has_method("play_boost"):
+		fx_node.play_boost("speed_pad", duration)
+	for i in range(1, fx_nodes.size()):
+		var fn: Node = fx_nodes[i]
+		if fn and fn.has_method("play_boost"):
+			fn.play_boost("speed_pad", duration)
+	# 摇屏 (用 nitro 的力度, 避免新加 export)
+	emit_signal("camera_shake_requested", maxf(nitro_boost_shake, 0.25), 0.25)
+
 	print("[Car] 加速带触发 (type=%s) kick=%.1f m/s dur=%.2f sustain=%.1f"
 		% [pad_type, speed_kick, duration, speed_pad_sustain_power])
 
@@ -3627,3 +4139,185 @@ func _emit_hud_signals() -> void:
 	var kmh: float = v_horiz.length() * 3.6
 	emit_signal("speed_changed", kmh)
 	emit_signal("charge_changed", charge, charge_nitro_full)
+
+
+# ============================================================
+#  时间回溯 (Rewind, R 键) + 自定义位置模式 (FreeFly, 小键盘 0)
+# ============================================================
+# 这两个功能都直接接管 transform, 跳过正常 3C 物理.
+# 见 _physics_process 入口的早 return 分支.
+
+# 每物理帧记录一帧到环形 buffer
+# 内容: 车球 RigidBody 的 global_position + CarMesh 的 global_transform
+# 不存 linear_velocity (回溯时强制清零, 不需要恢复)
+func _record_rewind_frame() -> void:
+	if _rewind_capacity <= 0 or _rewind_buffer.is_empty():
+		return
+	var mesh_xform: Transform3D = car_mesh.global_transform if car_mesh else Transform3D.IDENTITY
+	_rewind_buffer[_rewind_write_idx] = {
+		"pos": global_position,
+		"mesh_xform": mesh_xform,
+	}
+	_rewind_write_idx = (_rewind_write_idx + 1) % _rewind_capacity
+	if _rewind_size < _rewind_capacity:
+		_rewind_size += 1
+
+
+# 进入回溯模式: 启动 freeze + 记录起点 cursor
+func _start_rewind() -> void:
+	if not rewind_enabled or _rewind_size <= 0:
+		return
+	_rewind_active = true
+	_rewind_pressed_t = 0.0
+	# cursor 从最新一帧 (size-1) 开始, 向 0 方向倒退
+	_rewind_cursor = float(_rewind_size - 1)
+	# 冻结物理, 速度归零
+	if rewind_freeze_physics:
+		freeze = true
+	linear_velocity = Vector3.ZERO
+	angular_velocity = Vector3.ZERO
+	# 退出漂移/喷射状态 (用户要求"状态消失")
+	state = State.NORMAL
+	is_boosting = false
+	boost_time_left = 0.0
+	drift_intensity = 0.0
+	print("[Car] Rewind start, buffer size=", _rewind_size)
+
+
+# 退出回溯: 解冻, 速度清零, 清掉 buffer (避免未来帧残留)
+func _stop_rewind() -> void:
+	if not _rewind_active:
+		return
+	_rewind_active = false
+	freeze = false
+	linear_velocity = Vector3.ZERO
+	angular_velocity = Vector3.ZERO
+	# 简单做法: 直接 reset 整个 buffer, 让录制重新开始
+	_rewind_size = 0
+	_rewind_write_idx = 0
+	print("[Car] Rewind stop, velocity zeroed")
+
+
+# 每物理帧倒带 cursor 并应用对应 buffer 帧到 car
+func _update_rewind(delta: float) -> void:
+	if _rewind_size <= 0:
+		_stop_rewind()
+		return
+	# 累计按键时长 -> 加速度斜坡
+	_rewind_pressed_t += delta
+	var speed: float = rewind_speed_base + _rewind_pressed_t * rewind_speed_ramp_per_sec
+	speed = minf(speed, rewind_speed_max)
+	# cursor 每秒倒退 60 * speed 帧
+	_rewind_cursor -= speed * 60.0 * delta
+	if _rewind_cursor < 0.0:
+		_rewind_cursor = 0.0
+	# 实际 buffer 索引: oldest_idx + cursor_int (mod capacity)
+	# oldest_idx = (write_idx - size + capacity) % capacity
+	var cursor_int: int = int(_rewind_cursor)
+	cursor_int = clampi(cursor_int, 0, _rewind_size - 1)
+	var oldest_idx: int = (_rewind_write_idx - _rewind_size + _rewind_capacity) % _rewind_capacity
+	var actual_idx: int = (oldest_idx + cursor_int) % _rewind_capacity
+	var frame = _rewind_buffer[actual_idx]
+	if frame == null or not (frame is Dictionary):
+		return
+	var fdict: Dictionary = frame
+	if fdict.is_empty():
+		return
+	# 应用到 car
+	global_position = fdict["pos"]
+	if car_mesh:
+		car_mesh.global_transform = fdict["mesh_xform"]
+	# 持续 0 速度 (freeze 已经能保证, 双保险)
+	linear_velocity = Vector3.ZERO
+	angular_velocity = Vector3.ZERO
+
+
+# 进入/退出 FreeFly (自定义位置模式, 小键盘 0)
+func _toggle_freefly() -> void:
+	if not freefly_enabled:
+		return
+	if _freefly_active:
+		_exit_freefly()
+	else:
+		_enter_freefly()
+
+
+func _enter_freefly() -> void:
+	_freefly_active = true
+	_freefly_pressed_t = 0.0
+	# 备份 + 切到 freeze + 关碰撞 (用户要求"不再受任何物理影响")
+	_freefly_was_freeze = freeze
+	_freefly_was_gravity_scale = gravity_scale
+	_freefly_was_collision_layer = collision_layer
+	_freefly_was_collision_mask = collision_mask
+	freeze = true
+	gravity_scale = 0.0
+	# 关碰撞 mask 让车不被推但仍能被探测
+	collision_mask = 0
+	linear_velocity = Vector3.ZERO
+	angular_velocity = Vector3.ZERO
+	# 退出 3C 状态
+	state = State.NORMAL
+	is_boosting = false
+	boost_time_left = 0.0
+	print("[Car] FreeFly ON: WASD move, Shift up, Ctrl down, KP_0 again to exit")
+
+
+func _exit_freefly() -> void:
+	_freefly_active = false
+	freeze = _freefly_was_freeze
+	gravity_scale = _freefly_was_gravity_scale
+	collision_layer = _freefly_was_collision_layer
+	collision_mask = _freefly_was_collision_mask
+	linear_velocity = Vector3.ZERO
+	angular_velocity = Vector3.ZERO
+	print("[Car] FreeFly OFF, velocity zeroed, physics restored")
+
+
+# 每物理帧处理 FreeFly 的方向键移动
+# 参考系: 用 car_mesh 的车头朝向 (-Z) 作为前向
+# 这样玩家"按前 = 车头方向移动", 直觉一致
+func _update_freefly(delta: float) -> void:
+	# 收集输入方向
+	var dir_local: Vector3 = Vector3.ZERO
+	if Input.is_action_pressed("accelerate"):
+		dir_local.z -= 1.0   # 前 (-Z 是 Godot 默认 forward)
+	if Input.is_action_pressed("brake"):
+		dir_local.z += 1.0   # 后
+	if Input.is_action_pressed("steer_left"):
+		dir_local.x -= 1.0   # 左
+	if Input.is_action_pressed("steer_right"):
+		dir_local.x += 1.0   # 右
+	# 升降 (Shift = 升, Ctrl = 降)
+	var lift: float = 0.0
+	if Input.is_key_pressed(KEY_SHIFT):
+		lift += 1.0
+	if Input.is_key_pressed(KEY_CTRL):
+		lift -= 1.0
+	# 累计按键时长 -> 速度斜坡 (任意方向键按住都累加)
+	if dir_local.length() > 0.001 or absf(lift) > 0.001:
+		_freefly_pressed_t += delta
+	else:
+		_freefly_pressed_t = 0.0
+	var speed: float = freefly_speed_base + _freefly_pressed_t * freefly_speed_ramp_per_sec
+	speed = minf(speed, freefly_speed_max)
+	var lift_speed: float = freefly_lift_speed + _freefly_pressed_t * freefly_speed_ramp_per_sec * 0.6
+	lift_speed = minf(lift_speed, freefly_speed_max)
+	# 把局部方向转成世界方向 (用 car_mesh 朝向, 但只取 yaw, 避免空中翻车后视角乱)
+	if dir_local.length() > 0.001 and car_mesh:
+		dir_local = dir_local.normalized()
+		var fwd: Vector3 = -car_mesh.global_transform.basis.z
+		fwd.y = 0.0
+		var yaw: float = 0.0
+		if fwd.length() > 0.001:
+			fwd = fwd.normalized()
+			yaw = atan2(fwd.x, fwd.z)
+		# +PI 因为 -Z 是车头, basis 的 yaw 用 atan2 反推
+		var yaw_basis := Basis(Vector3.UP, yaw + PI)
+		var world_dir: Vector3 = yaw_basis * dir_local
+		global_position += world_dir * speed * delta
+	if absf(lift) > 0.001:
+		global_position += Vector3.UP * lift * lift_speed * delta
+	# CarMesh 跟随刚体位置 (因为我们关了正常物理, _physics_process 后续逻辑不会跑)
+	if car_mesh:
+		car_mesh.global_position = global_position + sphere_offset

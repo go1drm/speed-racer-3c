@@ -69,6 +69,8 @@ var _combo_protect_until: float = 0.0
 var _songqian_active: bool = false
 # 松前提示颜色 (用青绿色, 区分于"漂移"的橙红/紫红)
 const SONGQIAN_COLOR := Color(0.4, 1.0, 0.85, 1.0)
+# 钩索提示颜色 (浅青色, 区分于氮气/小喷/松前)
+const GRAPPLE_COLOR := Color(0.55, 0.95, 1.0, 1.0)
 
 
 func _ready() -> void:
@@ -119,6 +121,24 @@ func _connect_to_car() -> void:
 		car.connect("songqian_drift_triggered", _on_songqian_drift_triggered)
 	if car.has_signal("songqian_back_boost_triggered"):
 		car.connect("songqian_back_boost_triggered", _on_songqian_back_boost_triggered)
+	# 钩索信号挂在 GrappleHook 节点上(它是 car 的子节点). 延迟连接, 因为 GrappleHook 是 call_deferred 挂的
+	call_deferred("_connect_to_grapple_hook", car)
+
+
+func _connect_to_grapple_hook(car: Node) -> void:
+	var hook: Node = car.get_node_or_null("GrappleHook")
+	if hook == null:
+		# 再等一帧
+		await get_tree().process_frame
+		hook = car.get_node_or_null("GrappleHook")
+	if hook == null:
+		return
+	if hook.has_signal("grapple_started") and not hook.is_connected("grapple_started", _on_grapple_started):
+		hook.connect("grapple_started", _on_grapple_started)
+	if hook.has_signal("grapple_released") and not hook.is_connected("grapple_released", _on_grapple_released):
+		hook.connect("grapple_released", _on_grapple_released)
+	if hook.has_signal("anchor_focus_changed") and not hook.is_connected("anchor_focus_changed", _on_grapple_anchor_focus):
+		hook.connect("anchor_focus_changed", _on_grapple_anchor_focus)
 
 
 # ============================================================
@@ -261,6 +281,11 @@ func _on_boost_triggered(type_name: String) -> void:
 			"nitro":
 				txt = "氮气"
 				col = _nitro_color_for_variant(_current_nitro_variant)
+			"speed_pad":
+				# 加速带触发: 视为氮气类型炫点 (用户要求), 但弹专属"加速带"文案
+				# 颜色用黄橙色 (跟加速带视觉色一致), 时长稍短一点 (它是路面机关而非主动技巧)
+				txt = "加速带"
+				col = Color(1.0, 0.85, 0.25, 1.0)
 		_show_boost_popup(txt, col)
 	# 小喷触发: 灯保持蓝色, 不再加额外提示文字
 	if type_name == "mini":
@@ -468,3 +493,31 @@ func _car_is_mini_boosting() -> bool:
 		return false
 	var c: Node = get_node(car_path)
 	return c.get("is_boosting") and c.get("boost_type") == "mini"
+
+
+# ============================================================
+#  钩索弹字 + 锚点瞄准提示
+# ============================================================
+# 弹字: 按下空格触发钩索时, 在 boost_label 上弹"钩索！"浅青色字
+# 锚点瞄准提示: GrappleHook 会通过 anchor_focus_changed 告知"如果现在按空格会钩到哪个锚点"
+#              (当前简化为: 只在终端打 log, 未来可以在 crash_label 位置显示瞄准锥环)
+func _on_grapple_started(_anchor_pos: Vector3) -> void:
+	# 钩索触发: 浅青色"钩索！"弹字, 持续时间略长, 让玩家感到"绳子出去了"的反馈
+	_show_boost_popup("钩索  已锁定", GRAPPLE_COLOR, 1.0, 0.4)
+	_combo_protect_until = Time.get_ticks_msec() / 1000.0 + 1.0
+	print("[HUD] 钩索锁定: ", _anchor_pos)
+
+
+func _on_grapple_released(success: bool) -> void:
+	# 钩索释放: 成功释放(success=true)弹"甩出"字, 失败(断开异常)不弹
+	if success:
+		# 释放瞬间弹字. 这里不清 combo_protect 让氮气能接力
+		_show_boost_popup("甩出", GRAPPLE_COLOR, 0.6, 0.3)
+		print("[HUD] 钩索释放")
+
+
+func _on_grapple_anchor_focus(anchor: Node) -> void:
+	# 锚点焦点变化(IDLE 时的瞄准提示). 目前只打 log, UI 可视化未来再扩展
+	# (扩展方向: 在 crash_label 位置画一个随距离缩放的圆环, 或在锚点上叠 Sprite3D 箭头)
+	if anchor != null:
+		print("[HUD] 瞄准锚点: ", anchor.name)

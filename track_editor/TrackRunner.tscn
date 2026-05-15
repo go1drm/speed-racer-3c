@@ -1,0 +1,41 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://track_editor/TrackRunner.gd" id="1_runner"]
+
+[sub_resource type="Environment" id="env_runner"]
+background_mode = 1
+background_color = Color(0.55, 0.7, 0.85, 1)
+ambient_light_source = 2
+ambient_light_color = Color(1, 1, 1, 1)
+ambient_light_energy = 0.45
+tonemap_mode = 2
+
+[sub_resource type="StandardMaterial3D" id="ground_mat"]
+albedo_color = Color(0.86, 0.91, 0.97, 1)
+roughness = 0.85
+
+[sub_resource type="PlaneMesh" id="ground_mesh"]
+size = Vector2(1000, 1000)
+material = SubResource("ground_mat")
+
+[sub_resource type="WorldBoundaryShape3D" id="ground_shape"]
+
+[node name="TrackRunner" type="Node3D"]
+script = ExtResource("1_runner")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("env_runner")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.866, -0.354, 0.354, 0, 0.707, 0.707, -0.5, -0.612, 0.612, 0, 50, 0)
+shadow_enabled = true
+
+[node name="Ground" type="StaticBody3D" parent="."]
+collision_layer = 1
+collision_mask = 1
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Ground"]
+mesh = SubResource("ground_mesh")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Ground"]
+shape = SubResource("ground_shape")

@@ -1,15 +1,16 @@
-[gd_scene load_steps=8 format=3 uid="uid://dqinghuacimap01"]
+[gd_scene format=3 uid="uid://36edkei8yhwq"]
 
-[ext_resource type="PackedScene" path="res://assets/custom_tracks/Qinghuaci_Pick.FBX" id="1_track_fbx"]
+[ext_resource type="PackedScene" uid="uid://c2q8codpkufri" path="res://assets/custom_tracks/Qinghuaci_Pick.FBX" id="1_track_fbx"]
 [ext_resource type="PackedScene" uid="uid://cvh0fwg53wpus" path="res://car.tscn" id="2_car"]
-[ext_resource type="Script" path="res://Camera3D.gd" id="3_cam"]
-[ext_resource type="Script" path="res://TrackSetup.gd" id="4_setup"]
+[ext_resource type="Script" uid="uid://cvuwsasmbq25i" path="res://Camera3D.gd" id="3_cam"]
+[ext_resource type="Script" uid="uid://bx52vxxahvtrx" path="res://TrackSetup.gd" id="4_setup"]
+[ext_resource type="PackedScene" path="res://GrappleAnchor.tscn" id="5_grapple_anchor"]
 
 [sub_resource type="ProceduralSkyMaterial" id="SkyMat"]
-sky_horizon_color = Color(0.5, 0.58, 0.7, 1)
 sky_top_color = Color(0.3, 0.5, 0.75, 1)
-ground_horizon_color = Color(0.5, 0.58, 0.7, 1)
+sky_horizon_color = Color(0.5, 0.58, 0.7, 1)
 ground_bottom_color = Color(0.2, 0.22, 0.27, 1)
+ground_horizon_color = Color(0.5, 0.58, 0.7, 1)
 
 [sub_resource type="Sky" id="Sky1"]
 sky_material = SubResource("SkyMat")
@@ -20,28 +21,141 @@ sky = SubResource("Sky1")
 ambient_light_source = 3
 tonemap_mode = 2
 
-[node name="TrackQinghuaci" type="Node3D"]
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_wxi3v"]
+shading_mode = 0
+albedo_color = Color(0.3, 0.85, 1, 1)
+
+[sub_resource type="SphereMesh" id="SphereMesh_jifyi"]
+radius = 1.5
+height = 3.0
+radial_segments = 16
+rings = 8
+
+[sub_resource type="SphereShape3D" id="SphereShape3D_v348h"]
+radius = 30.0
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_wrh3r"]
+shading_mode = 0
+albedo_color = Color(0.4, 1, 0.85, 1)
+
+[sub_resource type="SphereMesh" id="SphereMesh_1kvcl"]
+radius = 1.5
+height = 3.0
+radial_segments = 16
+rings = 8
+
+[sub_resource type="SphereShape3D" id="SphereShape3D_0blrl"]
+radius = 35.0
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_twlb0"]
+shading_mode = 0
+albedo_color = Color(1, 0.6, 0.3, 1)
+
+[sub_resource type="SphereMesh" id="SphereMesh_ro3hf"]
+radius = 1.8
+height = 3.6
+radial_segments = 16
+rings = 8
+
+[sub_resource type="SphereShape3D" id="SphereShape3D_0oemr"]
+radius = 40.0
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_uvgrq"]
+shading_mode = 0
+albedo_color = Color(0.3, 0.85, 1, 1)
+
+[sub_resource type="SphereMesh" id="SphereMesh_phefh"]
+radius = 1.5
+height = 3.0
+radial_segments = 16
+rings = 8
+
+[sub_resource type="SphereShape3D" id="SphereShape3D_iiqlx"]
+radius = 25.0
+
+[node name="TrackQinghuaci" type="Node3D" unique_id=2098293025]
 script = ExtResource("4_setup")
 
-[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1435075454]
 environment = SubResource("Env1")
 
-[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1223173428]
 transform = Transform3D(-0.866023, -0.433016, 0.250001, 0, 0.499998, 0.866027, -0.500003, 0.749999, -0.43301, 0, 0, 0)
 shadow_enabled = true
 
-[node name="Track" parent="." instance=ExtResource("1_track_fbx")]
+[node name="Track" parent="." unique_id=2091431850 instance=ExtResource("1_track_fbx")]
 
-[node name="Car" parent="." instance=ExtResource("2_car")]
+[node name="Car" parent="." unique_id=1894479144 instance=ExtResource("2_car")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 50, 0)
 
-[node name="Camera3D" type="Camera3D" parent="." node_paths=PackedStringArray("target")]
+[node name="Camera3D" type="Camera3D" parent="." unique_id=179999533 node_paths=PackedStringArray("target")]
 transform = Transform3D(1, 0, 0, 0, 0.965926, 0.258819, 0, -0.258819, 0.965926, 0, 6.5, 10)
 current = true
-fov = 75.0
 script = ExtResource("3_cam")
-lerp_speed = 3.0
-max_follow_lag = 8.0
 target = NodePath("../Car/CarMesh")
+
+[node name="Node3D" type="Node3D" parent="." unique_id=1707128680]
+
+[node name="GrappleAnchor_A" parent="." unique_id=1347909049 instance=ExtResource("5_grapple_anchor")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 12, 60, -5)
+detect_radius = 30.0
+
+[node name="Vis" type="MeshInstance3D" parent="GrappleAnchor_A" unique_id=754835997]
+material_override = SubResource("StandardMaterial3D_wxi3v")
+mesh = SubResource("SphereMesh_jifyi")
+
+[node name="Detect" type="Area3D" parent="GrappleAnchor_A" unique_id=2048856522]
+monitoring = false
+monitorable = false
+
+[node name="Shape" type="CollisionShape3D" parent="GrappleAnchor_A/Detect" unique_id=1173763174]
+shape = SubResource("SphereShape3D_v348h")
+
+[node name="GrappleAnchor_B" parent="." unique_id=1970175980 instance=ExtResource("5_grapple_anchor")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 25, 65, -18)
+detect_radius = 35.0
+anchor_color = Color(0.4, 1, 0.85, 1)
+
+[node name="Vis" type="MeshInstance3D" parent="GrappleAnchor_B" unique_id=2127558561]
+material_override = SubResource("StandardMaterial3D_wrh3r")
+mesh = SubResource("SphereMesh_1kvcl")
+
+[node name="Detect" type="Area3D" parent="GrappleAnchor_B" unique_id=1170529601]
+monitoring = false
+monitorable = false
+
+[node name="Shape" type="CollisionShape3D" parent="GrappleAnchor_B/Detect" unique_id=1165179639]
+shape = SubResource("SphereShape3D_0blrl")
+
+[node name="GrappleAnchor_C" parent="." unique_id=2116229252 instance=ExtResource("5_grapple_anchor")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 70, -35)
+anchor_radius = 1.8
+detect_radius = 40.0
+anchor_color = Color(1, 0.6, 0.3, 1)
+
+[node name="Vis" type="MeshInstance3D" parent="GrappleAnchor_C" unique_id=343943379]
+material_override = SubResource("StandardMaterial3D_twlb0")
+mesh = SubResource("SphereMesh_ro3hf")
+
+[node name="Detect" type="Area3D" parent="GrappleAnchor_C" unique_id=436735086]
+monitoring = false
+monitorable = false
+
+[node name="Shape" type="CollisionShape3D" parent="GrappleAnchor_C/Detect" unique_id=1716523745]
+shape = SubResource("SphereShape3D_0oemr")
+
+[node name="GrappleAnchor" parent="." unique_id=2011867230 instance=ExtResource("5_grapple_anchor")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -856.8413, -10.964488, -868.4646)
+
+[node name="Vis" type="MeshInstance3D" parent="GrappleAnchor" unique_id=674182454]
+material_override = SubResource("StandardMaterial3D_uvgrq")
+mesh = SubResource("SphereMesh_phefh")
+
+[node name="Detect" type="Area3D" parent="GrappleAnchor" unique_id=636225645]
+monitoring = false
+monitorable = false
+
+[node name="Shape" type="CollisionShape3D" parent="GrappleAnchor/Detect" unique_id=2106530865]
+shape = SubResource("SphereShape3D_iiqlx")
 
 [editable path="Car"]

@@ -76,6 +76,22 @@ var _base_fov: float = 75.0
 var _fov_target_boost: float = 0.0
 var _fov_current_boost: float = 0.0
 
+# === 钩索镜头状态 ===
+# 钩索系统通过 grapple_progress 信号驱动, 不走 boost zoom 通道, 而是单独叠加一层 FOV/roll
+# 这样钩索可以和氮气/小喷的镜头反应**叠加**(玩家钩索时还能放氮气), 而不是互相覆盖
+# _grapple_fov_extra : 钩索期间的 FOV 增量 (基于进度 + 曲线), 平滑过渡到 0
+# _grapple_roll_target / current : 钩索期间的镜头横滚角度 (弧度), 平滑过渡
+# _grapple_active_progress : 0~1, 钩索拉动进度 (从 GrappleHook 拿到), 0 = 没在钩索
+var _grapple_fov_extra: float = 0.0
+var _grapple_fov_target: float = 0.0
+var _grapple_roll_current: float = 0.0
+var _grapple_roll_target: float = 0.0
+var _grapple_active_progress: float = 0.0
+var _grapple_anchor_pos: Vector3 = Vector3.ZERO
+var _grapple_pull_dir: Vector3 = Vector3.ZERO
+# 钩索系统引用 (从 GrappleHook 那里读 cam_fov_boost / cam_roll_deg / 等)
+var _grapple_hook_ref: Node = null
+
 # Y 稳定: 维护一个平滑的"视觉 Y 目标", 同样做死区过滤
 var _stable_look_y: float = 0.0
 var _stable_look_y_inited: bool = false
@@ -89,6 +105,31 @@ func _ready() -> void:
 	if target and target.get_parent() and target.get_parent().has_signal("camera_shake_requested"):
 		target.get_parent().connect("camera_shake_requested", _on_shake)
 		target.get_parent().connect("boost_triggered", _on_boost)
+	# 连接钩索系统信号
+	# GrappleHook 是 car 的子节点 (car.gd 在 _spawn_grapple_hook 里挂的)
+	# 由于 GrappleHook 是 call_deferred 挂载的, 这里也用 call_deferred 等一帧再连
+	call_deferred("_connect_grapple_signals")
+
+
+func _connect_grapple_signals() -> void:
+	if target == null or target.get_parent() == null:
+		return
+	var car_node: Node = target.get_parent()
+	# GrappleHook 挂在 car 节点下, 名字是 "GrappleHook"
+	var hook: Node = car_node.get_node_or_null("GrappleHook")
+	if hook == null:
+		# 还没挂上, 再等一帧
+		await get_tree().process_frame
+		hook = car_node.get_node_or_null("GrappleHook")
+	if hook == null:
+		print("[Camera3D] 找不到 GrappleHook 节点, 钩索镜头反应禁用")
+		return
+	_grapple_hook_ref = hook
+	if hook.has_signal("grapple_progress"):
+		hook.connect("grapple_progress", _on_grapple_progress)
+	if hook.has_signal("grapple_state_changed"):
+		hook.connect("grapple_state_changed", _on_grapple_state_changed)
+	print("[Camera3D] 钩索镜头反应已连接")
 
 
 func _physics_process(delta: float) -> void:
@@ -116,9 +157,26 @@ func _physics_process(delta: float) -> void:
 	# 镜头偏移 + FOV 平滑
 	_zoom_extra = _zoom_extra.lerp(_zoom_target, delta * zoom_lerp_speed)
 	_fov_current_boost = lerpf(_fov_current_boost, _fov_target_boost, delta * zoom_lerp_speed)
-	fov = _base_fov + _fov_current_boost
+
+	# === 钩索 FOV/roll 平滑 (独立于 boost zoom 通道, 叠加在 boost FOV 之上) ===
+	# 钩索期间 _grapple_fov_target 由 _on_grapple_progress 实时更新, 不在钩索时为 0
+	# 用与 zoom_lerp_speed 一致的速度做平滑, 让进入/退出钩索都顺滑
+	_grapple_fov_extra = lerpf(_grapple_fov_extra, _grapple_fov_target, delta * zoom_lerp_speed)
+	_grapple_roll_current = lerpf(_grapple_roll_current, _grapple_roll_target, delta * zoom_lerp_speed)
+	# 离开钩索后 target 已经清零, 但 extra 还在追, 自动衰减回 0
+
+	fov = _base_fov + _fov_current_boost + _grapple_fov_extra
 
 	var effective_offset: Vector3 = offset + _zoom_extra
+	# === FreeFly 模式: 相机额外拉远 ===
+	# 用户要求: 进入【自定义位置模式】时相机距离稍微拉远让玩家好操控
+	# 实现: 检查 car 上的 _freefly_active 状态字段, 如果开了就把 effective_offset 乘上 freefly_camera_distance_mult
+	# (这是相对车的本地坐标 offset, 乘大 → 相机离车更远)
+	if target and target.get_parent() and "_freefly_active" in target.get_parent():
+		if bool(target.get_parent().get("_freefly_active")):
+			var mult: float = float(target.get_parent().get("freefly_camera_distance_mult"))
+			if mult > 1.0:
+				effective_offset *= mult
 	var target_pos: Transform3D = target.global_transform.translated_local(effective_offset)
 
 	if y_stabilizer_enabled:
@@ -160,6 +218,13 @@ func _physics_process(delta: float) -> void:
 			global_position = target_pos.origin - to_target.normalized() * max_follow_lag
 
 	look_at(_stable_look_target(), Vector3.UP)
+
+	# === 钩索镜头横滚 (roll) ===
+	# 钩索期间镜头朝拉力方向倾斜一点, 模拟"被甩动"的感觉 (类似 Apex 探路者)
+	# roll 是绕 forward(-Z) 轴的旋转, 应用在 look_at 之后避免被覆盖
+	if absf(_grapple_roll_current) > 0.001:
+		# 用 rotate_object_local 绕本地 Z 轴 (即镜头看向的反方向, 也就是 -forward) 转
+		rotate_object_local(Vector3(0, 0, 1), _grapple_roll_current)
 
 	# 应用震动（在 look_at 之后叠加小偏移）
 	if _shake_timer > 0.0:
@@ -250,3 +315,62 @@ func _on_boost(type_name: String) -> void:
 				_zoom_curve = mini_zoom_curve
 				_zoom_target = _zoom_base_offset
 				_fov_target_boost = _zoom_base_fov
+
+
+# ============================================================
+#  钩索镜头反应
+# ============================================================
+# GrappleHook 每物理帧 (在 ATTACHED 时) emit grapple_progress(progress, anchor_pos, pull_dir)
+# 我们在这里:
+#   1) FOV 增量: 按 progress 采样 cam_fov_curve, 得到当前应有的 FOV 增量目标值, 再走 zoom_lerp_speed 平滑
+#   2) Roll: 计算"车头方向"和"拉力方向"的叉乘符号, 决定 roll 是正/负 (镜头往拉力方向倾斜)
+#            roll 大小 = cam_roll_deg × cam_roll_curve.sample(progress) × roll_sign
+# 钩索期间不影响 boost zoom 通道, 所以氮气 + 钩索可以同时生效, FOV 增量加在一起
+func _on_grapple_progress(progress: float, anchor_pos: Vector3, pull_dir: Vector3) -> void:
+	if _grapple_hook_ref == null:
+		return
+	_grapple_active_progress = progress
+	_grapple_anchor_pos = anchor_pos
+	_grapple_pull_dir = pull_dir
+	# FOV 目标 = peak × 曲线在 progress 处的采样
+	var fov_peak: float = float(_grapple_hook_ref.get("cam_fov_boost"))
+	var fov_curve: Curve = _grapple_hook_ref.get("cam_fov_curve") as Curve
+	var fov_k: float = 1.0
+	if fov_curve != null and fov_curve.point_count > 0:
+		fov_k = fov_curve.sample(clampf(progress, 0.0, 1.0))
+	_grapple_fov_target = fov_peak * fov_k
+
+	# Roll 目标 = peak_deg × 曲线 × 方向符号
+	# 方向符号: 用 (车头.z × pull_dir.x - 车头.x × pull_dir.z) 的水平叉乘, > 0 表示拉力在车头左侧
+	var roll_peak_deg: float = float(_grapple_hook_ref.get("cam_roll_deg"))
+	var roll_curve: Curve = _grapple_hook_ref.get("cam_roll_curve") as Curve
+	var roll_k: float = 1.0
+	if roll_curve != null and roll_curve.point_count > 0:
+		roll_k = roll_curve.sample(clampf(progress, 0.0, 1.0))
+	# 车头方向 (水平投影)
+	var fwd: Vector3 = -target.global_transform.basis.z
+	fwd.y = 0.0
+	# 用 car_mesh 的车头更准 (因为 target 是 CarMesh 但 basis 在跟车 mesh 走)
+	if fwd.length() > 0.001:
+		fwd = fwd.normalized()
+	else:
+		fwd = Vector3.FORWARD
+	var pd: Vector3 = pull_dir
+	pd.y = 0.0
+	if pd.length() > 0.001:
+		pd = pd.normalized()
+	# 水平叉乘的 Y 分量 = 车头.x × pull.z - 车头.z × pull.x
+	# > 0 → pull_dir 在车头左侧 → roll 正向(镜头左倾, 视觉上拉力在左所以镜头朝左滚)
+	var cross_y: float = fwd.x * pd.z - fwd.z * pd.x
+	var roll_sign: float = signf(cross_y)
+	if roll_sign == 0.0:
+		roll_sign = 1.0
+	_grapple_roll_target = deg_to_rad(roll_peak_deg) * roll_k * roll_sign
+
+
+func _on_grapple_state_changed(state_str: String, _anchor_pos: Vector3) -> void:
+	# 离开钩索状态: 把 FOV/roll 目标都拉回 0, 让 _physics_process 的平滑自动衰减
+	if state_str != "ATTACHED":
+		_grapple_fov_target = 0.0
+		_grapple_roll_target = 0.0
+		_grapple_active_progress = 0.0

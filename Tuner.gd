@@ -10,8 +10,27 @@ var car: Node = null
 
 # row 数据: prop -> {slider, spin, kind, name_btn, min, max, step, curve_prop, curve_btn}
 var _rows: Dictionary = {}
-var _defaults: Dictionary = {}      # prop -> default scalar value
+var _defaults: Dictionary = {}      # prop -> default scalar value (重置按钮恢复目标, 始终是 @export 默认值)
+var _defaults_initialized: bool = false   # 第一次 _bind_car 是否已完成 (用于切场景时区分"首次填默认值"还是"应用 cfg")
 var _curves: Dictionary = {}        # curve_prop -> Curve 对象
+# 图形参数当前值缓存 (kind="graphics" 不依赖任何节点, 直接调 RenderingServer/Viewport API)
+# 默认值在第一次进入 _build_ui 后由 _init_graphics_defaults() 填入 (从 ProjectSettings 或硬编码 default 取)
+# 用户在 UI 上改 → _apply_graphics 调引擎 API 立即生效 + 写回此字典
+# 保存到 cfg 时, 这些值也被写到 [tune] 段 (key 以 "g_" 开头)
+var _graphics_values: Dictionary = {}
+# 控制 _apply_graphics 是否自动写 cfg. 启动初始化 / 加载 cfg 时关闭, 避免无用 IO; 玩家手动改滑块时打开
+var _graphics_autosave_enabled: bool = false
+# ============================================================
+# 参数 autosave: 用户反馈"tab 里数据保存不了"
+# ============================================================
+# 历史 bug: _on_save 是手动按钮触发. 玩家改完滑块如果没点保存就关游戏 → 全丢
+# 修复: 改任何参数都立即持久化, 但用 debounce timer (0.5s) 避免高频拖滑块时狂写盘
+# 实现:
+#   slider/spin.value_changed → _dispatch_apply 应用到节点 → 同时启动 _autosave_timer
+#   timer 0.5s 后 timeout → 调用 _on_save() 全量保存到 cfg
+#   连续拖动期间 timer 反复重置, 拖完 0.5s 静默才写一次
+var _autosave_timer: Timer = null
+var _autosave_enabled: bool = false   # 启动期间关闭, _load_from_file 完成后启用
 var _panel: PanelContainer
 
 # 参数定义: [prop, label, min, max, step, tooltip, curve_prop_or_empty]
@@ -265,6 +284,16 @@ const PARAMS := [
 	["drift_nitro_body_tilt_mult","漂移氮气侧倾倍率",   0.5,  2.5,   0.05,
 		"漂移中放氮气时, 车身侧倾视觉额外倍率(纯视觉效果)。", ""],
 
+	# ============================================================
+	# 加速带 (踩到地图上加速带机关时触发)
+	# 用户要求: 加速带是 3C 功能而不是编辑器功能, 全局参数走 Tuner 这一页
+	# 编辑器里只能配单个加速带的几何 (宽/长/颜色) 和那一块的 kick/duration 强度,
+	# 至于"加速带视为氮气" / "持续推力强度" 这类全局机制走 Tuner
+	# ============================================================
+	["__group", "加速带 (机关触发)"],
+	["speed_pad_sustain_power",   "持续推力强度",        0.0, 60.0,  1.0,
+		"踩到加速带后, 在 duration 秒内沿车头方向持续施的力 (m/s² × mass)。0 = 只给瞬时冲量, 不持续。\n推荐 15~25 (视觉上有'被推'感, 但不会无限加速)。\n注: 加速带期间顶速临时使用'喷射极速'(top_speed_boosted), 可在基础移动页调节。", ""],
+
 	["__page", "✨ 视觉"],
 	["__group", "车身姿态 (非漂移)"],
 	["body_tilt",                 "过弯侧倾敏感度",     5.0,  120.0, 1.0,
@@ -428,8 +457,6 @@ const PARAMS := [
 		"稳定落地后, 玩家可按 W 触发落地喷的时间窗口。0.5 推荐, 太短会错过。", ""],
 
 	["__group", "加速带 / 弹射器"],
-	["speed_pad_sustain_power",  "加速带持续推力",     0.0,  60.0,  0.5,
-		"加速带触发后, 沿车头方向的持续推力 (m/s² × mass), 随 duration 线性衰减. 加速带本身还有'瞬时增速冲量'(kick), 这个参数是冲量之后的持续段. 0=只有瞬时冲量不持续; 推荐 15~25.", ""],
 	["landing_stable_time",       "落地稳定判定(秒)",   0.0,  0.5,   0.005,
 		"连续接地此秒数才视为'真正落地'并开放按键窗口, 避免刚蹭一下就触发。0.08 推荐。", ""],
 	["landing_stable_max_vy",     "落地稳定 Y 速度上限", 0.0, 20.0, 0.2,
@@ -438,6 +465,40 @@ const PARAMS := [
 		"落地喷触发时震屏强度。", ""],
 	["landing_impact_absorb",     "落地冲击吸收",       0.0,  1.0,   0.05,
 		"落地瞬间 Y 方向冲击吸收比例。0=保留下落动能造成弹跳, 1=完全吸收平稳落地, 0.85 推荐。", ""],
+
+	# ========================================================
+	# 🕒 倒带 / 自定义位置  (用户高压线: 新功能也必须有 Tuner 配置)
+	# ========================================================
+	# rewind_*  → R 键时间回溯; freefly_* → 小键盘 0 自定义位置模式
+	# 这两组都是 car.gd 上的 @export, 直接走 kind="car" 即可
+	["__page", "🕒 倒带 / 自定义"],
+	["__group", "倒带 (R 键)"],
+	["rewind_enabled",            "倒带总开关",          0,    1,     1,
+		"1=启用按 R 键时间回溯; 0=禁用 R 键 (R 不再有任何效果).", ""],
+	["rewind_buffer_seconds",     "历史 buffer 时长(秒)", 1.0, 30.0,  0.5,
+		"按 R 时最多能倒回多久之前. 默认 8 秒 = 480 帧 @60fps. 越长越能倒得远, 但内存占用 ≈ 时长 × 60 × ~80B.", ""],
+	["rewind_speed_base",         "回放基础速度倍率",     0.5,  8.0,  0.5,
+		"刚按下 R 时回放的初始速度. 1.0 = 1 秒回放消耗 1 秒历史; 2.0 = 1 秒消耗 2 秒(更快倒退).", ""],
+	["rewind_speed_ramp_per_sec", "回放加速度(每秒)",     0.0,  4.0,  0.1,
+		"按住 R 越久, 回放速度每秒额外增加这么多倍率(上限 rewind_speed_max). 0 = 速度恒定 base; 0.8 = 越按越快有'快退'感.", ""],
+	["rewind_speed_max",          "回放速度上限",         1.0, 12.0,  0.5,
+		"回放速度斜坡的天花板. 太高会让长按一秒就拉回起点没操作感.", ""],
+	["rewind_freeze_physics",     "回溯期间冻结物理",     0,    1,     1,
+		"1=回溯期间 freeze=true, 完全不受物理影响, 画面平滑(推荐); 0=只覆盖位置不冻结, 可能跟撞墙/重力冲突.", ""],
+
+	["__group", "自定义位置 (小键盘 0 / KP_0)"],
+	["freefly_enabled",           "自定义位置总开关",     0,    1,     1,
+		"1=启用按 KP_0 进入自定义位置模式 (FreeFly), WASD 移动 / Shift 升 / Ctrl 降 / 再按 KP_0 退出; 0=禁用.", ""],
+	["freefly_speed_base",        "基础移动速度(m/s)",    2.0, 60.0,  1.0,
+		"FreeFly 模式下方向键的初始水平速度. 越大越像无人机巡视, 越小越精细微调.", ""],
+	["freefly_speed_ramp_per_sec","按键加速度(每秒)",     0.0, 60.0,  1.0,
+		"持续按方向键时, 速度每秒额外增加这么多 m/s (上限 freefly_speed_max). 0 = 速度恒定; 16 = 长按越来越快.", ""],
+	["freefly_speed_max",         "速度上限(m/s)",        5.0,120.0,  1.0,
+		"FreeFly 速度斜坡的天花板.", ""],
+	["freefly_lift_speed",        "升降速度(Shift/Ctrl)", 2.0, 30.0,  1.0,
+		"按 Shift 上升 / Ctrl 下降的初始垂直速度. 同样吃 ramp 加速.", ""],
+	["freefly_camera_distance_mult", "镜头拉远倍率",      1.0,  4.0,  0.1,
+		"FreeFly 模式下相机距离的额外乘数 (Camera3D 读). 默认 1.6 = 比平时拉远 60% 看更广.", ""],
 
 	# ========================================================
 	# 隐藏区: 已废弃 / 不生效参数 (保留兼容旧 cfg, 但不显示在 UI)
@@ -602,6 +663,166 @@ const CAM_PARAMS := [
 		"焦点 Y 偏移. 0=与车同高(可能镜头俯视), 0.3~0.8=焦点在车前上方一点(推荐), 让镜头平视前方而不是俯视赛车.", ""],
 ]
 
+
+# ============================================================
+# 🪝 钩索系统 (GRAPPLE_PARAMS) - kind="grapple"
+# ============================================================
+# 全部参数作用在 GrappleHook 节点 (car.get_node("GrappleHook")) 上, 不改 car.gd 任何 @export
+# 新增 tab, 不混入基础 3C 参数. 所有参数都有 tooltip, 都支持 min/max 编辑+曲线编辑
+# 参数组织: 核心 → 拉力 → 方向(上抬/弧线) → 释放 → 瞄准 → 车交互 → 镜头 → 绳子视觉
+const GRAPPLE_PARAMS := [
+	["__group", "核心 (总开关 + 射程)"],
+	["grapple_enabled",              "钩索总开关",                0, 1, 1,
+		"1=启用整套钩索系统; 0=禁用(按空格无反应).", ""],
+	["max_distance",                 "最大射程(米)",              5.0,  100.0, 0.5,
+		"玩家车距锚点 > 此值无法钩中. 配合锚点 detect_radius 双重判定.", ""],
+	["min_distance",                 "最小射程(米)",              0.0,  5.0,   0.1,
+		"距离 < 此值不触发(贴脸不钩).", ""],
+	["attach_speed",                 "绳子飞出速度(m/s)",         20.0, 500.0, 5.0,
+		"绳子从车飞向锚点的视觉速度. 越大越'瞬移', 越小越能看到绳子飞出. 200 推荐.", ""],
+
+	["__group", "拉力 (力大小 + 时间曲线 + 速度响应)"],
+	["pull_duration",                "拉力总时长(秒)",            0.2,  5.0,   0.05,
+		"钩中后持续拉多久. 超过此时长自动释放. 推荐 1.0~2.0.", ""],
+	["pull_force_max",               "拉力峰值(m/s² × mass)",     5.0,  300.0, 1.0,
+		"拉力基础强度. 实际加速度 = 此值 × 时间曲线 × 速度曲线 × 距离因子. 推荐 60~120.", "force_time_curve"],
+	["speed_ref",                    "速度参考(m/s)",             10.0, 100.0, 1.0,
+		"speed_response_curve 的 X=1 对应到这个车速. 超过此速度时速度曲线压制拉力, 防止高速被甩飞.", "speed_response_curve"],
+
+	["__group", "拉力方向 (上抬偏置 + 弧线)"],
+	["pull_upward_bias",             "向上偏置(0=直拉 1=全上)",   0.0,  1.0,   0.02,
+		"拉力方向向上抬多少. 0=纯指向锚点(直线过去), 0.2=轻微抬升(Apex 手感), 1=完全向上. 推荐 0.1~0.3.", ""],
+	["arc_upward_force",             "额外向上力(m/s² × mass)",   0.0,  50.0,  0.5,
+		"拉力之外额外施加的向上力, 配合 arc_curve 使用, 让被拉过程像抛物线而非直线.", "arc_curve"],
+
+	["__group", "释放 (时机 + 冲量)"],
+	["release_distance",             "自动释放距离(米)",          0.5,  10.0,  0.1,
+		"车距锚点 < 此值自动释放, 避免撞锚点. 推荐 2~3 米.", ""],
+	["release_kick_impulse",         "释放沿运动方向冲量",        0.0,  30.0,  0.5,
+		"释放瞬间沿当前速度方向的冲量(m/s × mass). 让玩家被甩出去. 推荐 6~12.", ""],
+	["release_upward_kick",          "释放向上冲量",              0.0,  20.0,  0.5,
+		"释放瞬间额外向上冲量. 让被甩起腾空一下, 准备空喷/落地喷. 推荐 3~6.", ""],
+	["release_on_button_release",    "松开空格提前释放",          0, 1, 1,
+		"1=松开空格立即释放, 0=必须等到距离够/时间到才释放.", ""],
+	["__sub", "反向拽自动甩出 (Stall Protection)"],
+	["auto_release_on_stall",        "启用反向拽保护",            0, 1, 1,
+		"1=直线钩前方锚点+无侧向输入+车速降到很低时自动甩出, 防止被绳子拽到反向. 0=禁用.", ""],
+	["auto_release_speed_threshold", "自动甩出车速阈值(m/s)",     0.0,  30.0,  0.5,
+		"车速降到此值以下且无侧向输入 → 自动释放. 推荐 5~8. 太大会过早释放, 太小可能等到车反向了.", ""],
+	["auto_release_steer_deadzone",  "自动甩出 steer 死区",       0.0,  1.0,   0.05,
+		"|steer_input| 小于此值视为'没在 swing'. 推荐 0.15.", ""],
+
+	["__group", "瞄准辅助 (按空格选哪个锚点)"],
+	["aim_assist_angle_deg",         "瞄准锥角(半锥角°)",         5.0,  90.0,  1.0,
+		"锚点与车头方向的水平夹角 < 此值才能瞄准. 注意: 这是半锥角! 总可瞄准范围 = 此值 × 2. 60=总锥角120°(推荐), 45=90°, 30=60°(严格).", ""],
+	["aim_priority_speed_weight",    "速度方向权重",              0.0,  5.0,   0.1,
+		"选锚点时偏向'沿速度方向'的程度. 0=只看角度/距离, >0=越大越偏向速度方向.", ""],
+	["aim_priority_distance_weight", "距离权重",                  0.0,  5.0,   0.1,
+		"选锚点时距离越近优先级越高的乘数. 推荐 1.0.", ""],
+
+	["__group", "车交互 (钩索期间物理抑制)"],
+	["disable_engine_during_pull",   "抑制引擎",                  0, 1, 1,
+		"1=钩索期间跳过引擎/刹车/助力等所有推力(玩家不能踩油门抢方向); 0=保留引擎.", ""],
+	["friction_mult_during_pull",    "摩擦倍率",                  0.0,  1.0,   0.05,
+		"钩索期间前后/侧向摩擦乘此值. 0=无摩擦(滑起来), 1=原摩擦, 0.2=削 80%(推荐).", ""],
+	["cancel_drift_on_grapple",      "中断漂移",                  0, 1, 1,
+		"1=按空格钩索自动退漂(推荐, 避免双重状态冲突); 0=保留漂移(会被动态抑制但 state 不变).", ""],
+
+	["__group", "空中操控 (Swing 控制)"],
+	["swing_control_enabled",        "空中操控总开关",            0, 1, 1,
+		"1=钩索期间玩家可以按方向/油门键'荡'车; 0=纯粹被绳子拽过去, 无法操控.", ""],
+	["swing_side_force",             "侧向推力(N/kg)",             0.0,  120.0, 1.0,
+		"按左/右方向键给车的侧向力 × mass. 数学: car_right × (-steer_input) × 此值 × mass. 推荐 20~40, 大了过灵敏.", ""],
+	["swing_forward_force",          "前/后推力(N/kg)",            0.0,  100.0, 1.0,
+		"按前进/刹车键给车的前后力 × mass. 数学: car_forward × throttle_input × 此值 × distance_force_curve(起钩距离/max_distance) × mass. 推荐 15~30. 旁边曲线: 起钩距离-推力倍率 (X=距离比例 0~1, Y=推力倍率 0~2).", "distance_force_curve"],
+	["swing_yaw_speed_mult",         "空中车头跟随速度(倍率)",    0.0,  3.0,   0.05,
+		"空中车头追随速度向量的对齐速率倍率. 实际速率 = 6.0 × 此值 (rad/s). 1.0 推荐. 0=车头不跟随(车身会继续朝旧方向飞, 视觉奇怪), 2.0=更瞬时.", ""],
+	["gravity_compensation",         "重力抵消比例",              0.0,  1.5,   0.05,
+		"钩索期间主动抵消重力的比例. 1=完全抵消(像 Apex), 0=保留重力(会下坠), 推荐 0.7~0.9.", ""],
+
+	["__group", "镜头反应 (FOV + roll + 震动)"],
+	["cam_fov_boost",                "FOV 增量(度)",              0.0,  40.0,  0.5,
+		"钩索期间 FOV 临时增加多少, 模拟被甩的速度感. 推荐 10~18.", "cam_fov_curve"],
+	["cam_roll_deg",                 "镜头横滚(度)",              0.0,  30.0,  0.5,
+		"钩索期间镜头朝拉力方向倾斜的最大角度. 推荐 8~15, 大了会晕.", "cam_roll_curve"],
+	["cam_shake_intensity",          "钩索持续震动",              0.0,  3.0,   0.05,
+		"钩索拉动期间的持续震动强度. 0.1~0.3 推荐, 模拟绳子张力.", ""],
+	["cam_shake_release",            "释放瞬间震动",              0.0,  5.0,   0.05,
+		"释放瞬间的震动强度(大幅震一下凸显爆发). 推荐 1.0~1.5.", ""],
+
+	["__group", "车头朝向跟随 (避免跳变)"],
+	["facing_max_rate_rad",          "朝向跟随最大角速度(rad/s)", 0.5,  20.0,  0.1,
+		"钩索期间车头朝向跟随的最大角速度. 卡死'一帧最多转多少角度', 防止 swing_yaw_speed_mult 拉爆时跳变. 推荐 4~8.", ""],
+	["facing_smooth_time",           "朝向过渡时长(秒)",          0.0,  1.0,   0.01,
+		"指数衰减过渡时长. 0 = 旧行为(线性按 max_rate 限速); 0.15 ≈ '丝滑跟随'; 0.3+ = '橡皮筋拖拽感'. 用户反馈跳变明显, 默认 0.15.", ""],
+
+	["__group", "绳子视觉"],
+	["rope_thickness",               "绳子粗细(米)",              0.01, 0.5,   0.01,
+		"绳子粗细 (CylinderMesh 半径). 旧版用 LINE_STRIP 这个值无效; 现在改用圆柱了, 实时生效.", ""],
+	["__color", "绳子颜色", "rope_color", "grapple",
+		"钩索绳子的颜色. 拖色盘选色实时生效, 黑色是默认. 写入 cfg [color] 段持久化."],
+	["rope_origin_offset.x",         "绳子起点 X(本地)",          -3.0, 3.0,   0.05,
+		"绳子发出点相对 CarMesh 本地 X. 通常 0 表示正中.", ""],
+	["rope_origin_offset.y",         "绳子起点 Y(本地)",          -3.0, 3.0,   0.05,
+		"绳子发出点相对 CarMesh 本地 Y. 正数=从车顶发出, 负数=车底.", ""],
+	["rope_origin_offset.z",         "绳子起点 Z(本地)",          -3.0, 3.0,   0.05,
+		"绳子发出点相对 CarMesh 本地 Z. 负数=车头(FBX 车头朝 -Z), 正数=车尾.", ""],
+]
+
+
+# ============================================================
+# 🖼️ 图形设置 (GRAPHICS_PARAMS) - kind="graphics"
+# ============================================================
+# 这一组参数比较特殊: 不是节点上的 @export, 而是 Godot 渲染管线的运行时设置
+# (Viewport / RenderingServer / 环境). 通过 _apply_graphics() 直接调用引擎 API
+# 修改值不写 cfg 中 [tune] 段还会写, 但 _bind_car 不读节点, 而是从 _graphics_values 读
+#
+# 设计目的: 让玩家不重启就能切画质, 4060 笔记本也能调低保流畅, 4080 桌面机可以拉满
+const GRAPHICS_PARAMS := [
+	["__group", "🖼️ 渲染分辨率 / AA"],
+	["g_scaling_3d_scale",       "3D 渲染分辨率(%)",        50.0, 200.0, 5.0,
+		"3D 内部渲染分辨率比例 (% / 100). 100=原生, 75=性能模式(微糊, 大幅省 GPU), 150=超采样(更锐利但费). 实际作用于 Viewport.scaling_3d_scale = value/100.", ""],
+	["g_msaa_3d",                "MSAA 等级",               0, 3, 1,
+		"3D MSAA 抗锯齿: 0=关 / 1=2x / 2=4x(默认推荐) / 3=8x. 4060 笔记本建议 1~2, 4080 桌面机可以拉到 3. 直接降锯齿但 GPU 开销随级数翻倍.", ""],
+	["g_screen_space_aa",        "FXAA(屏幕空间AA)",        0, 1, 1,
+		"FXAA 后处理抗锯齿: 0=关 / 1=开. 几乎免费, 处理 MSAA 抓不到的子像素细节抖动. 强烈建议开.", ""],
+	["g_taa_enabled",            "TAA(时间抗锯齿)",         0, 1, 1,
+		"时序抗锯齿(Temporal AA): 0=关 / 1=开. 高速移动时画面更稳, 但有点'糊'和'拖影'. 跟 MSAA 互补 — 都开效果最好但最费.", ""],
+
+	["__group", "纹理 / 各向异性"],
+	["g_anisotropic_filter",     "各向异性过滤等级",        0, 4, 1,
+		"远处地面/路面贴图清晰度: 0=关 / 1=2x / 2=4x / 3=8x / 4=16x(推荐). 几乎免费的画质提升, 任何机型都建议拉满 4.", ""],
+
+	["__group", "阴影"],
+	["g_shadow_atlas_size",      "阴影图集大小(像素)",      512, 8192, 256,
+		"DirectionalLight/SpotLight 阴影贴图分辨率(2D 图集边长). 越大阴影越锐利但越费显存. 1024=低, 2048=中(默认), 4096=高, 8192=极致. 4060 建议 2048, 4080 可 4096.", ""],
+	["g_shadow_filter_quality",  "阴影过滤质量",            0, 3, 1,
+		"阴影边缘软化质量: 0=Hard(锐利锯齿)/ 1=Soft Very Low/ 2=Soft Low/ 3=Soft Medium. 越高越柔和真实, GPU 开销线性上升. 推荐 2.", ""],
+
+	["__group", "环境/后处理"],
+	["g_glow_quality",           "Glow 质量",               0, 2, 1,
+		"辉光(bloom)质量: 0=Low / 1=Medium / 2=High. 影响霓虹/喷射焰柱的辉光柔和度. 默认 1.", ""],
+	["g_volumetric_fog",         "体积雾",                  0, 1, 1,
+		"体积雾(光柱效果, 飞机航灯/路灯能透出锥形光雾): 0=关 / 1=开. 大幅吃 GPU, 4060 关掉, 4080 可开.", ""],
+	["g_ssao_enabled",           "SSAO(屏幕空间环境光遮蔽)", 0, 1, 1,
+		"墙角/地面接缝处的暗角效果, 让画面更立体. 0=关 / 1=开. 中等 GPU 开销.", ""],
+	["g_ssil_enabled",           "SSIL(屏幕空间间接光照)",  0, 1, 1,
+		"屏幕空间间接光: 让物体被附近彩色物体照亮(类似 GI). 0=关 / 1=开. 较费, 想要最佳画质再开.", ""],
+
+	["__group", "VSync / 帧率"],
+	["g_vsync_mode",             "VSync 模式",              0, 3, 1,
+		"垂直同步: 0=关(撕裂但延迟最低)/ 1=开(无撕裂)/ 2=Adaptive(高帧时同步, 低帧时关)/ 3=Mailbox(三重缓冲, 推荐). 直接调 DisplayServer.window_set_vsync_mode.", ""],
+	["g_max_fps",                "最大帧率(0=无限制)",      0, 360, 10,
+		"Engine.max_fps 上限. 0=不限(吃满 GPU, 笔记本会风扇起飞), 60=省电, 120/144 适合高刷屏. 推荐 0 配合 VSync, 或 144 锁屏幕刷新率.", ""],
+
+	["__group", "DPI / 窗口"],
+	["g_render_scale_internal",  "UI 渲染缩放(实验)",       50.0, 150.0, 5.0,
+		"内容缩放系数(content_scale_factor). 100=原生 UI 大小, 80=UI 整体缩小让 3D 画面更大, 120=UI 放大. 注意: 不影响 3D 画质, 只影响 UI/HUD 字号.", ""],
+]
+
+
+
+
 # 曲线属性默认范围(都是 0..1 → 0..1+)
 const CURVE_PROPS := {
 	"mini_boost_curve":   {"target": "car"},
@@ -627,6 +848,13 @@ const CURVE_PROPS := {
 	"landing_boost_curve":                {"target": "car"},
 	"uphill_assist_slope_curve":          {"target": "car"},
 	"uphill_assist_speed_curve":          {"target": "car"},
+	# 钩索曲线 (target = grapple, 映射到 GrappleHook 节点)
+	"force_time_curve":                   {"target": "grapple"},
+	"speed_response_curve":                {"target": "grapple"},
+	"arc_curve":                          {"target": "grapple"},
+	"cam_fov_curve":                      {"target": "grapple"},
+	"cam_roll_curve":                     {"target": "grapple"},
+	"distance_force_curve":               {"target": "grapple"},
 }
 
 ## cfg 保存路径
@@ -669,6 +897,18 @@ func _ready() -> void:
 	_build_ui()
 	visible = true
 	_panel.visible = true
+	# 创建 autosave timer (debounce 0.5s, one_shot 模式)
+	# 任何参数改动都启动 timer, 0.5s 静默后自动调 _on_save 持久化
+	# 这样玩家不用手动点保存按钮, 改完就自动写盘 → 彻底解决"忘记保存"问题
+	_autosave_timer = Timer.new()
+	_autosave_timer.wait_time = 0.5
+	_autosave_timer.one_shot = true
+	_autosave_timer.timeout.connect(_on_autosave_timeout)
+	add_child(_autosave_timer)
+	# 图形参数初始化: 先用默认值应用一次 (这样开局画质就是 hidpi/MSAA/各向异性都对)
+	# 之后 _auto_load_on_start 如果 cfg 里有 g_* 值会再覆盖一次
+	# 延迟一帧, 让场景的 WorldEnvironment 先就位
+	call_deferred("_init_graphics_defaults")
 	call_deferred("_bind_car")
 	# 延迟一帧等 _bind_car 完成, 再自动从 cfg 恢复参数
 	call_deferred("_auto_load_on_start")
@@ -680,6 +920,11 @@ func _auto_load_on_start() -> void:
 	var p := _stable_cfg_path()
 	if FileAccess.file_exists(p):
 		_load_from_file()
+	else:
+		# 没 cfg 也要启用 autosave, 让用户改第一个值就立刻被保存 (不然要等到点过保存按钮一次才生效)
+		_graphics_autosave_enabled = true
+		_autosave_enabled = true
+		print("[Tuner] cfg 不存在, 启用 autosave 等待首次写入")
 
 
 ## cfg 迁移: 首次启动 (或改完项目名后第一次启动) 时,
@@ -725,7 +970,26 @@ func _bind_car() -> void:
 		return
 	car = get_node(car_path)
 
-	# 同步 car 参数默认值
+	# ============================================================
+	# 切场景不重置参数的关键策略 (用户高压线 ID:74457341):
+	#   · _defaults[prop] 永远从 car/fx/cam 等节点的 @export 读, 但只在第一次 _bind_car 时填充
+	#     → 这是"重置按钮"恢复的目标值, 必须保持是 @export 默认值
+	#     → 第二次 _bind_car (切场景或 car.gd _spawn_tuner 的延迟二次调用) 时 car 的属性已被
+	#        cfg 应用过, 这时再读会污染 _defaults 成 cfg 值, 所以用 _defaults_initialized 守卫
+	#   · UI 上 row 的 slider/spin 值, 仅在 cfg 不存在/没有此参数时才用 @export 默认值填充
+	#     如果 cfg 存在且包含此参数, UI 值由后面的 _load_from_file() 从 cfg 加载, 不被这里覆盖
+	#     → 这样切换场景时, 玩家调好的参数 (已保存到 cfg) 不会被新场景的 @export 默认值"重置"
+	#
+	# 旧 bug:
+	#   原本这里是无条件 row.slider.set_value_no_signal(float(v)), 把 UI 重置为 @export 默认值
+	#   末尾 _load_from_file() 才把 cfg 应用回 UI/节点. 但如果 _load_from_file 因任何原因
+	#   没覆盖某些参数 (比如新加的 grapple 参数还没保存到 cfg, 或节点引用为 null 静默失败),
+	#   该参数就会停留在 @export 默认值 → 表现为"切场景重置"
+	# ============================================================
+	var cfg_keys: Dictionary = _peek_cfg_tune_keys()   # cfg 里 [tune] 段所有 key 的 set, 没 cfg 时为空
+	var first_bind: bool = not _defaults_initialized
+
+	# 同步 car 参数默认值 (并按需更新 UI)
 	for p in PARAMS:
 		if p[0] == "__group":
 			continue
@@ -733,8 +997,11 @@ func _bind_car() -> void:
 		if not _has_prop(car, prop):
 			continue
 		var v = _read_prop(car, prop)
-		_defaults[prop] = v
-		if _rows.has(prop):
+		# _defaults 只在第一次 _bind_car 时填充 (避免 cfg 已应用后读到的值污染重置目标)
+		if first_bind:
+			_defaults[prop] = v
+		# 仅在 cfg 没有此参数时, 才用 @export 默认值填 UI (避免"切场景重置"已调好的参数)
+		if _rows.has(prop) and not cfg_keys.has(prop):
 			_rows[prop].slider.set_value_no_signal(float(v))
 			_rows[prop].spin.set_value_no_signal(float(v))
 
@@ -746,8 +1013,9 @@ func _bind_car() -> void:
 			if not _has_prop(fx, prop):
 				continue
 			var v = _read_prop(fx, prop)
-			_defaults[prop] = v
-			if _rows.has(prop):
+			if first_bind:
+				_defaults[prop] = v
+			if _rows.has(prop) and not cfg_keys.has(prop):
 				_rows[prop].slider.set_value_no_signal(float(v))
 				_rows[prop].spin.set_value_no_signal(float(v))
 
@@ -759,8 +1027,9 @@ func _bind_car() -> void:
 			if not _has_prop(cam, prop):
 				continue
 			var v = _read_prop(cam, prop)
-			_defaults[prop] = v
-			if _rows.has(prop):
+			if first_bind:
+				_defaults[prop] = v
+			if _rows.has(prop) and not cfg_keys.has(prop):
 				_rows[prop].slider.set_value_no_signal(float(v))
 				_rows[prop].spin.set_value_no_signal(float(v))
 
@@ -772,8 +1041,9 @@ func _bind_car() -> void:
 			if not _has_prop(car_mesh, prop):
 				continue
 			var v = _read_prop(car_mesh, prop)
-			_defaults[prop] = v
-			if _rows.has(prop):
+			if first_bind:
+				_defaults[prop] = v
+			if _rows.has(prop) and not cfg_keys.has(prop):
 				_rows[prop].slider.set_value_no_signal(float(v))
 				_rows[prop].spin.set_value_no_signal(float(v))
 
@@ -785,19 +1055,77 @@ func _bind_car() -> void:
 			if not _has_prop(bfx, prop):
 				continue
 			var v = _read_prop(bfx, prop)
-			_defaults[prop] = v
-			if _rows.has(prop):
+			if first_bind:
+				_defaults[prop] = v
+			if _rows.has(prop) and not cfg_keys.has(prop):
+				_rows[prop].slider.set_value_no_signal(float(v))
+				_rows[prop].spin.set_value_no_signal(float(v))
+
+	# GrappleHook 参数 (钩索系统)
+	var ghook = _get_grapple_hook()
+	if ghook:
+		for p in GRAPPLE_PARAMS:
+			if p.size() < 2:
+				continue
+			var prop: String = p[0]
+			# 跳过 __group / __sub 等标记, 只处理真正的参数行
+			if prop.begins_with("__"):
+				continue
+			if not _has_prop(ghook, prop):
+				continue
+			var v = _read_prop(ghook, prop)
+			if first_bind:
+				_defaults[prop] = v
+			if _rows.has(prop) and not cfg_keys.has(prop):
 				_rows[prop].slider.set_value_no_signal(float(v))
 				_rows[prop].spin.set_value_no_signal(float(v))
 
 	# 加载所有曲线: 优先复用目标对象已有曲线(如 car.gd V2 默认值), 否则用 LINEAR_FULL 兜底
-	for cprop in CURVE_PROPS.keys():
-		var existing: Curve = _read_curve_from_target(cprop)
-		var c: Curve = existing if existing != null and existing.point_count > 1 else _build_preset_curve("LINEAR_FULL")
-		_curves[cprop] = c
-		_apply_curve_to_target(cprop, c)
+	# 仅在第一次 _bind_car 时执行, 因为切场景后曲线已经从 cfg 加载过了, 不需要再用 LINEAR_FULL 兜底
+	if first_bind:
+		for cprop in CURVE_PROPS.keys():
+			var existing: Curve = _read_curve_from_target(cprop)
+			var c: Curve = existing if existing != null and existing.point_count > 1 else _build_preset_curve("LINEAR_FULL")
+			_curves[cprop] = c
+			_apply_curve_to_target(cprop, c)
+	else:
+		# 切场景: 把 _curves 里玩家调好的曲线重新应用到新场景的 car/grapple/cam 等节点上
+		for cprop in _curves.keys():
+			_apply_curve_to_target(cprop, _curves[cprop])
 
+	# 图形参数: 切场景时新场景有自己的 WorldEnvironment, 把当前 _graphics_values 重新应用一遍
+	# (Viewport 的设置不会因切场景丢, 但 WorldEnvironment 会)
+	# 同时把 UI slider/spin 值同步成 _graphics_values (保持显示一致)
+	for gk in _graphics_values.keys():
+		var gv: float = float(_graphics_values[gk])
+		_apply_graphics(gk, gv)
+		if _rows.has(gk):
+			_rows[gk].slider.set_value_no_signal(gv)
+			_rows[gk].spin.set_value_no_signal(gv)
+		# 给图形参数也填 _defaults (重置按钮恢复目标 = _GRAPHICS_DEFAULTS 里的值)
+		if first_bind and _GRAPHICS_DEFAULTS.has(gk):
+			_defaults[gk] = float(_GRAPHICS_DEFAULTS[gk])
+
+	_defaults_initialized = true
 	_load_from_file()
+
+
+# 预读 cfg 的 [tune] 段所有 key, 用于 _bind_car 判断"哪些参数玩家已经调过"
+# 返回 Dictionary {prop_name: true}, 没有 cfg 时返回空字典
+# 注: 不读 [range]/[curves] 段, 它们和 _bind_car 的"@export 默认值填 UI"逻辑无关
+func _peek_cfg_tune_keys() -> Dictionary:
+	var out: Dictionary = {}
+	var cfg := ConfigFile.new()
+	var path := _stable_cfg_path()
+	if not FileAccess.file_exists(path):
+		return out
+	if cfg.load(path) != OK:
+		return out
+	if not cfg.has_section("tune"):
+		return out
+	for k in cfg.get_section_keys("tune"):
+		out[k] = true
+	return out
 
 
 func _read_curve_from_target(curve_prop: String) -> Curve:
@@ -808,6 +1136,8 @@ func _read_curve_from_target(curve_prop: String) -> Curve:
 		target = _get_camera()
 	elif target_name == "fx":
 		target = _get_drift_fx()
+	elif target_name == "grapple":
+		target = _get_grapple_hook()
 	if target and curve_prop in target:
 		var v = target.get(curve_prop)
 		if v is Curve:
@@ -901,9 +1231,12 @@ func _has_prop(target: Object, prop: String) -> bool:
 	return prop in target
 
 
-func _apply_to(target: Object, prop: String, v: float) -> void:
+func _apply_to(target: Object, prop: String, v: float) -> bool:
+	# 返回 true = 应用成功; false = 失败 (target 为空 / 没此属性).
+	# 加返回值是为了让 _dispatch_apply 收集失败列表, 一次性诊断打印, 让用户清楚知道
+	# 哪些 cfg 里的值没被应用到节点. 历史 bug: 静默 return 让用户以为"保存不了".
 	if not target:
-		return
+		return false
 	# 支持 Vector3 分量访问: "offset.x" / "nitro_zoom_offset.y" 等
 	if "." in prop:
 		var parts: PackedStringArray = prop.split(".")
@@ -918,10 +1251,10 @@ func _apply_to(target: Object, prop: String, v: float) -> void:
 						"y": vec.y = v
 						"z": vec.z = v
 					target.set(base_prop, vec)
-					return
-		return
+					return true
+		return false
 	if not prop in target:
-		return
+		return false
 	var current = target.get(prop)
 	if typeof(current) == TYPE_INT:
 		target.set(prop, int(round(v)))
@@ -929,22 +1262,33 @@ func _apply_to(target: Object, prop: String, v: float) -> void:
 		target.set(prop, v >= 0.5)
 	else:
 		target.set(prop, v)
+	return true
 
 
-func _dispatch_apply(kind: String, prop: String, v: float) -> void:
+func _dispatch_apply(kind: String, prop: String, v: float) -> bool:
+	# 返回 true = 至少应用到一个目标; false = 失败. 用于 _load_from_file 收集失败列表.
 	match kind:
 		"fx":
-			_apply_to(_get_drift_fx(), prop, v)
+			return _apply_to(_get_drift_fx(), prop, v)
 		"cam":
-			_apply_to(_get_camera(), prop, v)
+			return _apply_to(_get_camera(), prop, v)
 		"car_mesh":
-			_apply_to(_get_car_mesh(), prop, v)
+			return _apply_to(_get_car_mesh(), prop, v)
 		"boost_fx":
 			# 应用到所有 BoostFX (玉麒麟 5 个 tailpipe 都同步)
+			var any_ok: bool = false
 			for fx in _get_boost_fx_all():
-				_apply_to(fx, prop, v)
+				if _apply_to(fx, prop, v):
+					any_ok = true
+			return any_ok
+		"grapple":
+			return _apply_to(_get_grapple_hook(), prop, v)
+		"graphics":
+			# 图形设置直接走引擎 API, 不依赖 car 节点
+			_apply_graphics(prop, v)
+			return true
 		_:
-			_apply_to(car, prop, v)
+			return _apply_to(car, prop, v)
 
 
 func _get_car_mesh() -> Node:
@@ -952,6 +1296,348 @@ func _get_car_mesh() -> Node:
 	if car == null:
 		return null
 	return car.get_node_or_null("CarMesh")
+
+
+# 获取钩索节点 (car 节点下的 GrappleHook, 由 car._spawn_grapple_hook 挂载)
+# 钩索参数 kind="grapple" 的所有参数都走这个节点
+func _get_grapple_hook() -> Node:
+	if car == null:
+		return null
+	return car.get_node_or_null("GrappleHook")
+
+
+# ============================================================
+# 🖼️ 图形设置 (kind="graphics") - 直接操作 Viewport / RenderingServer
+# ============================================================
+# 所有图形参数都不依赖 car 节点, 完全独立. 默认值在 _init_graphics_defaults() 设, 之后:
+#   · UI 改值 → _apply_graphics(prop, v) 调对应引擎 API 立即生效, 同时写 _graphics_values[prop]=v
+#   · _on_save → 把 _graphics_values 写入 cfg [tune] 段
+#   · _load_from_file → 读到 g_* 开头的 key → 调 _apply_graphics() 应用
+#   · _bind_car (切场景) → 重新调一次 _apply_graphics 把所有图形设置应用到新 viewport (因为切场景会重建 viewport)
+const _GRAPHICS_DEFAULTS := {
+	"g_scaling_3d_scale": 100.0,           # 100% (1.0)
+	"g_msaa_3d": 2,                        # 4x MSAA
+	"g_screen_space_aa": 1,                # FXAA on
+	"g_taa_enabled": 0,                    # TAA off (默认关, 拖影感)
+	"g_anisotropic_filter": 4,             # 16x
+	"g_shadow_atlas_size": 4096,
+	"g_shadow_filter_quality": 2,          # Soft Low
+	"g_glow_quality": 1,                   # Medium
+	"g_volumetric_fog": 0,                 # 默认关
+	"g_ssao_enabled": 0,                   # 默认关
+	"g_ssil_enabled": 0,                   # 默认关
+	"g_vsync_mode": 1,                     # ENABLED (无撕裂)
+	"g_max_fps": 0,                        # 不限
+	"g_render_scale_internal": 100.0,      # UI 100%
+}
+
+
+# 第一次 _ready 时把 _GRAPHICS_DEFAULTS 复制到 _graphics_values, 并立即应用一次
+# 之后 _load_from_file 如果 cfg 里有 g_* 值, 会覆盖这里的默认 + 再应用一次
+func _init_graphics_defaults() -> void:
+	for k in _GRAPHICS_DEFAULTS.keys():
+		var v: float = float(_GRAPHICS_DEFAULTS[k])
+		_graphics_values[k] = v
+		_apply_graphics(k, v)
+
+
+# 把图形参数应用到 Godot 引擎 (直接调 API, 不写任何节点 @export)
+# 每个 prop 对应一个具体的引擎调用. 这样玩家不重启就能切画质.
+func _apply_graphics(prop: String, v: float) -> void:
+	_graphics_values[prop] = v
+	var vp := get_viewport()
+	match prop:
+		"g_scaling_3d_scale":
+			# Viewport 的 scaling_3d_scale 范围 0.5 ~ 2.0
+			if vp:
+				vp.scaling_3d_scale = clampf(v / 100.0, 0.25, 2.0)
+		"g_msaa_3d":
+			# Viewport.MSAA_DISABLED=0 / _2X=1 / _4X=2 / _8X=3
+			if vp:
+				vp.msaa_3d = int(round(v))
+		"g_screen_space_aa":
+			# Viewport.SCREEN_SPACE_AA_DISABLED=0 / _FXAA=1
+			if vp:
+				vp.screen_space_aa = int(round(v))
+		"g_taa_enabled":
+			if vp:
+				vp.use_taa = (v >= 0.5)
+		"g_anisotropic_filter":
+			# RenderingServer.VIEWPORT_ANISOTROPY_DISABLED=0 / 2X=1 / 4X=2 / 8X=3 / 16X=4
+			if vp:
+				vp.anisotropic_filtering_level = int(round(v))
+		"g_shadow_atlas_size":
+			if vp:
+				vp.positional_shadow_atlas_size = int(round(v))
+		"g_shadow_filter_quality":
+			# 全局阴影过滤设置, 走 RenderingServer
+			RenderingServer.directional_soft_shadow_filter_set_quality(int(round(v)))
+			RenderingServer.positional_soft_shadow_filter_set_quality(int(round(v)))
+		"g_glow_quality":
+			# Godot 4 的 glow 没有内建 quality 枚举, 用启用的 levels 多少近似:
+			# 0=低: 只 level 1
+			# 1=中: level 1,3
+			# 2=高: level 1,3,5
+			# Environment 的 glow_levels 是 7 个独立属性 "glow_levels/1" ~ "glow_levels/7", 通过 set() 访问
+			_apply_world_env(func(env: Environment) -> void:
+				env.glow_enabled = (v > 0.0) or env.glow_enabled   # 不主动关 glow, 只调 levels (用户在编辑器开了的话)
+				env.set("glow_levels/1", 1.0)
+				env.set("glow_levels/3", 1.0 if v >= 1.0 else 0.0)
+				env.set("glow_levels/5", 1.0 if v >= 2.0 else 0.0)
+			)
+		"g_volumetric_fog":
+			_apply_world_env(func(env: Environment) -> void:
+				env.volumetric_fog_enabled = (v >= 0.5)
+			)
+		"g_ssao_enabled":
+			_apply_world_env(func(env: Environment) -> void:
+				env.ssao_enabled = (v >= 0.5)
+			)
+		"g_ssil_enabled":
+			_apply_world_env(func(env: Environment) -> void:
+				env.ssil_enabled = (v >= 0.5)
+			)
+		"g_vsync_mode":
+			# DisplayServer.VSYNC_DISABLED=0 / ENABLED=1 / ADAPTIVE=2 / MAILBOX=3
+			DisplayServer.window_set_vsync_mode(int(round(v)))
+		"g_max_fps":
+			Engine.max_fps = int(round(v))
+		"g_render_scale_internal":
+			# 内容缩放系数 (UI 大小)
+			get_window().content_scale_factor = clampf(v / 100.0, 0.5, 1.5)
+		"g_window_size_x", "g_window_size_y":
+			# 这两个 key 由 _restore_window_from_cfg 启动时一起读出来组合应用,
+			# 这里 _apply_graphics 单独被调时不立即应用 — 否则会因 x/y 没同时到位导致畸形窗口
+			pass
+		"g_window_mode":
+			# 显示模式可以单独应用 (不需要 x/y 配合), 但要先于 size 应用
+			# 不在这里立刻应用; 启动恢复在 _restore_window_from_cfg 一次性做
+			pass
+	# 自动持久化: 玩家拖图形滑块改值 → 立即写回 cfg, 下次启动自动恢复
+	# 启动初始化 / _load_from_file 时此标志为 false, 不会在那期间反复写盘
+	if _graphics_autosave_enabled:
+		_save_graphics_settings_to_cfg()
+
+
+# 遍历当前场景所有 WorldEnvironment, 对其 environment 应用 callback
+# 用于把 SSAO/glow/volumetric_fog 这种环境设置同步到所有 env
+func _apply_world_env(cb: Callable) -> void:
+	var scene := get_tree().current_scene
+	if scene == null:
+		return
+	_apply_world_env_recursive(scene, cb)
+
+
+func _apply_world_env_recursive(node: Node, cb: Callable) -> void:
+	if node is WorldEnvironment:
+		var we: WorldEnvironment = node
+		if we.environment != null:
+			cb.call(we.environment)
+	for c in node.get_children():
+		_apply_world_env_recursive(c, cb)
+
+
+# ============================================================
+# 窗口分辨率 + 显示模式下拉框
+# ============================================================
+# 经典游戏菜单的"分辨率: 1024×768 / 1280×720 / 1920×1080 / ..."这种.
+# 用 OptionButton 因为这些是离散预设值, 用滑块没意义.
+# 实际作用: 调用 DisplayServer.window_set_size() 改窗口大小, 全屏走 mode_set
+const RESOLUTION_PRESETS := [
+	["800 × 600",        Vector2i(800, 600)],
+	["1024 × 768",       Vector2i(1024, 768)],
+	["1280 × 720  (HD)", Vector2i(1280, 720)],
+	["1280 × 800",       Vector2i(1280, 800)],
+	["1366 × 768",       Vector2i(1366, 768)],
+	["1600 × 900",       Vector2i(1600, 900)],
+	["1920 × 1080 (FHD)",Vector2i(1920, 1080)],
+	["2560 × 1080 (UW)", Vector2i(2560, 1080)],
+	["2560 × 1440 (2K)", Vector2i(2560, 1440)],
+	["3440 × 1440 (UWQ)",Vector2i(3440, 1440)],
+	["3840 × 2160 (4K)", Vector2i(3840, 2160)],
+]
+
+const DISPLAY_MODES := [
+	["窗口模式",                DisplayServer.WINDOW_MODE_WINDOWED],
+	["最大化窗口",              DisplayServer.WINDOW_MODE_MAXIMIZED],
+	["无边框 (全屏)",           DisplayServer.WINDOW_MODE_FULLSCREEN],
+	["独占全屏 (排他)",         DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN],
+]
+
+var _resolution_option: OptionButton = null
+var _display_mode_option: OptionButton = null
+
+
+func _build_resolution_controls(parent: Node) -> void:
+	var sep := HSeparator.new()
+	parent.add_child(sep)
+	var title := Label.new()
+	title.text = "🖥 窗口 / 分辨率"
+	title.add_theme_color_override("font_color", Color(1.0, 0.85, 0.25, 1.0))
+	title.add_theme_font_size_override("font_size", 13)
+	parent.add_child(title)
+
+	# 分辨率下拉
+	var res_row := HBoxContainer.new()
+	res_row.add_theme_constant_override("separation", 6)
+	parent.add_child(res_row)
+	var res_lbl := Label.new()
+	res_lbl.text = "分辨率"
+	res_lbl.custom_minimum_size = Vector2(180, 0)
+	res_lbl.add_theme_font_size_override("font_size", 11)
+	res_lbl.tooltip_text = "窗口模式下: 改变窗口像素尺寸. 独占全屏时无效 (走桌面分辨率)."
+	res_row.add_child(res_lbl)
+	_resolution_option = OptionButton.new()
+	_resolution_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_resolution_option.add_theme_font_size_override("font_size", 11)
+	for i in range(RESOLUTION_PRESETS.size()):
+		_resolution_option.add_item(RESOLUTION_PRESETS[i][0], i)
+	_resolution_option.item_selected.connect(_on_resolution_selected)
+	res_row.add_child(_resolution_option)
+
+	# 显示模式下拉
+	var dm_row := HBoxContainer.new()
+	dm_row.add_theme_constant_override("separation", 6)
+	parent.add_child(dm_row)
+	var dm_lbl := Label.new()
+	dm_lbl.text = "显示模式"
+	dm_lbl.custom_minimum_size = Vector2(180, 0)
+	dm_lbl.add_theme_font_size_override("font_size", 11)
+	dm_lbl.tooltip_text = "窗口=可拖动 / 最大化=填满屏幕保留任务栏 / 无边框=全屏覆盖 / 独占全屏=锁刷新率最低延迟"
+	dm_row.add_child(dm_lbl)
+	_display_mode_option = OptionButton.new()
+	_display_mode_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_display_mode_option.add_theme_font_size_override("font_size", 11)
+	for i in range(DISPLAY_MODES.size()):
+		_display_mode_option.add_item(DISPLAY_MODES[i][0], i)
+	_display_mode_option.item_selected.connect(_on_display_mode_selected)
+	dm_row.add_child(_display_mode_option)
+
+	var btn_native := Button.new()
+	btn_native.text = "↻ 用桌面原生分辨率"
+	btn_native.add_theme_font_size_override("font_size", 11)
+	btn_native.tooltip_text = "把窗口设为当前显示器原生分辨率 (例如 4K 屏 = 3840×2160)."
+	btn_native.pressed.connect(_on_apply_native_resolution)
+	parent.add_child(btn_native)
+
+	call_deferred("_sync_resolution_ui")
+
+
+# 把当前实际窗口大小/模式同步到下拉框 (UI 显示用, 不触发 set)
+func _sync_resolution_ui() -> void:
+	if _resolution_option:
+		var cur: Vector2i = DisplayServer.window_get_size()
+		var match_idx: int = -1
+		for i in range(RESOLUTION_PRESETS.size()):
+			if RESOLUTION_PRESETS[i][1] == cur:
+				match_idx = i
+				break
+		# 清掉之前可能加进去的"当前 xxx"自定义项, 保持下拉框干净
+		while _resolution_option.item_count > RESOLUTION_PRESETS.size():
+			_resolution_option.remove_item(_resolution_option.item_count - 1)
+		if match_idx >= 0:
+			_resolution_option.select(match_idx)
+		else:
+			var custom_label: String = "当前: %d × %d" % [cur.x, cur.y]
+			_resolution_option.add_item(custom_label, RESOLUTION_PRESETS.size())
+			_resolution_option.select(_resolution_option.item_count - 1)
+	if _display_mode_option:
+		var mode := DisplayServer.window_get_mode()
+		for i in range(DISPLAY_MODES.size()):
+			if DISPLAY_MODES[i][1] == mode:
+				_display_mode_option.select(i)
+				break
+
+
+func _on_resolution_selected(idx: int) -> void:
+	if idx < 0 or idx >= RESOLUTION_PRESETS.size():
+		return
+	var size: Vector2i = RESOLUTION_PRESETS[idx][1]
+	var mode := DisplayServer.window_get_mode()
+	if mode == DisplayServer.WINDOW_MODE_FULLSCREEN or mode == DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN:
+		print("[Tuner] 当前在全屏模式, 先切'窗口'或'最大化'再选分辨率才有效")
+	DisplayServer.window_set_size(size)
+	var screen_size := DisplayServer.screen_get_size()
+	DisplayServer.window_set_position((screen_size - size) / 2)
+	print("[Tuner] 窗口分辨率切换到 %d × %d" % [size.x, size.y])
+	# 持久化: 写入 _graphics_values, _on_save 时会被序列化进 cfg
+	# 用户要求: 每次启动游戏自动恢复上次选的分辨率, 不要回到默认小窗
+	_graphics_values["g_window_size_x"] = float(size.x)
+	_graphics_values["g_window_size_y"] = float(size.y)
+	_save_graphics_settings_to_cfg()
+
+
+func _on_display_mode_selected(idx: int) -> void:
+	if idx < 0 or idx >= DISPLAY_MODES.size():
+		return
+	var mode_value: int = DISPLAY_MODES[idx][1]
+	DisplayServer.window_set_mode(mode_value)
+	print("[Tuner] 显示模式: ", DISPLAY_MODES[idx][0])
+	# 持久化: 显示模式也存进 cfg, 启动时自动恢复
+	_graphics_values["g_window_mode"] = float(mode_value)
+	_save_graphics_settings_to_cfg()
+	call_deferred("_sync_resolution_ui")
+
+
+func _on_apply_native_resolution() -> void:
+	var native: Vector2i = DisplayServer.screen_get_size()
+	DisplayServer.window_set_size(native)
+	DisplayServer.window_set_position(Vector2i.ZERO)
+	print("[Tuner] 应用桌面原生分辨率: %d × %d" % [native.x, native.y])
+	_graphics_values["g_window_size_x"] = float(native.x)
+	_graphics_values["g_window_size_y"] = float(native.y)
+	_save_graphics_settings_to_cfg()
+	call_deferred("_sync_resolution_ui")
+
+
+# 仅写图形设置到 cfg (轻量, 不写整个 _rows). 用于分辨率/显示模式改了就立刻持久化,
+# 不要等用户点"保存"按钮 — 那对图形设置太反直觉了
+# 设计取舍: 直接 load 现有 cfg, 把 g_window_* / g_display_* 三个 key 写进去, 再 save 回去.
+# 不影响其它 [tune]/[range]/[curves] 段
+func _save_graphics_settings_to_cfg() -> void:
+	var cfg := ConfigFile.new()
+	var path := _stable_cfg_path()
+	# 加载现有内容 (失败也无所谓, 当成空 cfg 处理)
+	cfg.load(path)
+	# 把所有 g_* 都写进去, 避免与 _on_save 不一致
+	for k in _graphics_values.keys():
+		cfg.set_value("tune", k, _graphics_values[k])
+	var err := cfg.save(path)
+	if err != OK:
+		push_warning("[Tuner] 图形设置保存失败 err=%d 路径=%s" % [err, path])
+
+
+# 启动时从 cfg 恢复"窗口尺寸 + 显示模式"三连 key (g_window_size_x/y/g_window_mode)
+# 顺序很重要: 先切显示模式, 再设尺寸 (全屏模式下 set_size 无效)
+# 由 _load_from_file 在普通 tune 循环之前调用, 这样第一帧就是上次保存的尺寸
+func _restore_window_from_cfg(cfg: ConfigFile) -> void:
+	if cfg == null:
+		return
+	# 1. 显示模式 (优先, 因为全屏会强制改尺寸到桌面分辨率)
+	if cfg.has_section_key("tune", "g_window_mode"):
+		var mode_val: int = int(cfg.get_value("tune", "g_window_mode", 0))
+		_graphics_values["g_window_mode"] = float(mode_val)
+		DisplayServer.window_set_mode(mode_val)
+		print("[Tuner] 启动恢复显示模式: ", mode_val)
+	# 2. 尺寸 (仅在窗口/最大化模式下有意义, 全屏会无视)
+	if cfg.has_section_key("tune", "g_window_size_x") and cfg.has_section_key("tune", "g_window_size_y"):
+		var sx: int = int(cfg.get_value("tune", "g_window_size_x", 1280))
+		var sy: int = int(cfg.get_value("tune", "g_window_size_y", 720))
+		_graphics_values["g_window_size_x"] = float(sx)
+		_graphics_values["g_window_size_y"] = float(sy)
+		var size := Vector2i(sx, sy)
+		var cur_mode := DisplayServer.window_get_mode()
+		if cur_mode != DisplayServer.WINDOW_MODE_FULLSCREEN and cur_mode != DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN:
+			DisplayServer.window_set_size(size)
+			# 居中
+			var screen_size := DisplayServer.screen_get_size()
+			DisplayServer.window_set_position((screen_size - size) / 2)
+			print("[Tuner] 启动恢复窗口尺寸: %d × %d" % [sx, sy])
+	# 同步下拉框 UI
+	call_deferred("_sync_resolution_ui")
+
+
+
 
 
 func _apply_curve_to_target(curve_prop: String, curve: Curve) -> void:
@@ -962,6 +1648,8 @@ func _apply_curve_to_target(curve_prop: String, curve: Curve) -> void:
 		target = _get_camera()
 	elif target_name == "fx":
 		target = _get_drift_fx()
+	elif target_name == "grapple":
+		target = _get_grapple_hook()
 	if target and curve_prop in target:
 		target.set(curve_prop, curve)
 
@@ -976,7 +1664,9 @@ func _build_ui() -> void:
 	var vp_w: float = float(get_viewport().get_visible_rect().size.x)
 	if vp_w <= 0.0:
 		vp_w = 1280.0
-	var panel_w: int = int(clampf(vp_w / 3.0, 340.0, 520.0))
+	# 面板宽度: 3/7 视口宽 (用户要求), clamp 到合理范围避免极端分辨率
+	# 1280 → 548px, 1920 → 822px, 2560 → 1097px (4K 也压在 1097 内, 不会喧宾夺主)
+	var panel_w: int = int(clampf(vp_w * 3.0 / 7.0, 380.0, 1100.0))
 	_panel.offset_left = 8
 	_panel.offset_top = 8
 	_panel.offset_right = 8 + panel_w
@@ -1110,6 +1800,20 @@ func _build_ui() -> void:
 	for p in BOOST_FX_PARAMS:
 		_add_param_row(bfx_list, p, "boost_fx")
 
+	# 🪝 钩索 Tab (GrappleHook, 新系统, 单独分页避免污染基础 3C)
+	# 同 PARAMS 的约定: __group / __sub 会被 _add_param_row 识别为章节标题
+	var grapple_list: VBoxContainer = _create_tab_page("🪝 钩索")
+	for p in GRAPPLE_PARAMS:
+		_add_param_row(grapple_list, p, "grapple")
+
+	# 🖼️ 图形 Tab (kind="graphics", 直接调引擎 API, 不依赖任何节点)
+	# 用户可以实时切画质: 4060 笔记本调低保流畅, 4080 桌面机拉满
+	var graphics_list: VBoxContainer = _create_tab_page("🖼️ 图形")
+	# 顶部插入"窗口分辨率"+"显示模式"下拉框 (用 OptionButton 因为是离散预设, 不是滑块)
+	_build_resolution_controls(graphics_list)
+	for p in GRAPHICS_PARAMS:
+		_add_param_row(graphics_list, p, "graphics")
+
 	# 默认选中第一个 tab
 	if _tab_list.item_count > 0:
 		_tab_list.select(0)
@@ -1130,7 +1834,8 @@ func _on_viewport_resize() -> void:
 	var vp_w: float = float(get_viewport().get_visible_rect().size.x)
 	if vp_w <= 0.0:
 		return
-	var panel_w: int = int(clampf(vp_w / 3.0, 340.0, 520.0))
+	# 同 _build_ui 里的宽度策略: 3/7 视口宽
+	var panel_w: int = int(clampf(vp_w * 3.0 / 7.0, 380.0, 1100.0))
 	_panel.offset_right = 8 + panel_w
 
 
@@ -1181,9 +1886,88 @@ func _add_sub_header(parent: Node, title_text: String) -> void:
 	parent.add_child(lbl)
 
 
+# 颜色行: ColorPickerButton + Label, 用户拖色盘 → 直接写目标节点的属性 + 持久化到 cfg
+# 数组格式: ["__color", "标签", "属性名", "kind"(默认 car), tooltip]
+# 例: ["__color", "绳子颜色", "rope_color", "grapple", "钩索绳子的颜色, 拖色盘选色实时生效."]
+func _add_color_row(parent: Node, p: Array, kind: String) -> void:
+	var label_text: String = p[1]
+	var prop: String = p[2]
+	var item_kind: String = p[3] if p.size() > 3 else kind
+	var tooltip: String = p[4] if p.size() > 4 else ""
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	parent.add_child(row)
+	var lbl := Label.new()
+	lbl.text = "  " + label_text
+	lbl.custom_minimum_size = Vector2(180, 24)
+	lbl.add_theme_font_size_override("font_size", 11)
+	if tooltip != "":
+		lbl.tooltip_text = tooltip
+	row.add_child(lbl)
+	# 拿当前颜色作为初始值 (从目标节点读)
+	var target: Object = null
+	match item_kind:
+		"grapple": target = _get_grapple_hook()
+		"cam": target = _get_camera()
+		"fx": target = _get_drift_fx()
+		_: target = car
+	var cur_color := Color(1.0, 1.0, 1.0)
+	if target != null and prop in target:
+		cur_color = target.get(prop)
+	var cpb := ColorPickerButton.new()
+	cpb.color = cur_color
+	cpb.edit_alpha = false
+	cpb.focus_mode = Control.FOCUS_NONE
+	cpb.custom_minimum_size = Vector2(140, 28)
+	var picker := cpb.get_picker()
+	if picker:
+		picker.color_mode = ColorPicker.MODE_RGB
+		picker.picker_shape = ColorPicker.SHAPE_HSV_RECTANGLE
+	# 改色: 写目标节点 + 写 cfg ("color" 段, 跟普通 tune 段分开避免 float 转换破坏)
+	cpb.color_changed.connect(func(c: Color) -> void:
+		var t: Object = null
+		match item_kind:
+			"grapple": t = _get_grapple_hook()
+			"cam": t = _get_camera()
+			"fx": t = _get_drift_fx()
+			_: t = car
+		if t != null and prop in t:
+			t.set(prop, c)
+		_save_color_to_cfg(prop, c)
+	)
+	row.add_child(cpb)
+
+
+# 颜色专用持久化 (走 [color] 段, 跟普通 [tune] 段分开)
+# 不进 _rows, 不参与"重置默认"按钮恢复 (那是 SpinBox 体系的)
+func _save_color_to_cfg(prop: String, c: Color) -> void:
+	var cfg := ConfigFile.new()
+	var path := _stable_cfg_path()
+	cfg.load(path)
+	cfg.set_value("color", prop, c)
+	cfg.save(path)
+
+
+# 启动时从 cfg [color] 段加载所有颜色 → 应用到对应节点
+# 由 _load_from_file 调
+func _load_colors_from_cfg(cfg: ConfigFile) -> void:
+	if not cfg.has_section("color"):
+		return
+	for prop in cfg.get_section_keys("color"):
+		var c: Color = cfg.get_value("color", prop, Color.WHITE)
+		# 暴力试遍所有 kind 的 target, 找到有此属性的就 set
+		var targets: Array = [_get_grapple_hook(), _get_camera(), _get_drift_fx(), car]
+		for t in targets:
+			if t != null and prop in t:
+				t.set(prop, c)
+				break
+
+
 # 单行参数: [prop, label, vmin, vmax, step, tooltip, curve_prop]
 func _add_param_row(parent: Node, p: Array, kind: String) -> void:
 	var prop: String = p[0]
+	# 特殊行: __group 在 tab 内插入章节标题(非参数行)
+	# 主 PARAMS 走页签分页不会到这里, BoostFX/FX/CAM 等 tab 内部分组时用
 	# 特殊行: __group 在 tab 内插入章节标题(非参数行)
 	# 主 PARAMS 走页签分页不会到这里, BoostFX/FX/CAM 等 tab 内部分组时用
 	if prop == "__group":
@@ -1192,6 +1976,17 @@ func _add_param_row(parent: Node, p: Array, kind: String) -> void:
 		section_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.25, 1.0))
 		section_label.add_theme_font_size_override("font_size", 13)
 		parent.add_child(section_label)
+		return
+	# __sub 小标题: tab 内的子分组 (字号小, 颜色浅, 不加分隔线)
+	# 主 PARAMS 走 _build_ui 的分发, 但 GRAPPLE_PARAMS / FX_PARAMS 等也可能有 __sub
+	if prop == "__sub":
+		_add_sub_header(parent, _strip_bbcode(p[1]))
+		return
+	# __color 颜色行: [__color, label, prop_name, kind, default_color_hex_string, tooltip]
+	# 用 ColorPickerButton 而不是 SpinBox, 让玩家拖色盘选色 (实时预览到目标节点)
+	# 这一行不进 _rows (因为 _rows 走 SpinBox 保存逻辑), 颜色直接写节点 + 单独管 cfg
+	if prop == "__color":
+		_add_color_row(parent, p, kind)
 		return
 	var label_text: String = p[1]
 	var vmin: float = float(p[2])
@@ -1209,7 +2004,7 @@ func _add_param_row(parent: Node, p: Array, kind: String) -> void:
 	name_btn.text = label_text
 	name_btn.flat = true
 	name_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	name_btn.custom_minimum_size = Vector2(120, 0)
+	name_btn.custom_minimum_size = Vector2(180, 0)
 	name_btn.clip_text = true
 	name_btn.add_theme_font_size_override("font_size", 11)
 	name_btn.add_theme_color_override("font_color", Color(0.9, 0.9, 0.95))
@@ -1230,8 +2025,12 @@ func _add_param_row(parent: Node, p: Array, kind: String) -> void:
 	spin.min_value = vmin
 	spin.max_value = vmax
 	spin.step = step
-	spin.custom_minimum_size = Vector2(58, 0)
+	spin.custom_minimum_size = Vector2(72, 0)
 	spin.tooltip_text = tooltip
+	# 注意: 不要设 update_on_text_changed = true!
+	# 那会让每打一个字符就触发 value_changed → 中间状态被 min/max clamp → "输入3变成5" bug
+	# 用户按 Enter 或失焦(点别处/拖 slider)时才提交值, 这是正确行为
+	# "F2 切场景丢未提交值" 的问题由 _exit_tree flush autosave 解决
 	# 调窄 SpinBox 里的数值显示区域
 	var line_edit: LineEdit = spin.get_line_edit()
 	if line_edit:
@@ -1249,14 +2048,17 @@ func _add_param_row(parent: Node, p: Array, kind: String) -> void:
 		curve_btn.pressed.connect(func(): _open_curve_editor(curve_prop))
 		row.add_child(curve_btn)
 
-	# 双向绑定
+	# 双向绑定 + autosave debounce
+	# 任何拖动 / 输入都会启动 0.5s 静默后自动保存
 	slider.value_changed.connect(func(v: float) -> void:
 		spin.set_value_no_signal(v)
 		_dispatch_apply(kind, prop, v)
+		_request_autosave()
 	)
 	spin.value_changed.connect(func(v: float) -> void:
 		slider.set_value_no_signal(v)
 		_dispatch_apply(kind, prop, v)
+		_request_autosave()
 	)
 
 	_rows[prop] = {
@@ -1645,24 +2447,69 @@ func _on_reset() -> void:
 		_apply_curve_to_target(cprop, c)
 
 
+# ============================================================
+# Autosave 系统 (修复"参数保存不了"反馈)
+# ============================================================
+# 设计:
+#   1) 玩家拖滑块 / 改 SpinBox → _request_autosave() 启动 / 重置 0.5s timer
+#   2) timer 不再被打断后 timeout → _on_autosave_timeout() → 调 _on_save()
+#   3) _autosave_enabled 在 _load_from_file 完成后才打开, 避免启动期间 cfg 加载过程中
+#      的 set_value_no_signal 误触发 (其实 set_value_no_signal 不会触发 value_changed,
+#      但 _bind_car 里的同步会, 仍然要把开关守好)
+# 启动安全: _autosave_enabled = false 时, _request_autosave 静默忽略
+# 副作用: 玩家任何改动都会在 0.5s 内自动写盘, 不再需要手动点保存按钮
+#   保存按钮保留 (用户可以立即强制保存, 不必等 timer)
+func _request_autosave() -> void:
+	if not _autosave_enabled:
+		return
+	if _autosave_timer == null:
+		return
+	# 重启 timer (debounce): 拖动期间反复重启, 拖完静默 0.5s 才真正保存
+	_autosave_timer.start()
+
+
+func _on_autosave_timeout() -> void:
+	# 0.5s 内没新输入 → 全量保存到 cfg
+	_on_save()
+
+
+# 关键修复: 切场景时 (F2 切赛道) 立即 flush autosave timer, 防止"改了值还没等 0.5s 就 F2 → 丢失"
+# 用户反馈: F2 后参数被重置. 真实原因 = 用户改完值立刻按 F2, autosave timer 还没到 0.5s timeout 就被
+#          change_scene_to_file 销毁了 Tuner → 没保存 → 新场景从旧 cfg 加载 → 看起来"重置"了.
+# Godot 节点销毁前会调 _exit_tree, 我们在这里强制保存一次, 保证用户改的值不丢.
+func _exit_tree() -> void:
+	# autosave_enabled 才走 flush, 启动期间 (cfg 还没加载完) 不要写, 否则可能用初始 0/默认值覆盖 cfg
+	if not _autosave_enabled:
+		return
+	# timer 还在 running, 说明有未保存的改动 → 立即触发一次 _on_save
+	if _autosave_timer != null and not _autosave_timer.is_stopped():
+		_autosave_timer.stop()
+		_on_save()
+		print("[Tuner] _exit_tree: 检测到未完成的 autosave 倒计时, 已强制 flush 保存")
+
+
 func _on_save() -> void:
+	# 关键 bug 修复: 旧实现 cfg = ConfigFile.new() 全新空 cfg, 写完后丢掉所有未由本函数管理的段
+	# (尤其 [color] 段 — 颜色由 ColorPickerButton 行通过 _save_color_to_cfg 单独写, _on_save
+	#  不知道这些值 → 每次 _on_save 都把颜色清空了 → 用户感受到"颜色保存不了").
+	# 修复: 先 load 旧 cfg, 在它基础上 set_value 增量更新, 这样未管理段保留下来.
 	var cfg := ConfigFile.new()
-	var fx = _get_drift_fx()
-	var cam = _get_camera()
-	var cmesh = _get_car_mesh()
-	var bfx = _get_boost_fx_first()
+	var save_path := _stable_cfg_path()
+	cfg.load(save_path)   # 失败也无所谓 (cfg 不存在), 当成空 cfg 处理
 	for prop in _rows.keys():
 		var row = _rows[prop]
 		var kind: String = row.get("kind", "car")
-		var src: Object = null
-		match kind:
-			"fx": src = fx
-			"cam": src = cam
-			"car_mesh": src = cmesh
-			"boost_fx": src = bfx
-			_: src = car
-		if _has_prop(src, prop):
-			cfg.set_value("tune", prop, _read_prop(src, prop))
+		# graphics 特殊: 没有 src 节点, 直接从 _graphics_values 字典读
+		if kind == "graphics":
+			if _graphics_values.has(prop):
+				cfg.set_value("tune", prop, _graphics_values[prop])
+			cfg.set_value("range", prop, [row.min, row.max, row.step])
+			continue
+		# ★ 关键修复: 从 UI (spin.value) 读值而不是从节点读
+		# 原来从节点读 → 节点 null/属性不存在/切场景重建时值回到 @export 默认 → cfg 被污染
+		# 改成从 UI 读: spin.value 才是用户最终看到并认可的值, 保存永远不丢
+		var ui_value: float = row.spin.value
+		cfg.set_value("tune", prop, ui_value)
 		# 同时保存范围
 		cfg.set_value("range", prop, [row.min, row.max, row.step])
 	# 保存曲线: 序列化点列表
@@ -1673,8 +2520,7 @@ func _on_save() -> void:
 			var pt: Vector2 = c.get_point_position(i)
 			pts.append([pt.x, pt.y])
 		cfg.set_value("curves", cprop, pts)
-	var save_path := _stable_cfg_path()
-	# 确保稳定目录存在
+	# 确保稳定目录存在 (save_path 已在函数顶部声明)
 	DirAccess.make_dir_recursive_absolute(_stable_cfg_dir())
 	cfg.save(save_path)
 	print("[Tuner] 已保存到 ", save_path)
@@ -1689,7 +2535,16 @@ func _load_from_file() -> void:
 	var load_path := _stable_cfg_path()
 	var err := cfg.load(load_path)
 	if err != OK:
+		print("[Tuner] _load_from_file: cfg.load 失败 err=%d 路径=%s" % [err, load_path])
 		return
+	# 调试: 列出关键节点状态, 帮排查"切场景重置"问题
+	var ghook_dbg = _get_grapple_hook()
+	var cam_dbg = _get_camera()
+	print("[Tuner] _load_from_file 开始: car=%s grapple=%s cam=%s" % [
+		"OK" if car != null else "NULL",
+		"OK" if ghook_dbg != null else "NULL",
+		"OK" if cam_dbg != null else "NULL",
+	])
 	# 范围(必须先加载范围, 才能用新范围去校验数值合法性)
 	if cfg.has_section("range"):
 		for prop in cfg.get_section_keys("range"):
@@ -1704,9 +2559,19 @@ func _load_from_file() -> void:
 			row.spin.min_value = row.min; row.spin.max_value = row.max; row.spin.step = row.step
 	# 数值: 只加载当前 PARAMS 中存在的 prop, 越界值放宽到 clamp 而不是丢弃
 	# (高压线: 永远不要丢弃用户保存的值! 哪怕越界也尽量回填, 提示一下就行)
+	var applied_count: int = 0
+	var skipped_count: int = 0
+	var failed_apply: Array = []   # 应用失败的 prop 列表 (节点 null / 没此属性), 帮排查"切场景重置"
 	if cfg.has_section("tune"):
+		# 先单独处理"窗口尺寸/显示模式"特殊三连 key (g_window_size_x/y/g_window_mode)
+		# 它们不在 _rows 里 (没有 UI row, 是用 OptionButton 单独管理), 所以走专属恢复路径
+		# 必须在普通 tune 循环之前做, 因为后面循环会被 `if not _rows.has(prop)` 跳过这些 key
+		_restore_window_from_cfg(cfg)
+		# 调试: 收集所有 g_* 加载日志, 一次性打印让用户看到哪些图形参数被恢复了
+		var graphics_loaded: Array = []
 		for prop in cfg.get_section_keys("tune"):
 			if not _rows.has(prop):
+				skipped_count += 1
 				continue   # 已废弃的旧参数, 忽略
 			var v = cfg.get_value("tune", prop)
 			var fv: float = float(v)
@@ -1721,9 +2586,25 @@ func _load_from_file() -> void:
 				row.max = fv
 				row.slider.max_value = fv; row.spin.max_value = fv
 			var kind: String = row.get("kind", "car")
-			_dispatch_apply(kind, prop, fv)
+			var ok: bool = _dispatch_apply(kind, prop, fv)
 			row.slider.set_value_no_signal(fv)
 			row.spin.set_value_no_signal(fv)
+			if ok:
+				applied_count += 1
+			else:
+				failed_apply.append("%s(kind=%s)" % [prop, kind])
+			# 图形参数额外打印 (用户反馈: cfg 里有值但 UI 仍是默认 → 看下到底应用没有)
+			if prop.begins_with("g_"):
+				graphics_loaded.append("%s=%.2f" % [prop, fv])
+		if not graphics_loaded.is_empty():
+			print("[Tuner] 图形参数已从 cfg 恢复: ", " | ".join(graphics_loaded))
+	# 失败诊断: 一次性打印所有应用失败的 prop, 帮用户/我精准定位"保存不了"问题
+	# 历史 bug: _apply_to 静默 return, 用户改了值下次启动看到默认就以为保存坏了
+	if not failed_apply.is_empty():
+		push_warning("[Tuner] %d 个参数应用失败 (cfg 里有值但 target 节点没此属性):\n  %s"
+			% [failed_apply.size(), ", ".join(failed_apply)])
+	print("[Tuner] cfg 加载统计: 应用成功 %d, 跳过(已废弃) %d, 失败 %d"
+		% [applied_count, skipped_count, failed_apply.size()])
 	# 曲线
 	if cfg.has_section("curves"):
 		for cprop in cfg.get_section_keys("curves"):
@@ -1737,4 +2618,11 @@ func _load_from_file() -> void:
 					c.add_point(Vector2(float(p[0]), float(p[1])))
 			_curves[cprop] = c
 			_apply_curve_to_target(cprop, c)
+	# 加载颜色配置 (走 [color] 段, 由 ColorPickerButton 行管理)
+	_load_colors_from_cfg(cfg)
+	# 加载完成后启用图形参数 + 普通参数的自动持久化:
+	# 之后玩家在 UI 拖任何滑块 / 改 SpinBox / 改图形选项都会自动写盘
+	# (启动到这一步之前, autosave 一直为 false, 避免初始化期间的无用 IO)
+	_graphics_autosave_enabled = true
+	_autosave_enabled = true
 	print("[Tuner] 已从 ", load_path, " 加载")

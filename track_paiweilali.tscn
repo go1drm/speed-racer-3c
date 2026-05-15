@@ -1,0 +1,67 @@
+[gd_scene format=3]
+
+[ext_resource type="PackedScene" path="res://assets/custom_tracks/E_Paiweilali07_Pick.FBX" id="1_track_fbx"]
+[ext_resource type="PackedScene" path="res://car.tscn" id="2_car"]
+[ext_resource type="Script" path="res://Camera3D.gd" id="3_cam"]
+[ext_resource type="Script" path="res://TrackSetup.gd" id="4_setup"]
+[ext_resource type="PackedScene" path="res://GrappleAnchor.tscn" id="5_grapple_anchor"]
+
+[sub_resource type="ProceduralSkyMaterial" id="SkyMat"]
+sky_top_color = Color(0.45, 0.55, 0.7, 1)
+sky_horizon_color = Color(0.7, 0.6, 0.5, 1)
+ground_bottom_color = Color(0.2, 0.18, 0.15, 1)
+ground_horizon_color = Color(0.55, 0.5, 0.45, 1)
+
+[sub_resource type="Sky" id="Sky1"]
+sky_material = SubResource("SkyMat")
+
+[sub_resource type="Environment" id="Env1"]
+background_mode = 2
+sky = SubResource("Sky1")
+ambient_light_source = 3
+tonemap_mode = 2
+
+[node name="TrackPaiweilali" type="Node3D"]
+script = ExtResource("4_setup")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Env1")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(-0.866023, -0.433016, 0.250001, 0, 0.499998, 0.866027, -0.500003, 0.749999, -0.43301, 0, 0, 0)
+shadow_enabled = true
+
+; Track 实例: 默认 scale=1, 与 Qinghuaci 一致
+; 如果 FBX 单位不对(地图特别大或特别小), 改 transform = Transform3D(0.1, 0, 0, 0, 0.1, 0, 0, 0, 0.1, 0, 0, 0) 这种缩放
+; 或在 E_Paiweilali07_Pick.FBX.import 里调 nodes/root_scale
+[node name="Track" parent="." instance=ExtResource("1_track_fbx")]
+
+; Car 出生点: Y=50 高空, TrackSetup._adjust_car_spawn 会射线找地面落地
+; 如果地图原点不在 (0,0,0) 附近, 跑起来车会找不到地面坠落; 这时用户可以
+; 在编辑器里手动把 Car 拖到地图上方, 或调下面 transform 的 X/Z 偏移
+[node name="Car" parent="." instance=ExtResource("2_car")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 50, 0)
+
+[node name="Camera3D" type="Camera3D" parent="." node_paths=PackedStringArray("target")]
+transform = Transform3D(1, 0, 0, 0, 0.965926, 0.258819, 0, -0.258819, 0.965926, 0, 6.5, 10)
+current = true
+script = ExtResource("3_cam")
+target = NodePath("../Car/CarMesh")
+
+; 钩索锚点: 出生点附近 3 个, 高度递增, 让玩家试钩
+[node name="GrappleAnchor_A" parent="." instance=ExtResource("5_grapple_anchor")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 12, 60, -5)
+detect_radius = 30.0
+
+[node name="GrappleAnchor_B" parent="." instance=ExtResource("5_grapple_anchor")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 25, 65, -18)
+detect_radius = 35.0
+anchor_color = Color(0.4, 1, 0.85, 1)
+
+[node name="GrappleAnchor_C" parent="." instance=ExtResource("5_grapple_anchor")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 70, -35)
+anchor_radius = 1.8
+detect_radius = 40.0
+anchor_color = Color(1, 0.6, 0.3, 1)
+
+[editable path="Car"]

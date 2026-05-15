@@ -230,8 +230,14 @@ func _apply_state(type_name: String) -> void:
 
 
 func play_boost(type_name: String, _duration: float) -> void:
-	_apply_state(type_name)
-	_shown_type = type_name
+	# 用户要求: 加速带视为氮气, 走 nitro 视觉 (蓝色喷射焰柱) 而不是把所有 FX 关掉
+	# _apply_state 的 match 没有 "speed_pad" 分支, 直接传进去会全关 → 喷管不冒火
+	# 修复: 把 "speed_pad" 在 FX 层面映射成 "nitro"
+	var visual_type: String = type_name
+	if type_name == "speed_pad":
+		visual_type = "nitro"
+	_apply_state(visual_type)
+	_shown_type = visual_type
 
 
 func _stop_all() -> void:
