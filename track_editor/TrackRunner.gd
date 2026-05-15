@@ -93,7 +93,7 @@ func _load_track(data: Resource) -> void:
 		for a in anchors_arr:
 			var ap: Vector3 = a.get("position", Vector3.ZERO)
 			var ar: float = a.get("anchor_radius", 1.5)
-			var dr: float = a.get("detect_radius", 25.0)
+			var dr: float = a.get("detect_radius", 60.0)
 			var col: Color = a.get("color", Color(0.3, 0.85, 1.0))
 			var anode: Node3D = anchor_scene.instantiate()
 			anchors_root.add_child(anode)

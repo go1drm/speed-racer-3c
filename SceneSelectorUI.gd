@@ -36,7 +36,8 @@ func _build_ui() -> void:
 	# 右上角小按钮 (常驻可见)
 	_toggle_btn = Button.new()
 	_toggle_btn.text = "🗺️ 地图"
-	_toggle_btn.tooltip_text = "切换地图 (F4 也可)"
+	_toggle_btn.tooltip_text = "切换地图 (M 键 / F4)"
+	_toggle_btn.focus_mode = Control.FOCUS_NONE   # 禁止键盘焦点, 防止空格键误触发
 	_toggle_btn.add_theme_font_size_override("font_size", 13)
 	_toggle_btn.custom_minimum_size = Vector2(80, 32)
 	# 用 StyleBox 定制按钮外观, 让它在游戏中醒目
@@ -138,6 +139,7 @@ func _rebuild_track_buttons() -> void:
 		rn.text = "✏️"
 		rn.tooltip_text = "重命名此地图\n(原名: %s)" % orig_name
 		rn.custom_minimum_size = Vector2(32, 36)
+		rn.focus_mode = Control.FOCUS_NONE
 		rn.add_theme_font_size_override("font_size", 13)
 		rn.add_theme_color_override("font_color", Color(1.0, 0.85, 0.3))
 		var path_capture_rn: String = path
@@ -156,6 +158,7 @@ func _rebuild_track_buttons() -> void:
 		btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		btn.custom_minimum_size = Vector2(244, 36)
 		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn.focus_mode = Control.FOCUS_NONE
 		btn.add_theme_font_size_override("font_size", 13)
 		if is_current:
 			btn.add_theme_color_override("font_color", Color(1.0, 0.9, 0.3))
@@ -183,6 +186,7 @@ func _rebuild_track_buttons() -> void:
 	editor_btn.text = "  打开编辑器(创建/修改赛道)"
 	editor_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	editor_btn.custom_minimum_size = Vector2(280, 36)
+	editor_btn.focus_mode = Control.FOCUS_NONE
 	editor_btn.add_theme_font_size_override("font_size", 13)
 	editor_btn.add_theme_color_override("font_color", Color(0.5, 0.95, 1.0))
 	editor_btn.pressed.connect(func() -> void:
@@ -212,6 +216,7 @@ func _rebuild_track_buttons() -> void:
 			rn_btn.text = "✏️"
 			rn_btn.tooltip_text = "重命名此赛道"
 			rn_btn.custom_minimum_size = Vector2(32, 32)
+			rn_btn.focus_mode = Control.FOCUS_NONE
 			rn_btn.add_theme_font_size_override("font_size", 13)
 			rn_btn.add_theme_color_override("font_color", Color(1.0, 0.85, 0.3))
 			var path_for_rename: String = ut_path
@@ -225,6 +230,7 @@ func _rebuild_track_buttons() -> void:
 			ub.alignment = HORIZONTAL_ALIGNMENT_LEFT
 			ub.custom_minimum_size = Vector2(244, 32)
 			ub.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			ub.focus_mode = Control.FOCUS_NONE
 			ub.add_theme_font_size_override("font_size", 12)
 			ub.add_theme_color_override("font_color", Color(0.85, 0.95, 0.85))
 			ub.tooltip_text = "试玩此赛道  (右键: 在编辑器中打开)"
@@ -431,9 +437,9 @@ func _relayout() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	# F4 切换面板显示 (TrackSwitcher 占用了 F1/F2/F3 做快捷切换, F4 给本面板用)
+	# M 键 / F4 切换面板显示
 	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_F4:
+		if event.keycode == KEY_F4 or event.keycode == KEY_M or event.physical_keycode == KEY_M:
 			_set_expanded(not _expanded)
 			get_viewport().set_input_as_handled()
 		# ESC 关闭面板 (如果展开中)

@@ -51,17 +51,17 @@ target = NodePath("../Car/CarMesh")
 ; 钩索锚点: 出生点附近 3 个, 高度递增, 让玩家试钩
 [node name="GrappleAnchor_A" parent="." instance=ExtResource("5_grapple_anchor")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 12, 60, -5)
-detect_radius = 30.0
+detect_radius = 60.0
 
 [node name="GrappleAnchor_B" parent="." instance=ExtResource("5_grapple_anchor")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 25, 65, -18)
-detect_radius = 35.0
+detect_radius = 60.0
 anchor_color = Color(0.4, 1, 0.85, 1)
 
 [node name="GrappleAnchor_C" parent="." instance=ExtResource("5_grapple_anchor")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 70, -35)
 anchor_radius = 1.8
-detect_radius = 40.0
+detect_radius = 60.0
 anchor_color = Color(1, 0.6, 0.3, 1)
 
 [editable path="Car"]

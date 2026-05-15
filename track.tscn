@@ -61,19 +61,19 @@ script = ExtResource("5_walltag")
 [node name="GrappleAnchor_A" parent="." instance=ExtResource("grapple_anchor_ext")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -34.0, 10.0, 42.5)
 anchor_radius = 1.5
-detect_radius = 25.0
+detect_radius = 60.0
 anchor_color = Color(0.3, 0.85, 1.0, 1.0)
 
 [node name="GrappleAnchor_B" parent="." instance=ExtResource("grapple_anchor_ext")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -48.0, 14.0, 38.0)
 anchor_radius = 1.5
-detect_radius = 25.0
+detect_radius = 60.0
 anchor_color = Color(0.4, 1.0, 0.85, 1.0)
 
 [node name="GrappleAnchor_C" parent="." instance=ExtResource("grapple_anchor_ext")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -62.0, 18.0, 46.0)
 anchor_radius = 1.8
-detect_radius = 30.0
+detect_radius = 60.0
 anchor_color = Color(1.0, 0.6, 0.3, 1.0)
 
 [editable path="Car"]

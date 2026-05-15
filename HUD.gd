@@ -72,6 +72,41 @@ const SONGQIAN_COLOR := Color(0.4, 1.0, 0.85, 1.0)
 # 钩索提示颜色 (浅青色, 区分于氮气/小喷/松前)
 const GRAPPLE_COLOR := Color(0.55, 0.95, 1.0, 1.0)
 
+# ============================================================
+#  锚点指示器 (2D 屏幕空间, 实时显示最近锚点)
+# ============================================================
+# 设计:
+#   · 每帧从 GrappleHook 获取所有锚点, 找最近的一个
+#   · 将锚点 3D 世界坐标投影到 2D 屏幕坐标
+#   · 锚点在屏幕内: 图标直接显示在投影位置
+#   · 锚点在屏幕外: 图标贴到屏幕边缘, 指向锚点方向
+#   · 颜色状态:
+#     灰色 = 锚点存在但不可勾 (超出射程/锥角外)
+#     蓝色 = 可以勾到 (在射程+锥角内, 按空格就能钩)
+#     黄色 = 已经钩住 (ATTACHED 状态)
+const ANCHOR_COLOR_GRAY := Color(0.5, 0.5, 0.55, 0.7)    # 不可勾
+const ANCHOR_COLOR_BLUE := Color(0.3, 0.75, 1.0, 1.0)     # 可勾
+const ANCHOR_COLOR_YELLOW := Color(1.0, 0.85, 0.2, 1.0)   # 已钩住
+var ANCHOR_ICON_SIZE: float = 48.0                            # 图标大小 (像素, 可通过Tuner配置)
+const ANCHOR_EDGE_MARGIN := 50.0                            # 屏幕边缘留白 (像素)
+## UI 指示器相对于锚点投影位置的偏移 (像素, 可在 Tuner 中配置)
+## 正 Y = 向下偏移, 正 X = 向右偏移
+var anchor_ui_offset: Vector2 = Vector2(0.0, -60.0)
+
+var _anchor_indicator: Control = null     # 锚点指示器根节点
+var _anchor_icon: TextureRect = null      # 锚点图标 (使用 anchor_ui.png)
+var _anchor_dist_label: Label = null      # 距离文字
+var _anchor_hint_label: Label = null      # "按空格发射钩爪" 提示文字
+var _anchor_arrow: ColorRect = null       # 屏幕外时的方向箭头
+var _grapple_hook_ref: Node = null        # GrappleHook 节点引用
+var _grapple_attached: bool = false       # 当前是否处于 ATTACHED 状态
+var _anchor_shake_t: float = 0.0          # 蓝色抖动计时器
+var _anchor_glow_t: float = 0.0           # 黄色闪耀计时器
+var _anchor_shader_mat: ShaderMaterial = null  # 锚点图标 shader 材质
+
+# 锚点 UI 图标路径
+const ANCHOR_UI_TEXTURE_PATH := "res://assets/ui/anchor_ui.png"
+
 
 func _ready() -> void:
 	drift_label.modulate.a = 0.0
@@ -80,6 +115,8 @@ func _ready() -> void:
 	_paint_nitro_slots(0)
 	_set_boost_lamp_off()
 	call_deferred("_connect_to_car")
+	# 创建锚点指示器 UI
+	_build_anchor_indicator()
 
 
 func _connect_to_car() -> void:
@@ -133,12 +170,15 @@ func _connect_to_grapple_hook(car: Node) -> void:
 		hook = car.get_node_or_null("GrappleHook")
 	if hook == null:
 		return
+	_grapple_hook_ref = hook   # 保存引用, 供锚点指示器每帧查询
 	if hook.has_signal("grapple_started") and not hook.is_connected("grapple_started", _on_grapple_started):
 		hook.connect("grapple_started", _on_grapple_started)
 	if hook.has_signal("grapple_released") and not hook.is_connected("grapple_released", _on_grapple_released):
 		hook.connect("grapple_released", _on_grapple_released)
 	if hook.has_signal("anchor_focus_changed") and not hook.is_connected("anchor_focus_changed", _on_grapple_anchor_focus):
 		hook.connect("anchor_focus_changed", _on_grapple_anchor_focus)
+	if hook.has_signal("grapple_state_changed") and not hook.is_connected("grapple_state_changed", _on_grapple_state_for_indicator):
+		hook.connect("grapple_state_changed", _on_grapple_state_for_indicator)
 
 
 # ============================================================
@@ -210,6 +250,9 @@ func _process(delta: float) -> void:
 		# Label 跟随亮度变化
 		if boost_lamp_label:
 			boost_lamp_label.modulate = Color(1, 1, 1, 0.8 + 0.2 * pulse)
+
+	# 锚点指示器: 每帧更新位置和颜色
+	_update_anchor_indicator()
 
 
 func _on_speed_changed(kmh: float) -> void:
@@ -517,7 +560,291 @@ func _on_grapple_released(success: bool) -> void:
 
 
 func _on_grapple_anchor_focus(anchor: Node) -> void:
-	# 锚点焦点变化(IDLE 时的瞄准提示). 目前只打 log, UI 可视化未来再扩展
-	# (扩展方向: 在 crash_label 位置画一个随距离缩放的圆环, 或在锚点上叠 Sprite3D 箭头)
+	# 锚点焦点变化(IDLE 时的瞄准提示) — 现在由锚点指示器实时显示, 不再只打 log
 	if anchor != null:
 		print("[HUD] 瞄准锚点: ", anchor.name)
+
+
+func _on_grapple_state_for_indicator(state_str: String, _anchor_pos: Vector3) -> void:
+	# 跟踪钩索状态, 供锚点指示器判断颜色
+	_grapple_attached = (state_str == "ATTACHED" or state_str == "SHOOTING")
+
+
+# ============================================================
+#  锚点指示器 — 构建 + 每帧更新
+# ============================================================
+
+func _build_anchor_indicator() -> void:
+	# 创建一个 Control 作为指示器容器, 挂在 CanvasLayer 下
+	_anchor_indicator = Control.new()
+	_anchor_indicator.name = "AnchorIndicator"
+	_anchor_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_anchor_indicator.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(_anchor_indicator)
+
+	# 锚点图标 (使用 anchor_ui.png 贴图 + shader)
+	_anchor_icon = TextureRect.new()
+	var tex: Texture2D = load(ANCHOR_UI_TEXTURE_PATH) as Texture2D
+	if tex:
+		_anchor_icon.texture = tex
+	_anchor_icon.custom_minimum_size = Vector2(ANCHOR_ICON_SIZE, ANCHOR_ICON_SIZE)
+	_anchor_icon.size = Vector2(ANCHOR_ICON_SIZE, ANCHOR_ICON_SIZE)
+	_anchor_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_anchor_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_anchor_icon.pivot_offset = Vector2(ANCHOR_ICON_SIZE * 0.5, ANCHOR_ICON_SIZE * 0.5)
+	_anchor_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# 创建显像管 shader 材质
+	_anchor_shader_mat = _create_anchor_shader()
+	_anchor_icon.material = _anchor_shader_mat
+	_anchor_indicator.add_child(_anchor_icon)
+
+	# 距离文字 (显示在图标下方)
+	_anchor_dist_label = Label.new()
+	_anchor_dist_label.add_theme_font_size_override("font_size", 14)
+	_anchor_dist_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
+	_anchor_dist_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_anchor_dist_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_anchor_indicator.add_child(_anchor_dist_label)
+
+	# "按空格发射钩爪" 提示文字 (蓝色状态时显示)
+	_anchor_hint_label = Label.new()
+	_anchor_hint_label.text = "按空格发射钩爪"
+	_anchor_hint_label.add_theme_font_size_override("font_size", 18)
+	_anchor_hint_label.add_theme_color_override("font_color", Color(0.3, 0.85, 1.0, 1.0))
+	_anchor_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_anchor_hint_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_anchor_hint_label.visible = false
+	_anchor_indicator.add_child(_anchor_hint_label)
+
+	# 初始隐藏
+	_anchor_indicator.visible = false
+
+
+## 创建锚点图标的显像管 shader
+## 状态通过 uniform 控制:
+##   state = 0: 灰色 (去饱和)
+##   state = 1: 蓝色 (原图)
+##   state = 2: 黄色 (呼吸灯 + 显像管扫描线)
+func _create_anchor_shader() -> ShaderMaterial:
+	var shader := Shader.new()
+	shader.code = """
+shader_type canvas_item;
+
+// 状态: 0=灰色(去饱和), 1=蓝色(原图), 2=黄色(呼吸灯+显像管)
+uniform int state : hint_range(0, 2) = 0;
+uniform float time_val : hint_range(0.0, 1000.0) = 0.0;
+
+void fragment() {
+	vec4 tex_color = texture(TEXTURE, UV);
+
+	if (state == 0) {
+		// 灰色: 去饱和 + 降低亮度
+		float gray = dot(tex_color.rgb, vec3(0.299, 0.587, 0.114));
+		COLOR = vec4(vec3(gray * 0.6), tex_color.a * 0.7);
+	} else if (state == 1) {
+		// 蓝色: 显示原图
+		COLOR = tex_color;
+	} else {
+		// 黄色: 呼吸灯 + 显像管扫描线效果
+		// 呼吸灯: 亮度脉冲
+		float breath = 1.0 + 0.4 * sin(time_val * 4.0);
+		vec3 col = tex_color.rgb * breath;
+
+		// 显像管扫描线: 水平条纹
+		float scanline = 0.92 + 0.08 * sin(UV.y * 150.0 + time_val * 8.0);
+		col *= scanline;
+
+		// 轻微色差 (RGB 偏移)
+		float aberration = 0.002 * sin(time_val * 3.0);
+		float r = texture(TEXTURE, UV + vec2(aberration, 0.0)).r;
+		float b = texture(TEXTURE, UV - vec2(aberration, 0.0)).b;
+		col.r = r * breath * scanline;
+		col.b = b * breath * scanline;
+
+		// 边缘发光 (vignette 反转 = 边缘亮)
+		float vignette = 1.0 + 0.3 * smoothstep(0.3, 0.0, length(UV - vec2(0.5)));
+		col *= vignette;
+
+		COLOR = vec4(col, tex_color.a);
+	}
+}
+"""
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	mat.set_shader_parameter("state", 0)
+	mat.set_shader_parameter("time_val", 0.0)
+	return mat
+
+
+func _update_anchor_indicator() -> void:
+	if _anchor_indicator == null:
+		return
+
+	# 获取相机和车
+	var cam: Camera3D = get_viewport().get_camera_3d()
+	if cam == null:
+		_anchor_indicator.visible = false
+		return
+
+	# 获取所有锚点
+	var anchors: Array = get_tree().get_nodes_in_group("grapple_anchors")
+	if anchors.is_empty():
+		_anchor_indicator.visible = false
+		return
+
+	# 获取车的位置
+	var car_node: Node = null
+	if not car_path.is_empty() and has_node(car_path):
+		car_node = get_node(car_path)
+	if car_node == null:
+		_anchor_indicator.visible = false
+		return
+	var car_pos: Vector3 = (car_node as Node3D).global_position
+
+	# 找最近的锚点
+	var nearest: Node3D = null
+	var nearest_dist: float = INF
+	for a in anchors:
+		if not (a is Node3D):
+			continue
+		var d: float = (a as Node3D).global_position.distance_to(car_pos)
+		if d < nearest_dist:
+			nearest_dist = d
+			nearest = a as Node3D
+
+	if nearest == null:
+		_anchor_indicator.visible = false
+		return
+
+	_anchor_indicator.visible = true
+	var anchor_pos: Vector3 = nearest.global_position
+
+	# 从 GrappleHook 读取 UI 偏移、图标大小和抖动参数 (可在 Tuner 中配置)
+	var shake_speed: float = 25.0
+	var shake_amp: float = 3.0
+	if _grapple_hook_ref != null:
+		anchor_ui_offset.x = _grapple_hook_ref.get("anchor_ui_offset_x") if _grapple_hook_ref.get("anchor_ui_offset_x") != null else 0.0
+		anchor_ui_offset.y = _grapple_hook_ref.get("anchor_ui_offset_y") if _grapple_hook_ref.get("anchor_ui_offset_y") != null else -60.0
+		var new_size: float = _grapple_hook_ref.get("anchor_ui_icon_size") if _grapple_hook_ref.get("anchor_ui_icon_size") != null else 48.0
+		if new_size != ANCHOR_ICON_SIZE:
+			ANCHOR_ICON_SIZE = new_size
+			_anchor_icon.custom_minimum_size = Vector2(ANCHOR_ICON_SIZE, ANCHOR_ICON_SIZE)
+			_anchor_icon.size = Vector2(ANCHOR_ICON_SIZE, ANCHOR_ICON_SIZE)
+			_anchor_icon.pivot_offset = Vector2(ANCHOR_ICON_SIZE * 0.5, ANCHOR_ICON_SIZE * 0.5)
+		shake_speed = _grapple_hook_ref.get("anchor_ui_shake_speed") if _grapple_hook_ref.get("anchor_ui_shake_speed") != null else 25.0
+		shake_amp = _grapple_hook_ref.get("anchor_ui_shake_amplitude") if _grapple_hook_ref.get("anchor_ui_shake_amplitude") != null else 3.0
+
+	# 判断颜色状态 (0=灰色, 1=蓝色, 2=黄色)
+	var state: int = 0
+	if _grapple_attached:
+		# 已钩住状态
+		state = 2
+	elif _grapple_hook_ref != null:
+		# 检查是否可勾: focus_anchor == nearest 表示当前瞄准的就是这个锚点
+		var focus: Node = null
+		if _grapple_hook_ref.has_method("get_focus_anchor"):
+			focus = _grapple_hook_ref.call("get_focus_anchor")
+		if focus == nearest:
+			state = 1
+		else:
+			state = 0
+
+	# 更新 shader 状态
+	if _anchor_shader_mat:
+		_anchor_shader_mat.set_shader_parameter("state", state)
+
+	# 动画效果: 蓝色=放大+抖动, 黄色=呼吸灯+显像管
+	var delta: float = get_process_delta_time()
+	var anim_scale: Vector2 = Vector2.ONE
+	var anim_offset: Vector2 = Vector2.ZERO
+	if state == 1:
+		# 蓝色: 放大 1.4x + 高频抖动 (参数可配置)
+		_anchor_shake_t += delta * shake_speed
+		_anchor_glow_t = 0.0
+		anim_scale = Vector2(1.4, 1.4)
+		# 抖动偏移: 用 sin/cos 产生不规则晃动
+		anim_offset = Vector2(
+			sin(_anchor_shake_t * 1.3) * shake_amp + cos(_anchor_shake_t * 2.7) * (shake_amp * 0.5),
+			cos(_anchor_shake_t * 1.7) * shake_amp + sin(_anchor_shake_t * 2.1) * (shake_amp * 0.5)
+		)
+		_anchor_icon.modulate = Color(1.0, 1.0, 1.0, 1.0)
+		# 显示"按空格发射钩爪"提示
+		if _anchor_hint_label:
+			_anchor_hint_label.visible = true
+	elif state == 2:
+		# 黄色: 停止抖动, shader 内部处理呼吸灯+显像管
+		_anchor_glow_t += delta
+		_anchor_shake_t = 0.0
+		anim_scale = Vector2(1.3, 1.3)
+		anim_offset = Vector2.ZERO
+		_anchor_icon.modulate = Color(1.0, 1.0, 1.0, 1.0)
+		# 传递时间给 shader
+		if _anchor_shader_mat:
+			_anchor_shader_mat.set_shader_parameter("time_val", _anchor_glow_t)
+		# 隐藏提示文字
+		if _anchor_hint_label:
+			_anchor_hint_label.visible = false
+	else:
+		# 灰色: 无动画, 复位
+		_anchor_shake_t = 0.0
+		_anchor_glow_t = 0.0
+		anim_scale = Vector2.ONE
+		anim_offset = Vector2.ZERO
+		_anchor_icon.modulate = Color(1.0, 1.0, 1.0, 1.0)
+		# 隐藏提示文字
+		if _anchor_hint_label:
+			_anchor_hint_label.visible = false
+
+	# 3D → 2D 投影
+	var vp_size: Vector2 = get_viewport().get_visible_rect().size
+	var is_behind: bool = cam.is_position_behind(anchor_pos)
+	var screen_pos: Vector2 = cam.unproject_position(anchor_pos)
+
+	# 判断是否在屏幕内
+	var margin: float = ANCHOR_EDGE_MARGIN
+	var in_screen: bool = not is_behind \
+		and screen_pos.x >= margin and screen_pos.x <= vp_size.x - margin \
+		and screen_pos.y >= margin and screen_pos.y <= vp_size.y - margin
+
+	if in_screen:
+		# 屏幕内: 直接显示在投影位置 + UI偏移 + 动画偏移
+		_anchor_icon.position = screen_pos - Vector2(ANCHOR_ICON_SIZE * 0.5, ANCHOR_ICON_SIZE * 0.5) + anchor_ui_offset + anim_offset
+		# 根据距离缩放 (近大远小, 但有上下限) × 动画缩放
+		var scale_factor: float = clampf(1.0 - nearest_dist / 80.0, 0.5, 1.5)
+		_anchor_icon.scale = Vector2(scale_factor, scale_factor) * anim_scale
+	else:
+		# 屏幕外: 贴到屏幕边缘
+		var center: Vector2 = vp_size * 0.5
+		var dir: Vector2
+		if is_behind:
+			# 锚点在相机后面: 方向取反
+			dir = (center - screen_pos).normalized()
+		else:
+			dir = (screen_pos - center).normalized()
+
+		# 计算边缘交点
+		var edge_pos: Vector2 = _calc_edge_position(center, dir, vp_size, margin)
+		_anchor_icon.position = edge_pos - Vector2(ANCHOR_ICON_SIZE * 0.5, ANCHOR_ICON_SIZE * 0.5) + anim_offset
+		_anchor_icon.scale = Vector2(0.8, 0.8) * anim_scale
+
+	# 距离文字 (跟随图标位置, 显示在图标正下方)
+	var icon_center: Vector2 = _anchor_icon.position + Vector2(ANCHOR_ICON_SIZE * 0.5, ANCHOR_ICON_SIZE * 0.5) * _anchor_icon.scale
+	_anchor_dist_label.text = "%dm" % int(nearest_dist)
+	_anchor_dist_label.position = icon_center + Vector2(-15, ANCHOR_ICON_SIZE * 0.5 * _anchor_icon.scale.y + 2)
+
+	# "按空格发射钩爪" 提示文字 (显示在图标右侧)
+	if _anchor_hint_label and _anchor_hint_label.visible:
+		_anchor_hint_label.position = icon_center + Vector2(ANCHOR_ICON_SIZE * 0.5 * _anchor_icon.scale.x + 8, -12)
+
+
+## 计算从屏幕中心沿 dir 方向到屏幕边缘的交点 (留 margin)
+func _calc_edge_position(center: Vector2, dir: Vector2, vp_size: Vector2, margin: float) -> Vector2:
+	# 用参数方程: P = center + t * dir, 求 t 使 P 刚好在边缘
+	var half_w: float = vp_size.x * 0.5 - margin
+	var half_h: float = vp_size.y * 0.5 - margin
+	var t: float = INF
+	if absf(dir.x) > 0.001:
+		t = minf(t, half_w / absf(dir.x))
+	if absf(dir.y) > 0.001:
+		t = minf(t, half_h / absf(dir.y))
+	return center + dir * t

@@ -98,7 +98,7 @@ target = NodePath("../Car/CarMesh")
 
 [node name="GrappleAnchor_A" parent="." unique_id=1347909049 instance=ExtResource("5_grapple_anchor")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 12, 60, -5)
-detect_radius = 30.0
+detect_radius = 60.0
 
 [node name="Vis" type="MeshInstance3D" parent="GrappleAnchor_A" unique_id=754835997]
 material_override = SubResource("StandardMaterial3D_wxi3v")
@@ -113,7 +113,7 @@ shape = SubResource("SphereShape3D_v348h")
 
 [node name="GrappleAnchor_B" parent="." unique_id=1970175980 instance=ExtResource("5_grapple_anchor")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 25, 65, -18)
-detect_radius = 35.0
+detect_radius = 60.0
 anchor_color = Color(0.4, 1, 0.85, 1)
 
 [node name="Vis" type="MeshInstance3D" parent="GrappleAnchor_B" unique_id=2127558561]
@@ -130,7 +130,7 @@ shape = SubResource("SphereShape3D_0blrl")
 [node name="GrappleAnchor_C" parent="." unique_id=2116229252 instance=ExtResource("5_grapple_anchor")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 70, -35)
 anchor_radius = 1.8
-detect_radius = 40.0
+detect_radius = 60.0
 anchor_color = Color(1, 0.6, 0.3, 1)
 
 [node name="Vis" type="MeshInstance3D" parent="GrappleAnchor_C" unique_id=343943379]

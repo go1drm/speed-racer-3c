@@ -121,6 +121,10 @@ var _logged_attached_rope: bool = false
 @export_range(0.0, 5.0, 0.1) var aim_priority_speed_weight: float = 1.0
 ## 距离权重: 选锚点时距离越近优先级越高的乘数. 越大越偏向近锚点
 @export_range(0.0, 5.0, 0.1) var aim_priority_distance_weight: float = 1.0
+## 锚点检测半径全局覆盖 (米). 此值 > 0 时, 忽略每个锚点自身的 detect_radius, 统一使用此值
+## 设为 0 = 使用每个锚点自身的 detect_radius (默认 60m)
+## 设计: 让用户在 Tuner 中统一调节所有锚点的检测范围, 不用逐个改锚点
+@export_range(0.0, 200.0, 1.0) var anchor_detect_radius_override: float = 60.0
 
 @export_group("Car Interaction")
 ## 钩索期间是否抑制引擎力. 1=抑制(玩家不能踩油门抢方向), 0=保留引擎
@@ -200,24 +204,25 @@ var _logged_attached_rope: bool = false
 ## 绳子起点偏移 (相对车 transform 本地坐标). 让绳子从车头/车顶发出, 而不是车球心
 @export var rope_origin_offset: Vector3 = Vector3(0.0, 0.5, -0.5)
 
-@export_group("Detect Zone Visual (检测区域可视化)")
-## 检测区域可视化总开关 (L 键运行时切换, 此值是初始状态)
-## 1=启动时就显示检测区域, 0=默认隐藏(按 L 打开)
-@export var detect_zone_visible: bool = false
-## 检测区域透明度 (0=完全透明, 1=完全不透明). 推荐 0.08~0.2, 太高遮挡视线
-@export_range(0.0, 1.0, 0.01) var detect_zone_alpha: float = 0.12
-## 检测区域颜色 (RGB 部分, alpha 由 detect_zone_alpha 控制)
-@export var detect_zone_color: Color = Color(0.2, 0.6, 1.0, 1.0)
-## 检测区域线框模式: 1=只画线框(更清晰不遮挡), 0=半透明实体
-@export var detect_zone_wireframe: bool = false
-## 检测区域球体细分段数 (越大越圆滑, 16 足够)
-@export_range(8, 64, 4) var detect_zone_segments: int = 16
-## 检测锥体可视化: 是否同时显示瞄准锥角 (从车头方向延伸的锥形)
-@export var detect_cone_visible: bool = true
-## 锥体透明度
-@export_range(0.0, 1.0, 0.01) var detect_cone_alpha: float = 0.06
-## 锥体颜色
-@export var detect_cone_color: Color = Color(1.0, 0.85, 0.2, 1.0)
+@export_group("Anchor UI (锚点指示器)")
+## 锚点 UI 图标相对于锚点投影位置的水平偏移 (像素). 正数=向右
+@export_range(-200.0, 200.0, 1.0) var anchor_ui_offset_x: float = 0.0
+## 锚点 UI 图标相对于锚点投影位置的垂直偏移 (像素). 正数=向下, 负数=向上
+@export_range(-200.0, 200.0, 1.0) var anchor_ui_offset_y: float = -60.0
+## 锚点 UI 图标大小 (像素). 默认48 = 原菱形32的1.5倍
+@export_range(16.0, 200.0, 1.0) var anchor_ui_icon_size: float = 48.0
+## 锚点 UI 抖动速度 (蓝色状态). 越大抖动越快
+@export_range(1.0, 100.0, 0.5) var anchor_ui_shake_speed: float = 25.0
+## 锚点 UI 抖动幅度 (蓝色状态, 像素). 越大晃动越剧烈
+@export_range(0.0, 20.0, 0.5) var anchor_ui_shake_amplitude: float = 3.0
+
+@export_group("Anchor Tug (锚点被扯动画)")
+## 锚点被钩住时模型朝玩家方向被扯的距离 (米)
+@export_range(0.0, 10.0, 0.1) var anchor_tug_distance: float = 2.0
+## 被扯动画持续时间 (秒, 来回总时长)
+@export_range(0.05, 2.0, 0.05) var anchor_tug_duration: float = 0.3
+
+# (检测区域3D可视化已删除, 改用 HUD 2D 锚点指示器)
 
 # ---------------- 信号 ----------------
 ## 状态变化: IDLE/SHOOTING/ATTACHED/RELEASING
@@ -250,17 +255,6 @@ const _STALL_GRACE_TIME: float = 0.25   # 钩住后 0.25s 内不做 stall 自动
 # 检测区域可视化 (L 键切换)
 # ============================================================
 # 实时绘制钩索的检测范围:
-#   1) 以车为中心的球体 (半径 = max_distance) — 表示最大射程
-#   2) 以车为中心的球体 (半径 = min_distance) — 表示最小射程
-#   3) 从车头方向延伸的锥体 (半锥角 = aim_assist_angle_deg) — 表示瞄准锥角
-# 所有可视化都是半透明的, 不影响游戏操作
-var _detect_zone_sphere_outer: MeshInstance3D = null   # 外球 (max_distance)
-var _detect_zone_sphere_inner: MeshInstance3D = null   # 内球 (min_distance)
-var _detect_zone_cone: MeshInstance3D = null            # 瞄准锥体
-var _detect_zone_mat_outer: StandardMaterial3D = null
-var _detect_zone_mat_inner: StandardMaterial3D = null
-var _detect_zone_mat_cone: StandardMaterial3D = null
-
 
 func _ready() -> void:
 	# 解析车路径
@@ -275,8 +269,6 @@ func _ready() -> void:
 	_init_default_curves()
 	# 构建绳子视觉
 	_build_rope_mesh()
-	# 构建检测区域可视化 (默认隐藏, L 键切换)
-	_build_detect_zone_visuals()
 
 
 func _init_default_curves() -> void:
@@ -498,11 +490,12 @@ func _find_best_anchor() -> Node:
 		var dist: float = to_a.length()
 		if dist > max_distance or dist < min_distance:
 			continue
-		# 检查锚点自己的 detect_radius (玩家必须在锚点检测范围内才能瞄准)
-		if "detect_radius" in a:
-			var dr: float = float(a.get("detect_radius"))
-			if dist > dr:
-				continue
+		# 检查锚点检测半径 (全局覆盖 > 锚点自身值)
+		var effective_dr: float = anchor_detect_radius_override if anchor_detect_radius_override > 0.0 else 0.0
+		if effective_dr <= 0.0 and "detect_radius" in a:
+			effective_dr = float(a.get("detect_radius"))
+		if effective_dr > 0.0 and dist > effective_dr:
+			continue
 		# 锥角判定: 用水平方向的 cos 做主判定 (让仰角不影响"前方锥"语义)
 		# 但允许向上/向下的锚点进入候选 (只要水平投影在锥内)
 		var to_a_flat_norm: Vector3 = Vector3(to_a.x, 0.0, to_a.z)
@@ -568,6 +561,10 @@ func _start_attach() -> void:
 		_stall_grace_left = _STALL_GRACE_TIME
 	emit_signal("grapple_state_changed", "ATTACHED", (_current_anchor as Node3D).global_position)
 	emit_signal("grapple_started", (_current_anchor as Node3D).global_position)
+	# 触发锚点"被扯一下"的视觉动画
+	if _current_anchor != null and _current_anchor.has_method("play_tug_animation"):
+		var car_pos: Vector3 = car.global_position if car != null else Vector3.ZERO
+		_current_anchor.call("play_tug_animation", car_pos, anchor_tug_distance, anchor_tug_duration)
 
 
 func _release(success: bool) -> void:
@@ -629,18 +626,7 @@ func _release(success: bool) -> void:
 # ============================================================
 #  物理更新 (主循环)
 # ============================================================
-func _input(event: InputEvent) -> void:
-	# L 键: 切换检测区域可视化
-	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_L or event.physical_keycode == KEY_L:
-			detect_zone_visible = not detect_zone_visible
-			_update_detect_zone_visibility()
-			print("[GrappleHook] 检测区域可视化: %s" % ("开启" if detect_zone_visible else "关闭"))
-
-
 func _physics_process(delta: float) -> void:
-	# 每帧更新检测区域可视化 (跟随车位置 + 参数实时刷新)
-	_update_detect_zone()
 	if not grapple_enabled or car == null:
 		_update_focus_only()   # 即使禁用也维护"瞄准锚点高亮"
 		return
@@ -940,188 +926,12 @@ func get_anchor_position() -> Vector3:
 	return (_current_anchor as Node3D).global_position
 
 
-# ============================================================
-#  检测区域可视化 (L 键切换)
-# ============================================================
-# 实时绘制三个半透明几何体:
-#   1) 外球 (max_distance): 蓝色半透明球, 表示最大射程
-#   2) 内球 (min_distance): 红色半透明球, 表示最小射程 (贴脸不钩)
-#   3) 瞄准锥 (aim_assist_angle_deg): 黄色半透明锥体, 从车头方向延伸
-# 所有几何体跟随车的位置实时更新, 参数变化时自动重建 mesh
-# ============================================================
-
-func _build_detect_zone_visuals() -> void:
-	# --- 外球 (max_distance) ---
-	_detect_zone_sphere_outer = MeshInstance3D.new()
-	_detect_zone_sphere_outer.name = "DetectZoneOuter"
-	var outer_sphere := SphereMesh.new()
-	outer_sphere.radius = max_distance
-	outer_sphere.height = max_distance * 2.0
-	outer_sphere.radial_segments = detect_zone_segments
-	outer_sphere.rings = detect_zone_segments / 2
-	_detect_zone_sphere_outer.mesh = outer_sphere
-	_detect_zone_mat_outer = StandardMaterial3D.new()
-	_detect_zone_mat_outer.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_detect_zone_mat_outer.albedo_color = Color(detect_zone_color.r, detect_zone_color.g, detect_zone_color.b, detect_zone_alpha)
-	_detect_zone_mat_outer.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_detect_zone_mat_outer.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_detect_zone_mat_outer.no_depth_test = true
-	_detect_zone_sphere_outer.material_override = _detect_zone_mat_outer
-	_detect_zone_sphere_outer.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(_detect_zone_sphere_outer)
-
-	# --- 内球 (min_distance) ---
-	_detect_zone_sphere_inner = MeshInstance3D.new()
-	_detect_zone_sphere_inner.name = "DetectZoneInner"
-	var inner_sphere := SphereMesh.new()
-	inner_sphere.radius = maxf(min_distance, 0.1)
-	inner_sphere.height = maxf(min_distance, 0.1) * 2.0
-	inner_sphere.radial_segments = detect_zone_segments
-	inner_sphere.rings = detect_zone_segments / 2
-	_detect_zone_sphere_inner.mesh = inner_sphere
-	_detect_zone_mat_inner = StandardMaterial3D.new()
-	_detect_zone_mat_inner.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_detect_zone_mat_inner.albedo_color = Color(1.0, 0.3, 0.2, detect_zone_alpha * 1.5)
-	_detect_zone_mat_inner.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_detect_zone_mat_inner.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_detect_zone_mat_inner.no_depth_test = true
-	_detect_zone_sphere_inner.material_override = _detect_zone_mat_inner
-	_detect_zone_sphere_inner.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(_detect_zone_sphere_inner)
-
-	# --- 瞄准锥体 (aim_assist_angle_deg) ---
-	# 用 CylinderMesh 模拟锥体: top_radius=0, bottom_radius=tan(angle)*max_distance, height=max_distance
-	# 锥体沿 -Y 方向延伸, 然后旋转让它沿 -Z (车头方向)
-	_detect_zone_cone = MeshInstance3D.new()
-	_detect_zone_cone.name = "DetectZoneCone"
-	_detect_zone_cone.mesh = _build_cone_mesh()
-	_detect_zone_mat_cone = StandardMaterial3D.new()
-	_detect_zone_mat_cone.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_detect_zone_mat_cone.albedo_color = Color(detect_cone_color.r, detect_cone_color.g, detect_cone_color.b, detect_cone_alpha)
-	_detect_zone_mat_cone.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_detect_zone_mat_cone.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_detect_zone_mat_cone.no_depth_test = true
-	_detect_zone_cone.material_override = _detect_zone_mat_cone
-	_detect_zone_cone.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(_detect_zone_cone)
-
-	# 初始可见性
-	_update_detect_zone_visibility()
+## 获取当前焦点锚点 (IDLE 时瞄准的锚点, 供 HUD 锚点指示器用)
+func get_focus_anchor() -> Node:
+	return _focus_anchor
 
 
-func _build_cone_mesh() -> CylinderMesh:
-	# CylinderMesh 默认沿 Y 轴, top 在 +Y, bottom 在 -Y
-	# 我们要锥体从车头 (-Z) 方向延伸:
-	#   top_radius = 0 (锥尖在车的位置)
-	#   bottom_radius = tan(aim_angle) × max_distance (锥底在 max_distance 处)
-	#   height = max_distance
-	# 然后在 _update_detect_zone 里用 basis 旋转让 +Y 对齐车头 -Z
-	var cone := CylinderMesh.new()
-	var angle_rad: float = deg_to_rad(aim_assist_angle_deg)
-	cone.top_radius = 0.0
-	cone.bottom_radius = tan(angle_rad) * max_distance
-	cone.height = max_distance
-	cone.radial_segments = detect_zone_segments
-	cone.rings = 1
-	return cone
+## 获取当前钩住的锚点 (ATTACHED 时, 供 HUD 锚点指示器用)
+func get_current_anchor() -> Node:
+	return _current_anchor
 
-
-func _update_detect_zone_visibility() -> void:
-	if _detect_zone_sphere_outer:
-		_detect_zone_sphere_outer.visible = detect_zone_visible
-	if _detect_zone_sphere_inner:
-		_detect_zone_sphere_inner.visible = detect_zone_visible and min_distance > 0.01
-	if _detect_zone_cone:
-		_detect_zone_cone.visible = detect_zone_visible and detect_cone_visible
-
-
-# 缓存上一帧的参数值, 只在参数变化时重建 mesh (避免每帧重建)
-var _prev_max_dist: float = -1.0
-var _prev_min_dist: float = -1.0
-var _prev_aim_angle: float = -1.0
-var _prev_segments: int = -1
-
-func _update_detect_zone() -> void:
-	if not detect_zone_visible:
-		return
-	if car == null:
-		return
-
-	# 获取车的位置和朝向
-	var car_pos: Vector3 = car.global_position
-	var car_mesh: Node3D = car.get_node_or_null("CarMesh") as Node3D
-	var car_forward: Vector3 = Vector3.FORWARD
-	if car_mesh != null:
-		car_forward = -car_mesh.global_transform.basis.z
-	else:
-		car_forward = -car.global_transform.basis.z
-
-	# --- 检测参数变化, 需要时重建 mesh ---
-	var need_rebuild: bool = false
-	if not is_equal_approx(_prev_max_dist, max_distance) or _prev_segments != detect_zone_segments:
-		need_rebuild = true
-		_prev_max_dist = max_distance
-	if not is_equal_approx(_prev_min_dist, min_distance):
-		need_rebuild = true
-		_prev_min_dist = min_distance
-	if not is_equal_approx(_prev_aim_angle, aim_assist_angle_deg) or _prev_segments != detect_zone_segments:
-		need_rebuild = true
-		_prev_aim_angle = aim_assist_angle_deg
-	_prev_segments = detect_zone_segments
-
-	if need_rebuild:
-		# 重建外球
-		if _detect_zone_sphere_outer:
-			var os := SphereMesh.new()
-			os.radius = max_distance
-			os.height = max_distance * 2.0
-			os.radial_segments = detect_zone_segments
-			os.rings = detect_zone_segments / 2
-			_detect_zone_sphere_outer.mesh = os
-		# 重建内球
-		if _detect_zone_sphere_inner:
-			var ins := SphereMesh.new()
-			ins.radius = maxf(min_distance, 0.1)
-			ins.height = maxf(min_distance, 0.1) * 2.0
-			ins.radial_segments = detect_zone_segments
-			ins.rings = detect_zone_segments / 2
-			_detect_zone_sphere_inner.mesh = ins
-		# 重建锥体
-		if _detect_zone_cone:
-			_detect_zone_cone.mesh = _build_cone_mesh()
-
-	# --- 更新位置: 球体跟随车 ---
-	if _detect_zone_sphere_outer:
-		_detect_zone_sphere_outer.global_position = car_pos
-	if _detect_zone_sphere_inner:
-		_detect_zone_sphere_inner.global_position = car_pos
-		_detect_zone_sphere_inner.visible = detect_zone_visible and min_distance > 0.01
-
-	# --- 更新锥体: 位置在车, 朝向沿车头方向 ---
-	if _detect_zone_cone and detect_cone_visible:
-		# CylinderMesh 默认 +Y 朝上, 锥尖在 +Y (top_radius=0), 锥底在 -Y
-		# 我们要锥尖在车的位置, 锥底朝车头方向延伸
-		# 所以: 节点位置 = car_pos + car_forward × (max_distance / 2)
-		#        (因为 CylinderMesh 中心在几何中心, 需要偏移半个高度)
-		# 旋转: 让 +Y 对齐 car_forward
-		_detect_zone_cone.global_position = car_pos + car_forward * (max_distance * 0.5)
-		# 构造 basis: +Y 对齐 car_forward
-		var up: Vector3 = car_forward.normalized()
-		var right: Vector3
-		if absf(up.dot(Vector3.UP)) > 0.99:
-			right = Vector3.RIGHT
-		else:
-			right = up.cross(Vector3.UP).normalized()
-		var fwd: Vector3 = right.cross(up).normalized()
-		_detect_zone_cone.global_transform.basis = Basis(right, up, fwd)
-		_detect_zone_cone.visible = detect_zone_visible and detect_cone_visible
-	elif _detect_zone_cone:
-		_detect_zone_cone.visible = false
-
-	# --- 实时更新材质颜色/透明度 ---
-	if _detect_zone_mat_outer:
-		_detect_zone_mat_outer.albedo_color = Color(detect_zone_color.r, detect_zone_color.g, detect_zone_color.b, detect_zone_alpha)
-	if _detect_zone_mat_inner:
-		_detect_zone_mat_inner.albedo_color = Color(1.0, 0.3, 0.2, detect_zone_alpha * 1.5)
-	if _detect_zone_mat_cone:
-		_detect_zone_mat_cone.albedo_color = Color(detect_cone_color.r, detect_cone_color.g, detect_cone_color.b, detect_cone_alpha)

@@ -3050,7 +3050,7 @@ func _place_at_mouse() -> void:
 		# 锚点统一进 _placed_blocks (kind="anchor"), 这样选中/拖拽/Undo 都自动可用
 		# 锚点参数 (anchor_radius / detect_radius / color) 存到 node 上 (用 set_meta), 序列化时再读出
 		anchor_node.set_meta("anchor_radius", 1.5)
-		anchor_node.set_meta("detect_radius", 25.0)
+anchor_node.set_meta("detect_radius", 60.0)
 		anchor_node.set_meta("anchor_color", Color(0.3, 0.85, 1.0))
 		_placed_blocks.append({"id": "anchor", "node": anchor_node, "kind": "anchor"})
 		_undo_push({"op": "add", "index": _placed_blocks.size() - 1})
@@ -3182,7 +3182,7 @@ func _make_block_snapshots(indices: Array) -> Array:
 		if String(d.get("kind", "")) == "anchor":
 			snap["anchor_meta"] = {
 				"anchor_radius": node.get_meta("anchor_radius", 1.5),
-				"detect_radius": node.get_meta("detect_radius", 25.0),
+"detect_radius": node.get_meta("detect_radius", 60.0),
 				"anchor_color":  node.get_meta("anchor_color", Color(0.3, 0.85, 1.0)),
 			}
 		out.append(snap)
@@ -3201,10 +3201,10 @@ func _restore_from_snapshots(snapshots: Array) -> Array:
 		var node: Node3D = null
 		if kind == "anchor":
 			var meta: Dictionary = s.get("anchor_meta", {})
-			node = _create_anchor_visual(Vector3.ZERO, float(meta.get("anchor_radius", 1.5)),
-				float(meta.get("detect_radius", 25.0)), meta.get("anchor_color", Color(0.3, 0.85, 1.0)))
+node = _create_anchor_visual(Vector3.ZERO, float(meta.get("anchor_radius", 1.5)),
+				float(meta.get("detect_radius", 60.0)), meta.get("anchor_color", Color(0.3, 0.85, 1.0)))
 			node.set_meta("anchor_radius", meta.get("anchor_radius", 1.5))
-			node.set_meta("detect_radius", meta.get("detect_radius", 25.0))
+			node.set_meta("detect_radius", meta.get("detect_radius", 60.0))
 			node.set_meta("anchor_color", meta.get("anchor_color", Color(0.3, 0.85, 1.0)))
 		elif kind == "spawn":
 			# 出生点不应该出现在 delete snapshot 里 (它不能被删, 只能移动)
@@ -3638,7 +3638,7 @@ func _build_track_data(track_display_name: String) -> Resource:
 				data.call("add_block", bid, node.global_transform, params)
 			"anchor":
 				var ar: float = node.get_meta("anchor_radius", 1.5)
-				var dr: float = node.get_meta("detect_radius", 25.0)
+var dr: float = node.get_meta("detect_radius", 60.0)
 				var col: Color = node.get_meta("anchor_color", Color(0.3, 0.85, 1.0))
 				data.call("add_anchor", node.global_position, ar, dr, col)
 			"spawn":
@@ -3717,7 +3717,7 @@ func _load_track_data(path: String) -> void:
 	for a in anchors_data:
 		var ap: Vector3 = a.get("position", Vector3.ZERO)
 		var ar: float = a.get("anchor_radius", 1.5)
-		var dr: float = a.get("detect_radius", 25.0)
+var dr: float = a.get("detect_radius", 60.0)
 		var col: Color = a.get("color", Color(0.3, 0.85, 1.0))
 		var anode := _create_anchor_visual(ap, ar, dr, col)
 		anode.set_meta("anchor_radius", ar)
