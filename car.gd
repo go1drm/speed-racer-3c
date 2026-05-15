@@ -1496,6 +1496,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			if freefly_enabled and not _rewind_active:
 				_toggle_freefly()
 			get_viewport().set_input_as_handled()
+		# B 键: 快速回到出生点 (任何地图中按 B 立即复位)
+		elif (ek.keycode == KEY_B or ek.physical_keycode == KEY_B) and ek.pressed:
+			_reset_to_origin()
+			print("[Car] B 键: 快速回到出生点")
+			get_viewport().set_input_as_handled()
 
 
 func _reset_to_origin() -> void:
