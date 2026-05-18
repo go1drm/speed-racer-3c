@@ -48,6 +48,8 @@ const PARAMS := [
 		"无喷射时车辆能达到的最高速度。引擎曲线 X=1 对应到这个值。", ""],
 	["top_speed_boosted",         "喷射极速 (m/s)",     10.0, 300.0, 0.5,
 		"小喷/双喷/氮气期间车辆能达到的最高速度。喷射时引擎曲线 X=1 对应到这个值, 让喷射阶段也是从 0 推到 1, 同样有'越接近顶速越乏力'的曲线感。", ""],
+	["air_top_speed",             "空中极速 (m/s)",     10.0, 200.0, 0.5,
+		"空中喷射时的最高速度限制。空中叠喷突破可以超过此值。0=不限制(不推荐)。推荐设在巡航极速和喷射极速之间。", ""],
 	["__sub", "转向"],
 	["steering_deg",              "前轮转角(度)",       5.0,  60.0,  0.5,
 		"前轮视觉转角, 同时也是车头朝向的转向幅度上限。", ""],
@@ -164,6 +166,14 @@ const PARAMS := [
 		"刚入漂的多少秒内不启用自动退漂. 防止入漂瞬间车头还没甩出来就被误判摆正而退漂.", ""],
 
 
+	["__group", "漂移自动回正"],
+	["drift_auto_straighten_enabled", "自动回正开关",     0,    1,     1,
+		"1=漂移持续一段时间后, 不按方向键时车头自动朝速度方向缓慢回正. 0=关闭.", ""],
+	["drift_auto_straighten_delay",   "回正延迟(秒)",     0.0,  5.0,   0.1,
+		"漂移持续多少秒后才开始自动回正. 给玩家充分的漂移操作时间.", ""],
+	["drift_auto_straighten_speed_deg","回正角速度(°/s)",  5.0,  180.0, 1.0,
+		"自动回正的最大角速度(度/秒). 实际速度 = 此值 × 曲线采样值. 推荐 30~90: 30 极缓, 60 适中, 90 明显.", "drift_auto_straighten_curve"],
+
 	["__group", "动态曲线"],
 	["drift_engage_duration",     "入漂过渡时长(秒)",   0.0,  1.5,   0.01,
 		"从直行切到漂移, drift_intensity 从 0 到 1 的过渡时间. 小=灵敏, 大=柔和.", "drift_engage_curve"],
@@ -184,40 +194,38 @@ const PARAMS := [
 	["post_drift_steer_mult",     "退漂转向冷却起始倍率", 0.0,  1.0,   0.05,
 		"退漂瞬间转向倍率. 0.5=只剩 50% 然后平滑回到 100%.", ""],
 
-	["__group", "反打 (真实赛车过弯反打)"],
-	["__sub",   "★新机制 (drift_counter_enabled=true 时生效)"],
-	["drift_counter_enabled",          "反打新机制开关",       0, 1, 1,
-		"★真实反打核心开关★ 1=启用: 漂移中玩家按下'与漂角方向相反'的方向键 → 车头朝速度向量缓慢回正, 按到位松手即可直线出弯. 0=关闭, 回退到旧机制 (减速+前向阻力+锁定, 由下方旧参数控制).", ""],
-	["drift_counter_angular_speed_deg", "反打回正角速度(°/s)", 10.0, 360.0, 5.0,
-		"完全反打时车头朝速度向量回正的角速度. 实际角速度 = 此值 × |steer| × ramp(response_time) × drift_intensity. 推荐 60~180: 60 缓慢, 120 流畅 (QQ 飞车手感), 180 利索.", ""],
-	["drift_counter_deadzone_deg",     "反打死区(°)",         0.0, 20.0, 0.5,
-		"漂角 |slip_angle| 小于此值 (度) 时不触发反打回正, 避免车头在 0 附近抖动. 推荐 2~8.", ""],
+	["__group", "反打"],
+	["__sub",   "反打转向缩减 + 锁定"],
+	["drift_counter_steer_mult",       "反打转向缩减",     0.0, 1.0,  0.05,
+		"漂移中反打方向的转向倍率. 0.35=反打时角速度只剩 35%; 1.0=不缩减.", ""],
+	["drift_counter_lock_until_exit_enabled", "反打锁定到退漂", 0, 1, 1,
+		"1=漂移中一旦反打, 之后正打转向速度也等同于反打速度, 直到退漂结束. 封死 spam 反打获益.", ""],
 	["drift_counter_response_time",    "反打响应时间(s)",     0.0, 2.0,  0.05,
 		"反打从'刚开始按'到'达到峰值回正速度'的累计秒数. 用 smoothstep 加速曲线. 0=一按就满速; 0.3~0.8=有蓄势感. 反打中断立即清零.", ""],
 
-	["__sub",   "车身视觉 (车身侧倾/车头 yaw 动画, 与物理层独立)"],
+	["__sub",   "车身视觉 (车头 yaw 动画)"],
 	["drift_counter_lean_mult",        "反打车头回正目标",    0.0, 1.0,  0.05,
-		"车身视觉层: 漂移反打时车头 yaw 偏转衰减到的最低倍率 (仅影响 body_mesh.rotation.y 视觉, 不影响物理). 0=车头完全朝运动方向回正; 1=反打不影响车头偏转.", ""],
+		"漂移反打时车头 yaw 偏转衰减到的最低倍率 (仅影响 body_mesh.rotation.y 视觉, 不影响物理). 0=车头完全朝运动方向回正; 1=反打不影响车头偏转.", ""],
 	["drift_counter_lean_smooth",      "反打车头回正速度",    1.0, 20.0, 0.5,
-		"车身视觉: 反打/松开时车头 yaw 的恢复过渡平滑速度. 越大越锐利.", ""],
+		"反打/松开时车头 yaw 的恢复过渡平滑速度. 越大越锐利.", ""],
 
-	["__sub",   "旧机制 (drift_counter_enabled=false 时才生效, 不建议)"],
-	["drift_counter_steer_mult",       "旧-反打转向缩减",     0.0, 1.0,  0.05,
-		"[已废弃] 旧机制: 漂移中反打方向的转向倍率. 0.35=反打时角速度只剩 35%. 新机制下此参数不再生效.", ""],
-	["drift_counter_lock_until_exit_enabled", "旧-反打锁定到退漂", 0, 1, 1,
-		"[已废弃] 旧'反打锁定'开关, 仅在 drift_counter_enabled=false 时生效. 新机制不使用此机制.", ""],
-	["drift_counter_decel_enabled",    "旧-反打减速开关",     0,   1,    1,
-		"[已废弃] 旧'反打=刹车'机制, 仅在 drift_counter_enabled=false 时生效.", ""],
-	["drift_counter_decel",            "旧-反打减速强度",     0.0, 30.0, 0.1,
-		"[已废弃] 旧机制减速力. 新机制下不生效.", ""],
-	["drift_counter_decel_min_steer",  "旧-反打最小输入阈值", 0.0, 1.0,  0.01,
-		"[已废弃] 旧机制阈值. 新机制下不生效.", ""],
-	["drift_counter_throttle_friction_enabled", "旧-反打+前进摩擦开关", 0, 1, 1,
-		"[已废弃] 旧机制. 新机制下不生效.", ""],
-	["drift_counter_throttle_friction", "旧-反打+前进摩擦强度", 0.0, 30.0, 0.1,
-		"[已废弃] 旧机制. 新机制下不生效.", ""],
-	["drift_counter_lat_grip_mult",    "旧-反打侧向抓地倍率", 0.0, 1.0,  0.01,
-		"[已废弃] 旧'反打=车顺惯性甩出'机制. 新机制用 yaw 回正替代.", ""],
+	["__sub",   "反打减速 (反打=刹车)"],
+	["drift_counter_decel_enabled",    "反打减速开关",     0,   1,    1,
+		"1=漂移中反打时沿速度反方向施加减速力, 体感偏硬. 想要'刹车感'反打就开.", ""],
+	["drift_counter_decel",            "反打减速强度",     0.0, 30.0, 0.1,
+		"F = 此值 × |steer_input| × mass, 沿 -v_horiz 方向施加. 推荐 6~14: 6=轻微; 10=明显; 14+=急停.", ""],
+	["drift_counter_decel_min_steer",  "反打最小输入阈值", 0.0, 1.0,  0.01,
+		"|steer_input| >= 此值才触发减速. 防止轻微反打/方向键抖动也减速. 推荐 0.2~0.4.", ""],
+
+	["__sub",   "反打+前进摩擦"],
+	["drift_counter_throttle_friction_enabled", "反打+前进摩擦开关", 0, 1, 1,
+		"1=反打+踩油门时, 沿 -forward 方向额外施加摩擦力, 让玩家感到'踩油门也加不上速'.", ""],
+	["drift_counter_throttle_friction", "反打+前进摩擦强度", 0.0, 30.0, 0.1,
+		"F = 此值 × |steer_input| × throttle_input × mass, 沿 -forward 方向. 推荐 4~12.", ""],
+
+	["__sub",   "反打侧向抓地下降 (反打=甩出)"],
+	["drift_counter_lat_grip_mult",    "反打侧向抓地倍率", 0.0, 1.0,  0.01,
+		"反打时 lat_k *= 此值. 0=完全无侧向抓地(车100%顺惯性甩出); 0.3=强甩出感; 0.6=温和; 1.0=关闭. 推荐 0.2~0.5.", ""],
 
 
 
@@ -239,6 +247,10 @@ const PARAMS := [
 		"最多能囤积多少格氮气。", ""],
 	["instant_nitro_settle",      "集气满立即结算氮气", 0,    1,     1,
 		"1=集气满立刻得到一格氮气可立即用; 0=漂移结束才结算(平衡向)。", ""],
+	["spawn_nitro_enabled",       "出生自带氮气开关",   0,    1,     1,
+		"1=进入地图/按B复位时自动获得氮气; 0=不自带。", ""],
+	["spawn_nitro_stock",         "出生自带氮气格数",   0,    5,     1,
+		"进入地图或复位时自动获得的氮气格数(不超过氮气槽上限)。", ""],
 
 	["__group", "喷射类型"],
 	["mini_boost_power",          "小喷推进力",         5.0,  100.0, 1.0,
@@ -747,6 +759,14 @@ const GRAPPLE_PARAMS := [
 		"1=钩索期间玩家可以按方向/油门键'荡'车; 0=纯粹被绳子拽过去, 无法操控.", ""],
 	["swing_side_force",             "侧向推力(N/kg)",             0.0,  120.0, 1.0,
 		"按左/右方向键给车的侧向力 × mass. 数学: car_right × (-steer_input) × 此值 × mass. 推荐 20~40, 大了过灵敏.", ""],
+	["swing_counter_steer_enabled",  "反打制动开关",              0, 1, 1,
+		"1=启用物理反打(反方向输入只能减速不能直接反向加速, 模拟真实钟摆); 0=旧行为(自由侧向).", ""],
+	["swing_counter_brake_mult",     "反打制动力倍率",            0.1,  5.0,   0.05,
+		"反方向输入时制动力 = swing_side_force × 此值. 1.0=制动力等于正常推力; 1.5=制动更猛(更快停下换向); 0.5=制动弱(惯性大). 推荐 1.0~2.0.", ""],
+	["swing_counter_zero_threshold", "侧向归零阈值(m/s)",         0.0,  5.0,   0.1,
+		"侧向速度绝对值 < 此值时视为'已停', 允许反方向加速. 越小越严格(必须完全停下才能换向). 推荐 0.5~2.0.", ""],
+	["swing_counter_yaw_rate_mult",  "反打车头转速倍率",          0.0,  1.0,   0.05,
+		"反打时车头朝向跟随速率 = 正常速率 × 此值. 物理含义: 反打时车还在往原方向运动, 车头不应立刻转向新方向. 0=完全不转; 0.3=转得很慢(推荐); 1.0=和正常一样快.", ""],
 	["swing_forward_force",          "前/后推力(N/kg)",            0.0,  100.0, 1.0,
 		"按前进/刹车键给车的前后力 × mass. 数学: car_forward × throttle_input × 此值 × distance_force_curve(起钩距离/max_distance) × mass. 推荐 15~30. 旁边曲线: 起钩距离-推力倍率 (X=距离比例 0~1, Y=推力倍率 0~2).", "distance_force_curve"],
 	["swing_yaw_speed_mult",         "空中车头跟随速度(倍率)",    0.0,  3.0,   0.05,
@@ -813,18 +833,20 @@ const GRAPPLE_PARAMS := [
 		"被扯动画的来回总时长. 越小越快弹回.", ""],
 
 	["__group", "钩索弹射 (释放后按W)"],
-	["grapple_boost_enabled",        "增压弹射开关",              0, 1, 1,
-		"1=释放钩索后窗口内按 W 可触发独立的增压弹射; 0=禁用.", ""],
+	["grapple_boost_enabled",        "钩索弹射开关",              0, 1, 1,
+		"1=释放钩索后窗口内按 W 可触发独立的钩索弹射; 0=禁用.", ""],
 	["grapple_boost_window",         "弹射窗口(秒)",              0.1, 3.0, 0.05,
-		"释放钩索后多久内按 W 可触发增压弹射. 推荐 0.5~1.0.", ""],
+		"释放钩索后多久内按 W 可触发钩索弹射. 推荐 0.5~1.0.", ""],
 	["grapple_boost_min_pull_time",  "最小拉动时间(秒)",          0.0, 3.0, 0.05,
-		"在钩索上待够这么久才能触发增压弹射. 0=无限制. 推荐 0.3~0.5.", ""],
+		"在钩索上待够这么久才能触发钩索弹射. 0=无限制. 推荐 0.3~0.5. 注意: 如果'最小荡动位移'> 0则优先使用位移条件.", ""],
+	["grapple_boost_min_swing_distance", "最小荡动位移(米)",      0.0, 50.0, 0.5,
+		"车在钩索上画出的弧线距离 >= 此值才能触发钩索弹射. 设计意图: 玩家必须在钩索上'荡'出足够位移, 而不是挂着不动等时间. 0=不使用位移条件(退回时间条件). 推荐 5~15.", ""],
 	["grapple_boost_power",          "弹射推进力",                5.0, 200.0, 1.0,
-		"增压弹射的基础推力(m/s² × mass). 实际推力 = 此值 × 绳长曲线采样.", "grapple_boost_length_curve"],
+		"钩索弹射的基础推力(m/s² × mass). 实际推力 = 此值 × 绳长曲线采样.", "grapple_boost_length_curve"],
 	["grapple_boost_time",           "弹射持续(秒)",              0.1, 3.0, 0.05,
-		"增压弹射推力持续时间.", ""],
+		"钩索弹射推力持续时间.", ""],
 	["grapple_boost_shake",          "弹射震屏强度",              0.0, 3.0, 0.05,
-		"增压弹射触发时的震屏强度.", ""],
+		"钩索弹射触发时的震屏强度.", ""],
 
 	["__group", "氮气弹射 (释放后按E)"],
 	["grapple_nitro_boost_enabled",  "氮气弹射开关",              0, 1, 1,
@@ -922,6 +944,7 @@ const CURVE_PROPS := {
 	"drift_body_tilt_curve":              {"target": "car"},
 	"drift_centripetal_curve":            {"target": "car"},
 	"drift_speed_brake_curve":            {"target": "car"},
+	"drift_auto_straighten_curve":        {"target": "car"},
 	"air_boost_curve":                    {"target": "car"},
 	"landing_boost_curve":                {"target": "car"},
 	"uphill_assist_slope_curve":          {"target": "car"},
@@ -2520,8 +2543,10 @@ class _CurveEditor extends Control:
 					tv2.x = 0.0
 				elif _drag_idx == _curve.point_count - 1:
 					tv2.x = 1.0
-				_curve.set_point_offset(_drag_idx, tv2.x)
+				# 先设 Y 值(不会改变索引), 再设 X 偏移(可能改变索引)
 				_curve.set_point_value(_drag_idx, tv2.y)
+				var new_idx: int = _curve.set_point_offset(_drag_idx, tv2.x)
+				_drag_idx = new_idx
 				queue_redraw()
 			else:
 				var hi: int = _find_point_at(mm.position)
@@ -2654,13 +2679,19 @@ func _save_to_path(save_path: String) -> void:
 		cfg.set_value("tune", prop, ui_value)
 		# 同时保存范围
 		cfg.set_value("range", prop, [row.min, row.max, row.step])
-	# 保存曲线: 序列化点列表
+	# 保存曲线: 序列化点列表 (包含切线信息, 避免加载后曲线形状丢失)
+	# 格式: [x, y, left_tangent, right_tangent, left_mode, right_mode]
+	# 兼容旧格式: 加载时如果只有 [x, y] 也能正常工作 (切线默认 0)
 	for cprop in _curves.keys():
 		var c: Curve = _curves[cprop]
 		var pts: Array = []
 		for i in range(c.point_count):
 			var pt: Vector2 = c.get_point_position(i)
-			pts.append([pt.x, pt.y])
+			var lt: float = c.get_point_left_tangent(i)
+			var rt: float = c.get_point_right_tangent(i)
+			var lm: int = c.get_point_left_mode(i)
+			var rm: int = c.get_point_right_mode(i)
+			pts.append([pt.x, pt.y, lt, rt, lm, rm])
 		cfg.set_value("curves", cprop, pts)
 	# 确保稳定目录存在 (save_path 已在函数顶部声明)
 	DirAccess.make_dir_recursive_absolute(_stable_cfg_dir())
@@ -2747,7 +2778,7 @@ func _load_from_path(load_path: String) -> void:
 			% [failed_apply.size(), ", ".join(failed_apply)])
 	print("[Tuner] cfg 加载统计: 应用成功 %d, 跳过(已废弃) %d, 失败 %d"
 		% [applied_count, skipped_count, failed_apply.size()])
-	# 曲线
+	# 曲线 (支持新格式 [x, y, lt, rt, lm, rm] 和旧格式 [x, y])
 	if cfg.has_section("curves"):
 		for cprop in cfg.get_section_keys("curves"):
 			var pts = cfg.get_value("curves", cprop, [])
@@ -2757,7 +2788,12 @@ func _load_from_path(load_path: String) -> void:
 			c.bake_resolution = 100
 			for p in pts:
 				if typeof(p) == TYPE_ARRAY and p.size() >= 2:
-					c.add_point(Vector2(float(p[0]), float(p[1])))
+					var pos := Vector2(float(p[0]), float(p[1]))
+					var lt: float = float(p[2]) if p.size() >= 3 else 0.0
+					var rt: float = float(p[3]) if p.size() >= 4 else 0.0
+					var lm: int = int(p[4]) if p.size() >= 5 else 0
+					var rm: int = int(p[5]) if p.size() >= 6 else 0
+					c.add_point(pos, lt, rt, lm, rm)
 			_curves[cprop] = c
 			_apply_curve_to_target(cprop, c)
 	# 加载颜色配置 (走 [color] 段, 由 ColorPickerButton 行管理)

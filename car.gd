@@ -26,6 +26,7 @@ extends RigidBody3D
 @export_group("Movement")
 @export var max_speed: float = 45.0              ## 巡航极速(无喷射时能达到的最高速度, m/s)
 @export var top_speed_boosted: float = 70.0      ## 喷射极速(小喷/双喷/氮气期间的最高速度, m/s)
+@export var air_top_speed: float = 55.0          ## 空中极速(空中喷射时的最高速度, m/s). 空中叠喷可突破此限制
 @export var steering_deg: float = 28.0           ## 前轮视觉转角
 @export var turn_speed: float = 3.2              ## 普通转向响应速度
 @export var turn_speed_high_speed_mult: float = 0.45  ## 高速时转向衰减到的倍率(防甩)
@@ -195,6 +196,18 @@ extends RigidBody3D
 @export var drift_speed_brake_curve: Curve               ## 刹车强度随漂移持续时间的倍率曲线(X=0→刚入漂, X=1→到达 drift_head_yaw_duration_ref 秒)
 @export var drift_counter_steer_break_time: float = 0.25 ## 反打超过此时长断漂
 
+# ---------------- 漂移自动回正 (漂移持续一段时间后车头自动朝速度方向缓慢回正) ----------------
+@export_group("Drift Auto Straighten")
+## 漂移自动回正开关: 1=启用, 0=关闭
+@export var drift_auto_straighten_enabled: bool = true
+## 漂移持续多少秒后开始自动回正 (给玩家充分的漂移操作时间)
+@export var drift_auto_straighten_delay: float = 1.5
+## 自动回正最大角速度 (度/秒). 实际速度 = 此值 × 曲线采样值
+@export var drift_auto_straighten_speed_deg: float = 45.0
+## 自动回正速度随时间的变化曲线: X=0 是 delay 时刻, X=1 是 delay + duration_ref 时刻
+## 推荐: 从 0 缓慢上升到 1 (先慢后快, 给玩家反应时间)
+@export var drift_auto_straighten_curve: Curve
+
 # ---------------- 漂移动态(插值+曲线) ----------------
 @export_group("Drift Dynamics")
 @export var drift_engage_duration: float = 0.18          ## 入漂 intensity 0→1 过渡秒数
@@ -238,38 +251,7 @@ extends RigidBody3D
 ##   推荐 0.3~0.8: 太短没"蓄势感", 太长玩家以为按键失灵
 @export_range(0.0, 2.0, 0.05) var drift_counter_response_time: float = 0.5
 
-# ==================== 反打 (真实赛车过弯反打, 2026-05-13 重构) ====================
-# 设计:
-#   真实赛车过弯反打 = "让漂角归零的工具"
-#   漂角 = 车头朝向 XZ 水平投影 与 速度向量 XZ 水平投影 之间的有符号夹角
-#   反打动作 = 玩家按住"与当前漂角符号相反"的方向键
-#   物理后果 = 车头朝速度向量方向缓慢对齐
-#     · 按到位 → 车头对准速度向量 → 松手 → 直线出弯(漂角归零)
-#     · 按过头 → 车头反向甩过去 (自然惩罚, 无需额外机制)
-#     · spam 来回反打 → 漂角在两边摆 (自然混乱, 无需额外机制)
-#
-# 实现:
-#   在 turn_rad 计算完、应用到 car_mesh.basis 之前, 插入"反打额外角速度"增量:
-#     slip_angle = yaw_diff(forward_xz, velocity_xz)   // 有符号漂角, 弧度
-#     if state==DRIFT and 玩家反打 (steer 与 slip_angle 同号, 即朝着"漂角方向"的反方向打):
-#         counter_ang_vel = sign(-slip_angle) × drift_counter_angular_speed × |steer| × ramp(response_time)
-#         turn_rad += counter_ang_vel × delta
-#         // 这让车头朝速度向量方向转
-#         // 不施加额外减速、不改 turn_mult、不开锁
-#
-# 新开关一开, 旧"减速/前向阻力/锁定"三条分支会被 _new_counter_active() 绕过,
-# 保证旧参数 cfg 值不生效 (高压线: @export 默认值和参数声明保留, 仅改代码行为).
-#
-## 【反打新机制】开关. true=启用真实反打(车头朝速度向量回正) + 绕过旧的减速/前向阻力/锁定三套旧机制
-##             false=关闭新机制, 回退到旧机制(减速 + 前向阻力 + 锁定, 由 cfg 控制)
-@export var drift_counter_enabled: bool = true
-## 反打时车头朝速度向量回正的角速度 (度/秒). 完全反打 (|steer|=1) 时的峰值角速度
-## 实际角速度 = 此值 × |steer| × ramp(response_time) × drift_intensity
-## 推荐 60~180: 60=缓慢回正(1 秒转 60°), 120=流畅(QQ飞车手感), 180=快速利索
-@export_range(10.0, 360.0, 5.0) var drift_counter_angular_speed_deg: float = 120.0
-## 反打"死区": 漂角绝对值小于此值 (度) 时不触发反打回正, 避免车头在 0 附近抖动
-## 推荐 2~8: 2 = 几乎无死区, 8 = 有明显"松弛区"
-@export_range(0.0, 20.0, 0.5) var drift_counter_deadzone_deg: float = 4.0
+
 
 # ---------------- 反打锁定 (反 exploit) ----------------
 # 设计动机:
@@ -373,6 +355,10 @@ extends RigidBody3D
 @export var crash_charge_penalty: float = 0.2
 @export var max_nitro_stock: int = 2
 @export var instant_nitro_settle: bool = true
+## 出生/复位时自带氮气: 开关
+@export var spawn_nitro_enabled: bool = true
+## 出生/复位时自带氮气格数
+@export var spawn_nitro_stock: int = 2
 @export var wall_crash_speed_loss: float = 6.0
 ## 撞墙震屏(默认 0)
 @export var wall_crash_shake: float = 0.0
@@ -822,6 +808,8 @@ signal songqian_state_changed(active: bool)
 signal songqian_drift_triggered(count_in_this_drift: int)
 ## 三喷 (松前后退喷) 触发: 携带角度信息供 HUD 显示
 signal songqian_back_boost_triggered(yaw_deg: float)
+signal reset_to_origin_triggered                          ## 按B/终点传送回出生点时发出
+signal finish_line_reached                                ## 到达终点机关时发出 (由终点机关调用)
 
 # ---------------- 状态 ----------------
 enum State { NORMAL, DRIFT }
@@ -1024,10 +1012,6 @@ var _wall_turnaround_start_yaw: float = 0.0  # 撞墙瞬间的车身 yaw (世界
 var _wall_turnaround_target_yaw: float = 0.0 # 反弹后目标 yaw (弧度)
 # 反打时车头 yaw 偏转衰减系数, 平滑到 1.0(正打/不打=完整偏转) ~ drift_counter_lean_mult(完全反打=朝运动方向回正)
 var _counter_lean_factor: float = 1.0
-# 【反打物理层激活 flag】当真实反打条件满足且正在施加 yaw 回正增量时为 true
-# 每个物理帧开头 _read_input / _physics_process 会先清 false, 反打 yaw 段满足条件时置 true
-# 供其他物理力 (向心力等) 判定: 反打期间某些力需要暂停, 让车身保持漂移轨迹
-var _counter_steer_active_physics: bool = false
 # ---- 加速带 / 弹射器状态 ----
 # 剩余持续推力时间 (秒). > 0 时 _apply_engine_and_brake 会沿 forward 施加衰减推力
 var _speed_pad_boost_left: float = 0.0
@@ -1086,22 +1070,26 @@ var _grapple_hook: Node = null
 # 正常从跳台飞出不会触发 (因为 _grapple_active 从未为 true, GrappleHook 不会设此值)
 var _grapple_release_align_left: float = 0.0
 
-# 增压弹射窗口: 释放钩索后一定时间内按 W 可触发独立的增压弹射
+# 钩索弹射窗口: 释放钩索后一定时间内按 W 可触发独立的钩索弹射
 # _grapple_boost_window_left > 0 表示当前在窗口内
 var _grapple_boost_window_left: float = 0.0
-# 增压弹射是否已消耗 (每次释放只能用一次)
+# 钩索弹射是否已消耗 (每次释放只能用一次)
 var _grapple_boost_used: bool = false
 # 起钩绳长比例 (由 GrappleHook 释放时传入, 用于缩放弹射推力)
 var _grapple_boost_dist_ratio: float = 0.0
 # 钩索氮气弹射是否已触发 (每次释放只能用一次)
 var _grapple_nitro_boost_used: bool = false
-# 本次钩索拉动时间 (秒, 由 GrappleHook 释放时传入, 用于增压弹射最小时间判定)
+# 本次钩索拉动时间 (秒, 由 GrappleHook 释放时传入, 用于钩索弹射最小时间判定)
 var _grapple_pull_time: float = 0.0
+# 本次钩索荡动位移 (米, 由 GrappleHook 释放时传入, 用于钩索弹射位移条件判定)
+var _grapple_swing_distance: float = 0.0
 
 # 初始朝向(由 _ready 记录, 用于复位时恢复)
 var _initial_car_mesh_basis: Basis = Basis.IDENTITY
 var _initial_car_mesh_position: Vector3 = Vector3.ZERO
 var _initial_recorded: bool = false
+# 复位冻结帧数: > 0 时每帧强制清零速度并锁定位置, 防止复位后被物理弹走
+var _reset_freeze_frames: int = 0
 
 # ============================================================
 #  Lifecycle
@@ -1132,10 +1120,11 @@ func _ready() -> void:
 	# 用 timer 延迟 1.5s, 等 Tuner 的 cfg 完全加载完之后再打 log, 看到的才是真正运行时值
 	get_tree().create_timer(1.5).timeout.connect(_log_wall_physics_status)
 
-	# 记录 CarMesh 的初始位置和朝向 — 延迟到帧末执行
+	# 记录 CarMesh 的初始位置和朝向 — 延迟到物理稳定后执行
 	# 原因: TrackRunner 在 add_child(car) 之后才设置 CarMesh 的 global_position (因为 top_level=true)
-	# 如果在 _ready 里直接记录, 拿到的是 tscn 默认值而非 spawn_position
-	call_deferred("_record_initial_position")
+	#        TrackSetup._adjust_car_spawn 会 await 两帧物理后才把 Car 落到地面
+	# 所以必须等足够久, 让所有外部调整完成后再记录最终出生点
+	call_deferred("_deferred_record_initial_position")
 
 	# 出生时: 直接把刚体对齐到 CarMesh 的位置(你在编辑器里调好的位置)
 	call_deferred("_snap_to_car_mesh_origin")
@@ -1159,13 +1148,24 @@ func _ready() -> void:
 	_rewind_size = 0
 
 
+func _deferred_record_initial_position() -> void:
+	# 帧末记录 CarMesh 的位置和朝向作为出生点
+	# 在 TrackRunner 场景中: 此时 CarMesh 已被 TrackRunner 设置到正确的 spawn 位置, 直接记录即可
+	# 在 TrackSetup 场景中: 此时记录的是初始高空位置(不正确), 但 TrackSetup._adjust_car_spawn
+	#   会在 2 帧物理后把车落到地面并调用 _record_initial_position() 覆盖为正确值
+	_record_initial_position()
+
 func _record_initial_position() -> void:
-	# 延迟记录 CarMesh 的初始位置和朝向
-	# 此时 TrackRunner 已经设置好了 CarMesh 的 global_position (top_level=true 需要手动同步)
+	# 记录 CarMesh 的当前位置和朝向作为出生点
+	# 此时所有外部调整(TrackRunner/TrackSetup)应该已经完成
 	if car_mesh:
 		_initial_car_mesh_basis = car_mesh.global_transform.basis
 		_initial_car_mesh_position = car_mesh.global_position
 		_initial_recorded = true
+		# 进入地图时自带氮气
+		if spawn_nitro_enabled:
+			nitro_stock = mini(spawn_nitro_stock, max_nitro_stock)
+			emit_signal("nitro_stock_changed", nitro_stock, max_nitro_stock)
 		print("[Car] 记录出生点位置: ", _initial_car_mesh_position)
 
 
@@ -1313,7 +1313,7 @@ func _spawn_grapple_hook() -> void:
 	print("[Car] GrappleHook 已挂载")
 
 
-func _on_grapple_boost_window_opened(dist_ratio: float, pull_time: float = 0.0) -> void:
+func _on_grapple_boost_window_opened(dist_ratio: float, pull_time: float = 0.0, swing_distance: float = 0.0) -> void:
 	# 钩索释放成功后, 开启弹射窗口
 	if _grapple_hook == null:
 		return
@@ -1323,7 +1323,8 @@ func _on_grapple_boost_window_opened(dist_ratio: float, pull_time: float = 0.0) 
 	_grapple_nitro_boost_used = false
 	_grapple_boost_dist_ratio = dist_ratio
 	_grapple_pull_time = pull_time
-	print("[Car] 弹射窗口开启: %.2fs, 绳长比例=%.2f, 拉动时间=%.2f" % [window_time, dist_ratio, pull_time])
+	_grapple_swing_distance = swing_distance
+	print("[Car] 弹射窗口开启: %.2fs, 绳长比例=%.2f, 拉动时间=%.2f, 荡动位移=%.1fm" % [window_time, dist_ratio, pull_time, swing_distance])
 
 
 # ============================================================
@@ -1344,6 +1345,15 @@ func _physics_process(delta: float) -> void:
 		_read_input()
 		return
 	# === 正常 3C 流程 ===
+	# 复位冻结: 按 B 复位后短暂锁定位置和速度, 防止被物理弹走
+	if _reset_freeze_frames > 0:
+		_reset_freeze_frames -= 1
+		linear_velocity = Vector3.ZERO
+		angular_velocity = Vector3.ZERO
+		global_position = _initial_car_mesh_position - sphere_offset
+		if car_mesh:
+			car_mesh.global_position = _initial_car_mesh_position
+		return
 	# 录制当前帧到 rewind buffer (在 _read_input 之前, 这样 R 按下时立即用到的是最新帧)
 	if rewind_enabled:
 		_record_rewind_frame()
@@ -1576,7 +1586,17 @@ func _reset_to_origin() -> void:
 	state = State.NORMAL
 	is_boosting = false
 	boost_time_left = 0.0
-	print("[Car] 已复位到出生点")
+	# 退出钩索状态
+	if _grapple_hook and _grapple_hook.has_method("force_release"):
+		_grapple_hook.call("force_release")
+	# 出生/复位自带氮气
+	if spawn_nitro_enabled:
+		nitro_stock = mini(spawn_nitro_stock, max_nitro_stock)
+		emit_signal("nitro_stock_changed", nitro_stock, max_nitro_stock)
+	# 短暂冻结物理防止车被弹走 (下一帧 _physics_process 会检查此标志)
+	_reset_freeze_frames = 3
+	emit_signal("reset_to_origin_triggered")
+	print("[Car] 已复位到出生点: pos=", _initial_car_mesh_position, " basis_z=", _initial_car_mesh_basis.z)
 
 
 # ============================================================
@@ -1901,11 +1921,9 @@ func _apply_engine_and_brake(_delta: float) -> void:
 	# 【已移至 _apply_boost_thrust】喷射推力 / 加速带持续推力 / 空喷下压力
 	# 现在独立于 on_ground 判定, 空中也能施加喷射推力
 
-	# ============ 反打减速 (旧机制, drift_counter_enabled=true 时绕过) ============
-	# 【2026-05-13 重构说明】此段是旧"反打=刹车"机制, 新真实反打机制不需要它.
-	# 仅当 drift_counter_enabled=false 时才生效, 此时 cfg 里的旧参数 (decel/throttle_friction) 继续工作.
-	# 高压线: @export 默认值与参数声明全部保留, 仅通过绕过让新开关默认下不生效.
-	if not drift_counter_enabled and drift_counter_decel_enabled and state == State.DRIFT and drift_dir != 0.0 and current_speed > 1.0:
+	# ============ 反打减速 ============
+	# 漂移中反打(steer 与 drift_dir 异号)时, 沿 -v_horiz 方向施加减速力
+	if drift_counter_decel_enabled and state == State.DRIFT and drift_dir != 0.0 and current_speed > 1.0:
 		var steer_sign: float = signf(steer_input)
 		if steer_sign != 0.0 and steer_sign != signf(drift_dir):
 			var steer_mag: float = absf(steer_input)
@@ -1935,22 +1953,40 @@ func _apply_boost_thrust(_delta: float) -> void:
 	v_horiz.y = 0.0
 	var current_speed: float = v_horiz.length()
 
-	# ============ 空中喷射: 直接给当前速度方向一个冲量 ============
-	# 简化逻辑: 空中不走持续力/极速限制, 直接 impulse 加到水平速度上
+	# ============ 空中喷射: 冲量 + 极速限制 ============
+	# 空中有独立的极速限制 (air_top_speed), 空中叠喷可突破此限制
 	if _is_airborne and is_boosting and boost_power > 0.0:
 		var vel_dir: Vector3 = v_horiz
 		if vel_dir.length() > 1.0:
 			vel_dir = vel_dir.normalized()
 		else:
 			vel_dir = forward
-		# 冲量 = boost_power × air_efficiency × delta (等效加速度直接加到速度)
-		var impulse_strength: float = boost_power * boost_air_efficiency * _delta
-		apply_central_impulse(vel_dir * impulse_strength * mass)
+		# 空中极速计算: 基础 air_top_speed, 叠喷突破时提升
+		# 钩索弹射/钩索氮气弹射使用 top_speed_boosted 作为基础 (不被较低的 air_top_speed 限住)
+		var air_effective_top: float = air_top_speed
+		if boost_type == "grapple_boost" or boost_type == "grapple_nitro":
+			air_effective_top = maxf(top_speed_boosted, air_top_speed)
+		# 普通叠喷突破
+		if _stack_current_breakthrough and _stack_breakthrough_count > 0:
+			air_effective_top *= pow(stack_breakthrough_top_mult, _stack_breakthrough_count)
+		# 钩索叠喷突破
+		if _grapple_stack_current_breakthrough and _grapple_stack_breakthrough_count > 0:
+			var g_mult: float = 1.25
+			if _grapple_hook:
+				g_mult = float(_grapple_hook.get("grapple_stack_breakthrough_mult"))
+			air_effective_top *= pow(g_mult, _grapple_stack_breakthrough_count)
+		air_effective_top = maxf(air_effective_top, 1.0)
+		# 只有当前速度 < 空中极速时才施加冲量
+		if current_speed < air_effective_top:
+			# 冲量 = boost_power × air_efficiency × delta (等效加速度直接加到速度)
+			var impulse_strength: float = boost_power * boost_air_efficiency * _delta
+			apply_central_impulse(vel_dir * impulse_strength * mass)
 		# 空中喷射不走下面的地面逻辑, 直接处理加速带后返回
 		if _speed_pad_boost_left > 0.0:
 			var pad_dir: Vector3 = forward
 			var pad_progress: float = clampf(_speed_pad_boost_left / maxf(_speed_pad_boost_total, 0.01), 0.0, 1.0)
-			apply_central_impulse(pad_dir * _speed_pad_boost_power * pad_progress * _delta * mass)
+			if current_speed < air_effective_top:
+				apply_central_impulse(pad_dir * _speed_pad_boost_power * pad_progress * _delta * mass)
 		# 空喷滞空感 (下压力)
 		if boost_type == "air" and air_boost_downforce > 0.0:
 			apply_central_force(Vector3(0.0, -air_boost_downforce, 0.0) * mass)
@@ -2086,11 +2122,9 @@ func _apply_friction(delta: float) -> void:
 		long_k *= inertia_mult
 		lat_k *= inertia_mult
 
-	# -------- 【反打 = 侧向抓地下降 (旧机制, drift_counter_enabled=true 时绕过)】--------
-	# 【2026-05-13 重构说明】此段是"反打=车顺惯性甩出"的旧侧向抓地下降机制.
-	# 新真实反打机制用"朝速度向量 yaw 回正"替代它, 更符合真实赛车物理.
-	# 仅当 drift_counter_enabled=false 时才生效, 此时旧 cfg 值 (lat_grip_mult) 继续工作.
-	if not drift_counter_enabled and state == State.DRIFT and drift_dir != 0.0 and drift_counter_lat_grip_mult < 1.0:
+	# -------- 【反打 = 侧向抓地下降】--------
+	# 反打时侧向抓地系数下降, 让车顺惯性甩出去
+	if state == State.DRIFT and drift_dir != 0.0 and drift_counter_lat_grip_mult < 1.0:
 		var s_sign: float = signf(steer_input)
 		if s_sign != 0.0 and s_sign != signf(drift_dir):
 			var s_mag: float = absf(steer_input)
@@ -2123,15 +2157,8 @@ func _apply_friction(delta: float) -> void:
 	#   · (forward - v_dir): 指向"车头希望速度去哪", 即"向心差向量", 沿这个方向施力
 	#   · speed: 乘速度让高速弯拉力更大 (QQ飞车高速弯"吸"的感觉)
 	# 效果: 速度方向会慢慢被拉向车头方向 → 漂移弧线更"粘", 向心感强
-	# 【2026-05-13 QQ飞车反打】反打期间暂停向心力:
-	#   反打时车头在朝 v 转, 如果向心力还在把 v 朝 forward 拽, 两个力互相追逐,
-	#   玩家感觉"整个人被甩出去". 暂停向心力后, v 保持原方向, 玩家看到
-	#   "身体继续沿漂移轨迹滑 + 车头先回正"的经典 QQ 飞车反打画面.
-	#   反打判定: drift_counter_enabled + 真反打条件 (steer 与 slip 异号, 跨死区)
-	#   使用已有的 _counter_steer_active_physics 标志 (由物理层反打 yaw 增量段维护)
 	# 使用已有的局部变量: v (水平惯性), total_speed (水平速度大小)
-	if state == State.DRIFT and drift_centripetal_pull > 0.0 and drift_intensity > 0.01 and total_speed > 1.0 \
-			and not _counter_steer_active_physics:
+	if state == State.DRIFT and drift_centripetal_pull > 0.0 and drift_intensity > 0.01 and total_speed > 1.0:
 		var v_dir_xz: Vector3 = v / total_speed   # v 已是 XZ 平面(y=0), 归一化
 		var fwd_xz: Vector3 = forward
 		fwd_xz.y = 0.0
@@ -2535,10 +2562,8 @@ func _update_visuals(delta: float) -> void:
 		var k: float = lerpf(1.0, post_drift_steer_mult, t_ratio)
 		turn_mult *= k
 	# 反打缩减: 漂移中玩家往"漂移方向的反向"打方向时, 角速度受限制
-	#   【2026-05-13 重构: drift_counter_enabled=true 时整段绕过】
-	#   新机制见下方 "真实反打 yaw 回正" 段, 用漂角驱动的角速度增量替代 turn_mult 缩减.
-	#   保留此段兼容 drift_counter_enabled=false 的旧行为 (带 cfg 里的旧参数一起工作).
-	if not drift_counter_enabled and state == State.DRIFT and drift_dir != 0.0 and drift_intensity > 0.01:
+	# 反打锁定: 一旦反打过, 本次漂移剩余时间内正打速度也等同于反打速度
+	if state == State.DRIFT and drift_dir != 0.0 and drift_intensity > 0.01:
 		var is_counter_now: bool = (signf(steer_input) != 0.0 and signf(steer_input) != signf(drift_dir))
 		if is_counter_now:
 			if not _counter_steer_used_in_this_drift:
@@ -2573,60 +2598,36 @@ func _update_visuals(delta: float) -> void:
 	if _is_airborne:
 		turn_rad = 0.0
 
-	# ============ 【真实反打 yaw 回正】 ============
-	# 设计: 漂角 slip_angle = 车头朝向 与 速度向量 的有符号水平夹角
-	#       玩家反打 = 按住"与 slip_angle 符号相反"的方向 (即朝"漂角归零"方向打)
-	#       物理后果 = 车头朝速度向量方向缓慢对齐, 角速度随 |steer| 线性 + response_time 蓄势
-	# 数学:
-	#   slip_angle_rad = atan2((v × f).y, v · f)  // f=forward_xz, v=velocity_xz 单位向量
-	#                  = 正值表示车头在速度向量的右侧, 负值在左侧
-	#                  (与 signf(drift_dir) 对齐: drift_dir=1 入弯向右 → 漂角往往 > 0)
-	#   真反打 = signf(steer_input) ≠ 0 且 signf(steer_input) == -signf(slip_angle_rad)
-	#        玩家按的方向恰好是"把漂角往 0 拉"的方向
-	#   ramp = smoothstep(0, response_time, _counter_steer_hold_time)  // 蓄势曲线
-	#   counter_yaw_rate = drift_counter_angular_speed × |steer| × ramp × drift_intensity
-	#   turn_rad += counter_yaw_rate × delta × signf(-slip_angle_rad)
-	#        即车头朝 slip_angle 归零方向转. slip 为 + → turn_rad 朝 - 增
-	# 死区: |slip_angle| < deadzone 时不加增量, 避免 0 附近抖动
-	# 旧注: _counter_steer_hold_time 已经在 _update_visuals 里被反打条件累积, 这里直接用
-	# 【QQ飞车反打】当 is_real_counter = true 时置 _counter_steer_active_physics = true,
-	#   _integrate_forces 里的向心力段会检查此 flag, 反打期间暂停向心力,
-	#   让速度向量保持原方向 → 车身继续沿漂移轨迹滑 + 车头先回正 = QQ飞车风格
-	_counter_steer_active_physics = false   # 每帧先清, 下面满足条件再置 true
-	if drift_counter_enabled and state == State.DRIFT and drift_dir != 0.0 and not _is_airborne \
-			and drift_intensity > 0.01 and absf(steer_input) > 0.05:
-		# 计算当前漂角 (水平面)
-		var f_xz: Vector3 = -car_mesh.global_transform.basis.z
-		f_xz.y = 0.0
-		var v_xz: Vector3 = linear_velocity
-		v_xz.y = 0.0
-		if f_xz.length() > 0.001 and v_xz.length() > 1.0:
-			f_xz = f_xz.normalized()
-			var v_dir: Vector3 = v_xz.normalized()
-			var dot_fv: float = clampf(f_xz.dot(v_dir), -1.0, 1.0)
-			var cross_y_fv: float = v_dir.cross(f_xz).y   # 车头在 v 的左(>0)还是右(<0)
-			var slip_angle_rad: float = acos(dot_fv) * signf(cross_y_fv)
-			var slip_angle_deg: float = rad_to_deg(slip_angle_rad)
-			# 玩家意图: steer_input 正=左打(按下 ←), 负=右打(按下 →)
-			# 真反打条件: 玩家打的方向与漂角方向相反
-			#   slip > 0 (车头在 v 右侧) → 玩家按左 (steer > 0) 才算反打
-			#   slip < 0 (车头在 v 左侧) → 玩家按右 (steer < 0) 才算反打
-			# 即: signf(steer_input) != signf(slip_angle_rad) 且两者都非 0
-			var is_real_counter: bool = (signf(steer_input) != 0.0 and signf(slip_angle_rad) != 0.0
-				and signf(steer_input) != signf(slip_angle_rad)
-				and absf(slip_angle_deg) >= drift_counter_deadzone_deg)
-			if is_real_counter:
-				_counter_steer_active_physics = true   # 通知 _integrate_forces 的向心力段: 反打期间暂停向心力
-				# 响应时间蓄势 (复用 _counter_steer_hold_time, 已在 _update_visuals 维护)
-				var counter_ramp: float = 1.0
-				if drift_counter_response_time > 0.001:
-					counter_ramp = smoothstep(0.0, drift_counter_response_time, _counter_steer_hold_time)
-				# 最终回正角速度 (rad/s). 方向: slip 正(车头右侧) → turn_rad 取负(往左转回正)
-				# 注: 不乘 drift_intensity, 让 angular_speed_deg 就是真实上限
-				#     否则深漂时回正瞬间满速太激进, 玩家感觉车头"猛扯"
-				var counter_yaw_rate: float = deg_to_rad(drift_counter_angular_speed_deg) \
-					* absf(steer_input) * counter_ramp
-				turn_rad += counter_yaw_rate * delta * (-signf(slip_angle_rad))
+	# ============ 【漂移自动回正】 ============
+	# 设计: 漂移持续超过 drift_auto_straighten_delay 秒后, 如果玩家没有按方向键,
+	#       车头自动朝速度方向缓慢回正. 回正速度由曲线控制, 从慢到快.
+	# 触发条件: state==DRIFT + 不在空中 + 玩家没按方向 + 超过延迟时间
+	# 不与反打冲突: 反打时 steer_input != 0, 不会进入此段
+	if drift_auto_straighten_enabled and state == State.DRIFT and not _is_airborne \
+			and absf(steer_input) < 0.05 and drift_elapsed > drift_auto_straighten_delay:
+		var f_xz_as: Vector3 = -car_mesh.global_transform.basis.z
+		f_xz_as.y = 0.0
+		var v_xz_as: Vector3 = linear_velocity
+		v_xz_as.y = 0.0
+		if f_xz_as.length() > 0.001 and v_xz_as.length() > 1.0:
+			f_xz_as = f_xz_as.normalized()
+			var v_dir_as: Vector3 = v_xz_as.normalized()
+			var dot_as: float = clampf(f_xz_as.dot(v_dir_as), -1.0, 1.0)
+			var cross_y_as: float = f_xz_as.cross(v_dir_as).y
+			var slip_as: float = acos(dot_as) * signf(cross_y_as)
+			# 只在漂角大于一个小死区时才回正 (避免 0 附近抖动)
+			if absf(slip_as) > deg_to_rad(2.0):
+				# 曲线采样: X = (drift_elapsed - delay) / duration_ref, 归一化到 [0,1]
+				var t_since_delay: float = drift_elapsed - drift_auto_straighten_delay
+				var t_norm_as: float = clampf(t_since_delay / maxf(drift_head_yaw_duration_ref, 0.1), 0.0, 1.0)
+				var curve_k: float = 1.0
+				if drift_auto_straighten_curve != null:
+					curve_k = drift_auto_straighten_curve.sample(t_norm_as)
+				var straighten_rate: float = deg_to_rad(drift_auto_straighten_speed_deg) * curve_k
+				# 方向: slip 正(车头在速度右侧) → turn_rad 取正(往右转回正)
+				# 限幅: 不超过当前漂角绝对值 (避免过冲)
+				var straighten_amount: float = minf(straighten_rate * delta, absf(slip_as))
+				turn_rad += straighten_amount * signf(slip_as)
 
 	var new_basis: Basis = car_mesh.global_transform.basis.rotated(
 		car_mesh.global_transform.basis.y, turn_rad
@@ -2680,21 +2681,28 @@ func _update_visuals(delta: float) -> void:
 			# === 情况 A: 钩索 + 方向键 → 切线对齐 ===
 			# 用一个独立的 dead_zone 避免 steer 微小输入也启动切线模式 (玩家手抖)
 			var grapple_steer_threshold: float = 0.15
+			var _is_grapple_counter_steer: bool = false
 			if _grapple_active and _grapple_hook != null and absf(steer_input) >= grapple_steer_threshold:
-				var anchor_pos: Vector3 = _grapple_hook.call("get_anchor_position") as Vector3 \
-					if _grapple_hook.has_method("get_anchor_position") else Vector3.ZERO
-				if anchor_pos != Vector3.ZERO:
-					# 锚点 → 车 的水平向量
-					var radial: Vector3 = global_position - anchor_pos
-					radial.y = 0.0
-					if radial.length() > 0.5:
-						# 切线 = radial × UP, 然后按 steer 决定方向
-						# radial × UP 给出"沿圆周逆时针(从上往下看)"的切线方向
-						# steer_input 左为正, 玩家按左 = 想绕得"看起来逆时针"在画面上 = 朝负 X 方向
-						# (注: 由于 yaw 朝向和 steer_input 的对应是引擎层的事, 我们让 swing_side_force 的方向和切线一致)
-						var tangent_ccw: Vector3 = radial.cross(Vector3.UP).normalized()
-						# steer 正(按左) → 顺时针(取反) ; steer 负(按右) → 逆时针
-						target_fwd = tangent_ccw * (-signf(steer_input))
+				# 检查是否处于反打状态
+				if "is_counter_steering" in _grapple_hook:
+					_is_grapple_counter_steer = bool(_grapple_hook.get("is_counter_steering"))
+				# 反打时: 不使用切线方向, 保持使用实际速度方向 (target_fwd = v_xz.normalized())
+				# 因为反打时车还在往原方向运动, 车头不应该立刻转向新方向
+				if not _is_grapple_counter_steer:
+					var anchor_pos: Vector3 = _grapple_hook.call("get_anchor_position") as Vector3 \
+						if _grapple_hook.has_method("get_anchor_position") else Vector3.ZERO
+					if anchor_pos != Vector3.ZERO:
+						# 锚点 → 车 的水平向量
+						var radial: Vector3 = global_position - anchor_pos
+						radial.y = 0.0
+						if radial.length() > 0.5:
+							# 切线 = radial × UP, 然后按 steer 决定方向
+							# radial × UP 给出"沿圆周逆时针(从上往下看)"的切线方向
+							# steer_input 左为正, 玩家按左 = 想绕得"看起来逆时针"在画面上 = 朝负 X 方向
+							# (注: 由于 yaw 朝向和 steer_input 的对应是引擎层的事, 我们让 swing_side_force 的方向和切线一致)
+							var tangent_ccw: Vector3 = radial.cross(Vector3.UP).normalized()
+							# steer 正(按左) → 顺时针(取反) ; steer 负(按右) → 逆时针
+							target_fwd = tangent_ccw * (-signf(steer_input))
 			# else: 沿用 v_xz.normalized() (速度向量)
 
 			var cur_fwd: Vector3 = -car_mesh.global_transform.basis.z
@@ -2718,6 +2726,10 @@ func _update_visuals(delta: float) -> void:
 					var mult: float = float(_grapple_hook.get("swing_yaw_speed_mult"))
 					max_rate = float(_grapple_hook.get("facing_max_rate_rad")) * mult
 					smooth_t = float(_grapple_hook.get("facing_smooth_time"))
+					# 反打时降低车头转速: 车还在往原方向运动, 车头不应该快速转向新方向
+					if _is_grapple_counter_steer:
+						var counter_mult: float = float(_grapple_hook.get("swing_counter_yaw_rate_mult")) if "swing_counter_yaw_rate_mult" in _grapple_hook else 0.3
+						max_rate *= counter_mult
 				elif _grapple_release_align_left > 0.0:
 					# 钩索释放后摆正: 用温和的速率让车头平滑转向速度方向
 					# 比钩索期间慢 (不突兀), 但比普通空中快 (有明确的"摆正"意图)
@@ -2847,32 +2859,11 @@ func _update_visuals(delta: float) -> void:
 	var counter_target: float = 1.0
 	var is_counter_steering: bool = false
 	if state == State.DRIFT and drift_dir != 0.0 and signf(steer_input) != 0.0:
-		# 【2026-05-13 重构】蓄势触发条件改成"真实反打" (与 slip_angle 异号) 当新开关开时
-		# 与物理层 turn_rad 增量段保持一致, 避免蓄势条件和物理生效条件不对齐
-		if drift_counter_enabled:
-			# 基于漂角判定
-			var f_xz2: Vector3 = -car_mesh.global_transform.basis.z
-			f_xz2.y = 0.0
-			var v_xz2: Vector3 = linear_velocity
-			v_xz2.y = 0.0
-			if f_xz2.length() > 0.001 and v_xz2.length() > 1.0:
-				f_xz2 = f_xz2.normalized()
-				var v_dir2: Vector3 = v_xz2.normalized()
-				var cy2: float = v_dir2.cross(f_xz2).y
-				var dfv2: float = clampf(f_xz2.dot(v_dir2), -1.0, 1.0)
-				var slip_rad: float = acos(dfv2) * signf(cy2)
-				# 真实反打: steer 与 slip 异号, 且 |slip| >= 死区
-				if signf(steer_input) != signf(slip_rad) and signf(slip_rad) != 0.0 \
-						and rad_to_deg(absf(slip_rad)) >= drift_counter_deadzone_deg:
-					var cs_rc: float = clampf(absf(steer_input), 0.0, 1.0)
-					counter_target = lerpf(1.0, drift_counter_lean_mult, cs_rc)
-					is_counter_steering = true
-		else:
-			# 旧判定: steer 与 drift_dir 异号 (兼容旧行为)
-			if signf(steer_input) != signf(drift_dir):
-				var cs_old: float = clampf(absf(steer_input), 0.0, 1.0)
-				counter_target = lerpf(1.0, drift_counter_lean_mult, cs_old)
-				is_counter_steering = true
+		# 反打判定: steer 与 drift_dir 异号
+		if signf(steer_input) != signf(drift_dir):
+			var cs_old: float = clampf(absf(steer_input), 0.0, 1.0)
+			counter_target = lerpf(1.0, drift_counter_lean_mult, cs_old)
+			is_counter_steering = true
 	# 累计反打蓄势时长: 反打中 += delta; 不反打/松手 立即清 0
 	if is_counter_steering:
 		_counter_steer_hold_time += delta
@@ -3281,25 +3272,20 @@ func _check_drift_timeout(delta: float) -> void:
 
 	var low_speed: bool = linear_velocity.length() < drift_min_speed * drift_break_speed_ratio
 	if low_speed:
-		# 已在宽限期: 倒计时 + 检查"挽救"
+		# 已在宽限期: 倒计时, 到期则强制断漂
 		if _low_speed_grace_left > 0.0:
 			_low_speed_grace_left -= delta
-			# 期间车头再转过 grace_save_angle 即视为挽救成功, 退出宽限期
-			if drift_accum_angle_deg - _grace_start_angle >= drift_grace_save_angle:
-				print("[Car] 低速挽救成功! 转过 %.1f° (>= %.1f°)" % [drift_accum_angle_deg - _grace_start_angle, drift_grace_save_angle])
-				_low_speed_grace_left = 0.0
-				return
-			# 宽限到期 → 真正断漂
+			# 宽限到期 → 真正断漂 (只有速度恢复才能取消宽限期, 角度不再作为挽救条件)
 			if _low_speed_grace_left <= 0.0:
 				_low_speed_grace_left = 0.0
 				_end_drift(false)
-				print("[Car] 自动断漂: 低速宽限期结束未挽救")
+				print("[Car] 自动断漂: 低速宽限期结束, 速度未恢复")
 		else:
 			# 第一次进入低速: 启动宽限期
 			if drift_low_speed_grace_time > 0.0:
 				_low_speed_grace_left = drift_low_speed_grace_time
 				_grace_start_angle = drift_accum_angle_deg
-				print("[Car] 进入低速宽限期 %.2fs (累计角度=%.1f°)" % [drift_low_speed_grace_time, drift_accum_angle_deg])
+				print("[Car] 进入低速宽限期 %.2fs (速度=%.1f m/s)" % [drift_low_speed_grace_time, linear_velocity.length()])
 			else:
 				# 没设宽限期 → 直接断漂(兼容旧行为)
 				_end_drift(false)
@@ -3374,13 +3360,22 @@ func angle_difference(a: float, b: float) -> float:
 #  喷射
 # ============================================================
 func _try_boost_w() -> void:
-	# -1) 增压弹射: 释放钩索后窗口内按 W, 触发独立的增压弹射 (与空喷互不干扰)
+	# -1) 钩索弹射: 释放钩索后窗口内按 W, 触发独立的钩索弹射 (与空喷互不干扰)
 	#     优先级最高: 如果在弹射窗口内, 直接消耗窗口触发弹射, 不走后续逻辑
-	#     额外条件: 在钩索上待够 grapple_boost_min_pull_time 才能触发
+	#     条件: 位移条件优先 (荡动位移 >= min_swing_distance), 否则退回时间条件
 	if _grapple_boost_window_left > 0.0 and not _grapple_boost_used and _grapple_hook != null:
 		if bool(_grapple_hook.get("grapple_boost_enabled")):
+			var min_swing_dist: float = float(_grapple_hook.get("grapple_boost_min_swing_distance"))
 			var min_pull: float = float(_grapple_hook.get("grapple_boost_min_pull_time"))
-			if _grapple_pull_time >= min_pull:
+			# 条件判定: 位移条件优先, 时间条件备选
+			var condition_met: bool = false
+			if min_swing_dist > 0.0:
+				condition_met = _grapple_swing_distance >= min_swing_dist
+			elif min_pull > 0.0:
+				condition_met = _grapple_pull_time >= min_pull
+			else:
+				condition_met = true  # 两个条件都为0, 无限制
+			if condition_met:
 				_grapple_boost_used = true
 				var g_power: float = float(_grapple_hook.get("grapple_boost_power"))
 				var g_time: float = float(_grapple_hook.get("grapple_boost_time"))
@@ -3395,10 +3390,10 @@ func _try_boost_w() -> void:
 				if g_shake > 0.0:
 					emit_signal("camera_shake_requested", g_shake, 0.2)
 				emit_signal("boost_triggered", "grapple_boost")
-				print("[Car] 增压弹射! power=%.1f (绳长倍率=%.2f), time=%.2f" % [final_power, length_mult, g_time])
+				print("[Car] 钩索弹射! power=%.1f (绳长倍率=%.2f), time=%.2f" % [final_power, length_mult, g_time])
 				return
 			else:
-				print("[Car] 增压弹射条件不足: 拉动时间 %.2fs < 最小 %.2fs, 跳过" % [_grapple_pull_time, min_pull])
+				print("[Car] 钩索弹射条件不足: 荡动位移 %.1fm (需%.1fm), 拉动时间 %.2fs (需%.2fs)" % [_grapple_swing_distance, float(_grapple_hook.get("grapple_boost_min_swing_distance")), _grapple_pull_time, float(_grapple_hook.get("grapple_boost_min_pull_time"))])
 
 	# 0) 空中按 W: 【新规则】离地瞬间按 W 立刻触发空喷推力, 不再等落地
 	#    旧逻辑: 缓存意图 → 落地瞬间释放. 玩家反馈"在空中按 W 没感觉, 落地才爆发, 操作脱节"
@@ -3462,6 +3457,11 @@ func _try_boost_w() -> void:
 	if state == State.DRIFT:
 		if _is_in_songqian:
 			print("[Car]   松前状态下 W 无效 (松前不能小喷)")
+			emit_signal("boost_triggered", "insufficient")
+			return
+		# 角度不够时 W 无效, 不断漂 (只有小喷可释放时才允许退漂)
+		if drift_accum_angle_deg < drift_min_angle_to_boost:
+			print("[Car]   角度不足 W 无效 (%.1f° < %.1f°, 不断漂)" % [drift_accum_angle_deg, drift_min_angle_to_boost])
 			emit_signal("boost_triggered", "insufficient")
 			return
 		_end_drift(false, true)   # W 喷退漂也是玩家明确动作, manual=true
@@ -3592,6 +3592,11 @@ func _update_boost_window(delta: float) -> void:
 
 func _try_nitro() -> void:
 	if nitro_stock <= 0:
+		return
+	# 钩索挂着时不能释放氮气 (必须先释放钩索才能放氮气)
+	if _grapple_hook != null and _grapple_hook.has_method("is_attached") and _grapple_hook.is_attached():
+		print("[Car] 钩索挂着, 不能释放氮气")
+		emit_signal("boost_triggered", "blocked_grapple")
 		return
 	# QQ 飞车氮气规则:
 	#   1) 不能在氮气进行中再放氮气(防 CC / 氮气叠氮气)
@@ -3798,18 +3803,18 @@ func _check_and_apply_stack_boost(new_type: String) -> void:
 #  规则 (2026-05-15 重新定义):
 #   【钩索释放】接【氮气】→ 显示"氮气弹射" (不算叠喷, 仅弹字)
 #   【钩索释放】接【氮气】接【空喷】→ 显示"弹射CW" (突破1)
-#   【钩索释放】接【氮气】接【增压弹射】→ 显示"增压弹射CW" (突破1)
-#   【钩索释放】接【氮气】接【增压弹射】接【空喷】→ 显示"增压弹射CWW" (突破2)
-#   【钩索释放】接【增压弹射】→ 显示"增压弹射" (不算叠喷)
-#   【钩索释放】接【增压弹射】接【空喷】→ 不形成叠喷, 各自独立
+#   【钩索释放】接【氮气】接【钩索弹射】→ 显示"钩索弹射CW" (突破1)
+#   【钩索释放】接【氮气】接【钩索弹射】接【空喷】→ 显示"钩索弹射CWW" (突破2)
+#   【钩索释放】接【钩索弹射】→ 显示"钩索弹射" (不算叠喷)
+#   【钩索释放】接【钩索弹射】接【空喷】→ 不形成叠喷, 各自独立
 #
 #  字母约定:
 #   c = grapple_nitro (氮气弹射)
-#   w = grapple_boost (增压弹射) 或 air (空喷)
+#   w = grapple_boost (钩索弹射) 或 air (空喷)
 #
 #  合法叠喷链 (必须以 c 开头):
-#   "cw"  → 弹射CW 或 增压弹射CW (取决于 W 段是 air 还是 grapple_boost)
-#   "cww" → 增压弹射CWW (第一个 W 必须是 grapple_boost, 第二个 W 必须是 air)
+#   "cw"  → 弹射CW 或 钩索弹射CW (取决于 W 段是 air 还是 grapple_boost)
+#   "cww" → 钩索弹射CWW (第一个 W 必须是 grapple_boost, 第二个 W 必须是 air)
 #
 #  参数全部从 GrappleHook 节点读取, 与普通叠喷参数完全独立
 # ============================================================
@@ -3841,7 +3846,7 @@ func _check_grapple_stack_boost(new_type: String) -> void:
 	if time_linked:
 		match next_seq:
 			"cw":
-				# c 后接 w: 合法 (氮气弹射后接增压弹射或空喷)
+				# c 后接 w: 合法 (氮气弹射后接钩索弹射或空喷)
 				legal_extension = true
 			"cww":
 				# cw 后接 w: 只有当第一个 w 是 grapple_boost 且第二个 w 是 air 时才合法
@@ -3861,7 +3866,7 @@ func _check_grapple_stack_boost(new_type: String) -> void:
 		if new_type == "grapple_nitro":
 			emit_signal("combo_triggered", "氮气弹射", 0)
 			print("[GrappleStack] 氮气弹射 (新链开始)")
-		# grapple_boost 单独不弹叠喷字 (HUD 会通过 boost_triggered 弹"增压弹射")
+		# grapple_boost 单独不弹叠喷字 (HUD 会通过 boost_triggered 弹"钩索弹射")
 		return
 
 	# === 6. 合法续接 → 链 +1 ===
@@ -3882,13 +3887,13 @@ func _check_grapple_stack_boost(new_type: String) -> void:
 			should_set_breakthrough = true
 			# 根据 W 段类型决定弹字
 			if new_type == "grapple_boost":
-				combo_name = "增压弹射CW"
+				combo_name = "钩索弹射CW"
 			else:
 				combo_name = "弹射CW"
 		"cww":
 			_grapple_stack_breakthrough_count = 2
 			should_set_breakthrough = true
-			combo_name = "增压弹射CWW"
+			combo_name = "钩索弹射CWW"
 			_grapple_stack_cww_done = true  # CWW 终结, 禁止后续空喷
 
 	if _grapple_stack_breakthrough_count > max_bt:

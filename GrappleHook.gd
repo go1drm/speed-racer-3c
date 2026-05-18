@@ -152,6 +152,20 @@ var _logged_attached_rope: bool = false
 ## 让玩家按方向键能把钩索荡成弧线, 而不是直线拉过去
 ## 推荐 20~40. 大了过灵敏, 小了手感弱
 @export_range(0.0, 120.0, 1.0) var swing_side_force: float = 30.0
+## 反打制动开关: 1=启用物理反打逻辑 (反方向输入只能减速不能直接反向加速); 0=旧行为(自由侧向)
+## 真实物理: 你往右荡时按左键, 只能减缓右荡速度, 直到速度归零才能开始向左荡
+@export var swing_counter_steer_enabled: bool = true
+## 反打制动力倍率: 反方向输入时的制动力 = swing_side_force × 此值
+## 1.0=制动力等于正常推力; 1.5=制动更猛(更快停下来); 0.5=制动较弱(惯性更大)
+## 推荐 1.0~2.0, 越大反打越灵敏(越快停下来换方向)
+@export_range(0.1, 5.0, 0.05) var swing_counter_brake_mult: float = 1.2
+## 侧向速度归零阈值 (m/s): 侧向速度绝对值 < 此值时视为"已停", 允许反方向加速
+## 推荐 0.5~2.0, 越小越严格(必须完全停下才能换向)
+@export_range(0.0, 5.0, 0.1) var swing_counter_zero_threshold: float = 1.0
+## 反打时车头转速倍率: 反打状态下车头朝向跟随速率 = 正常速率 × 此值
+## 物理含义: 反打时车还在往原方向运动, 车头不应该立刻转向新方向
+## 0.0=反打时车头完全不转; 0.3=转得很慢(推荐); 1.0=和正常一样快
+@export_range(0.0, 1.0, 0.05) var swing_counter_yaw_rate_mult: float = 0.3
 ## 前推力: 车头前方向 × throttle_input × 此值 × mass (N)
 ## 让玩家按前进键能"加速 swing", 后退键"减速/倒荡"
 ## 注意: throttle_input 范围是 -1~+1, 所以这个力可以是正也可以是负
@@ -235,20 +249,26 @@ var _logged_attached_rope: bool = false
 @export_range(0.05, 2.0, 0.05) var anchor_tug_duration: float = 0.3
 
 @export_group("Grapple Boost (钩索弹射)")
-## 增压弹射开关: 释放钩索后一定时间内按 W 可触发一次独立喷射
+## 钩索弹射开关: 释放钩索后一定时间内按 W 可触发一次独立喷射
 @export var grapple_boost_enabled: bool = true
-## 增压弹射窗口 (秒): 释放钩索后多久内按 W 可触发增压弹射
+## 钩索弹射窗口 (秒): 释放钩索后多久内按 W 可触发钩索弹射
 @export_range(0.1, 3.0, 0.05) var grapple_boost_window: float = 0.8
-## 增压弹射最小拉动时间 (秒): 在钩索上待够这么久才能触发增压弹射, 否则无法触发
+## 钩索弹射最小拉动时间 (秒): 在钩索上待够这么久才能触发钩索弹射, 否则无法触发
+## 注意: 如果 grapple_boost_min_swing_distance > 0, 则优先使用位移条件, 此参数作为备选
 @export_range(0.0, 3.0, 0.05) var grapple_boost_min_pull_time: float = 0.3
-## 增压弹射推进力 (m/s² × mass)
+## 钩索弹射最小荡动位移 (米): 车子在钩索上画出的弧线距离 >= 此值才能触发钩索弹射
+## 设计意图: 玩家必须在钩索上"荡"出足够的位移(画出弧线), 而不是挂着不动等时间
+## 0 = 不使用位移条件, 退回到纯时间条件 (grapple_boost_min_pull_time)
+## 推荐 5~15 米 (取决于赛道锚点间距和钩索速度)
+@export_range(0.0, 50.0, 0.5) var grapple_boost_min_swing_distance: float = 8.0
+## 钩索弹射推进力 (m/s² × mass)
 @export_range(5.0, 200.0, 1.0) var grapple_boost_power: float = 50.0
-## 增压弹射持续时间 (秒)
+## 钩索弹射持续时间 (秒)
 @export_range(0.1, 3.0, 0.05) var grapple_boost_time: float = 0.5
-## 增压弹射震屏强度
+## 钩索弹射震屏强度
 @export_range(0.0, 3.0, 0.05) var grapple_boost_shake: float = 0.6
-## 绳长冲量倍率曲线 (X=起钩距离/max_distance 0~1, Y=增压弹射推力倍率 0~3)
-## 长绳释放后增压弹射更强, 短绳弱一些
+## 绳长冲量倍率曲线 (X=起钩距离/max_distance 0~1, Y=钩索弹射推力倍率 0~3)
+## 长绳释放后钩索弹射更强, 短绳弱一些
 @export var grapple_boost_length_curve: Curve
 
 @export_group("Grapple Nitro Boost (钩索氮气弹射)")
@@ -285,8 +305,8 @@ signal grapple_progress(progress: float, anchor_pos: Vector3, pull_dir: Vector3)
 ## 钩索触发(锁定锚点) 和 释放
 signal grapple_started(anchor_pos: Vector3)
 signal grapple_released(success: bool)
-## 钩索释放后通知 car 进入弹射窗口 (携带起钩绳长比例和拉动时间, 供弹射推力缩放和增压弹射条件判定)
-signal grapple_boost_window_opened(dist_ratio: float, pull_time: float)
+## 钩索释放后通知 car 进入弹射窗口 (携带起钩绳长比例、拉动时间、荡动位移, 供弹射推力缩放和钩索弹射条件判定)
+signal grapple_boost_window_opened(dist_ratio: float, pull_time: float, swing_distance: float)
 
 # ---------------- 内部状态 ----------------
 var _current_anchor: Node = null
@@ -303,8 +323,15 @@ var _attach_initial_speed: float = 0.0   # 钩住瞬间记录的车速, 用于�
 # 给玩家一段缓冲时间不触发 stall 检测 (刚钩住时车会先沿径向加速一段时间, 不算 stall)
 var _stall_grace_left: float = 0.0
 const _STALL_GRACE_TIME: float = 0.25   # 钩住后 0.25s 内不做 stall 自动甩出判定
-# 增压充能状态: 在钩索上待够 min_pull_time 后为 true, 绳子显示金黄电光
+# 增压充能状态: 满足条件后为 true, 绳子显示金黄电光
 var _rope_charged: bool = false
+# 反打状态标志: 供 car.gd 读取, 用于降低车头转向速率
+var is_counter_steering: bool = false
+# 钩索上累计位移 (弧线距离, 米): 每帧累加 |当前位置 - 上一帧位置|
+# 公开供 car.gd 读取, 用于钩索弹射条件判定
+var swing_travel_distance: float = 0.0
+# 上一帧车的位置, 用于计算帧间位移
+var _last_car_pos: Vector3 = Vector3.ZERO
 
 # ============================================================
 # 检测区域可视化 (L 键切换)
@@ -607,6 +634,8 @@ func _start_shoot(anchor: Node) -> void:
 func _start_attach() -> void:
 	state = State.ATTACHED
 	_pull_elapsed = 0.0
+	swing_travel_distance = 0.0
+	_last_car_pos = car.global_position if car != null else Vector3.ZERO
 	# 通知 car 进入钩索状态 (car.gd 会读这个 flag 做摩擦/引擎抑制)
 	if car != null and "_grapple_active" in car:
 		car.set("_grapple_active", true)
@@ -694,7 +723,8 @@ func _release(success: bool) -> void:
 	# 通知 car 进入钩索弹射窗口 (只有成功释放才开窗口)
 	if success and grapple_boost_enabled:
 		var boost_dist_ratio: float = clampf(_initial_grapple_distance / maxf(max_distance, 0.001), 0.0, 1.0)
-		emit_signal("grapple_boost_window_opened", boost_dist_ratio, _pull_time_before_reset)
+		var swing_dist_at_release: float = swing_travel_distance
+		emit_signal("grapple_boost_window_opened", boost_dist_ratio, _pull_time_before_reset, swing_dist_at_release)
 	emit_signal("grapple_state_changed", "IDLE", Vector3.ZERO)
 	_current_anchor = null
 
@@ -747,11 +777,32 @@ func _update_attached(delta: float) -> void:
 	_pull_elapsed += delta
 	var progress: float = clampf(_pull_elapsed / maxf(pull_duration, 0.001), 0.0, 1.0)
 
-	# === 增压充能检测: 在钩索上待够 min_pull_time 后绳子亮金光 ===
-	if not _rope_charged and grapple_boost_enabled and grapple_boost_min_pull_time > 0.0:
-		if _pull_elapsed >= grapple_boost_min_pull_time:
+	# === 每帧累加弧线位移 (用于钩索弹射条件判定) ===
+	if car != null:
+		var cur_pos: Vector3 = car.global_position
+		if _last_car_pos != Vector3.ZERO:
+			swing_travel_distance += cur_pos.distance_to(_last_car_pos)
+		_last_car_pos = cur_pos
+
+	# === 增压充能检测: 满足条件后绳子亮金光 ===
+	# 优先使用位移条件 (grapple_boost_min_swing_distance > 0)
+	# 否则退回到时间条件 (grapple_boost_min_pull_time)
+	if not _rope_charged and grapple_boost_enabled:
+		var charged_now: bool = false
+		if grapple_boost_min_swing_distance > 0.0:
+			# 位移条件: 车在钩索上画出的弧线距离 >= 阈值
+			if swing_travel_distance >= grapple_boost_min_swing_distance:
+				charged_now = true
+		elif grapple_boost_min_pull_time > 0.0:
+			# 时间条件 (备选): 在钩索上待够时间
+			if _pull_elapsed >= grapple_boost_min_pull_time:
+				charged_now = true
+		else:
+			# 两个条件都为0, 立即充能
+			charged_now = true
+		if charged_now:
 			_rope_charged = true
-			print("[Grapple] 增压充能完成! 绳子电光激活 (%.2fs)" % _pull_elapsed)
+			print("[Grapple] 增压充能完成! 绳子电光激活 (位移=%.1fm, 时间=%.2fs)" % [swing_travel_distance, _pull_elapsed])
 
 	# === 拉力计算 ===
 	var anchor_pos: Vector3 = (_current_anchor as Node3D).global_position
@@ -830,9 +881,50 @@ func _update_attached(delta: float) -> void:
 
 		# 1) 侧向力: 按方向键把车往侧面推, 产生 swing 弧线
 		# steer_in 左=正, 所以向左力 = -car_right × steer_in
+		# === 反打制动逻辑 ===
+		# 真实物理: 一旦往右侧荡, 按左键只能减缓右荡速度, 直到速度归零才能向左荡
+		# 实现: 计算车在 car_right 方向上的侧向速度分量, 判断输入是否与运动方向相反
 		if swing_side_force > 0.0 and absf(steer_in) > 0.01:
-			var side_force: Vector3 = -car_right * steer_in * swing_side_force * car.mass
+			var side_force: Vector3
+			if swing_counter_steer_enabled:
+				# 计算当前侧向速度: 车速在 car_right 方向的投影
+				# lateral_v > 0 表示车正在向 car_right(右) 方向运动
+				# lateral_v < 0 表示车正在向 -car_right(左) 方向运动
+				var lateral_v: float = car.linear_velocity.dot(car_right)
+				# 玩家输入意图: steer_in > 0 = 想往左, steer_in < 0 = 想往右
+				# 力方向 = -car_right × steer_in, 所以:
+				#   steer_in > 0 → 力朝 -car_right (左)
+				#   steer_in < 0 → 力朝 +car_right (右)
+				# 判断是否"反打": 输入方向与当前侧向运动方向相反
+				# 反打条件: (想往左 且 正在往右荡) 或 (想往右 且 正在往左荡)
+				var input_wants_left: bool = steer_in > 0.0
+				var moving_right: bool = lateral_v > swing_counter_zero_threshold
+				var moving_left: bool = lateral_v < -swing_counter_zero_threshold
+				var is_counter_steer: bool = (input_wants_left and moving_right) or (not input_wants_left and moving_left)
+				# 更新公开标志, 供 car.gd 读取以降低车头转速
+				is_counter_steering = is_counter_steer
+				
+				if is_counter_steer:
+					# 反打: 只施加制动力, 且力的大小不超过"刚好把侧向速度减到0"所需的力
+					# 制动力方向 = 与运动方向相反 = -sign(lateral_v) × car_right
+					var brake_force_mag: float = swing_side_force * swing_counter_brake_mult * absf(steer_in)
+					# 限制: 制动力不超过"一帧内把侧向速度归零"所需的力
+					# F × dt / mass = Δv → F_max = |lateral_v| × mass / dt
+					var max_brake_force: float = absf(lateral_v) / maxf(delta, 0.001)
+					brake_force_mag = minf(brake_force_mag, max_brake_force)
+					# 制动方向: 与侧向运动方向相反
+					side_force = -sign(lateral_v) * car_right * brake_force_mag * car.mass
+				else:
+					# 非反打 (同向加速 或 侧向速度已归零): 正常施力
+					side_force = -car_right * steer_in * swing_side_force * car.mass
+			else:
+				# 反打制动关闭: 旧行为, 自由侧向
+				side_force = -car_right * steer_in * swing_side_force * car.mass
+				is_counter_steering = false
 			car.apply_central_force(side_force)
+		else:
+			# 没有侧向输入时重置反打标志
+			is_counter_steering = false
 
 		# 2) 前进力: 按前进键加速 swing, 按刹车键减速
 		# 用户要求: 起钩瞬间的距离决定 ATTACHED 期间空中前进推力大小.

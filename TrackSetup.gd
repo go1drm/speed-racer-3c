@@ -26,6 +26,10 @@ func _ready() -> void:
 		_generate_track_collision()
 	if auto_find_spawn:
 		call_deferred("_adjust_car_spawn")
+	# 把当前场景名称写入全局状态, 供 HUD 读取显示
+	var st: Node = get_node_or_null("/root/TrackRunnerState")
+	if st and "track_display_name" in st:
+		st.set("track_display_name", name)
 
 
 func _generate_track_collision() -> void:
@@ -159,4 +163,8 @@ func _adjust_car_spawn() -> void:
 	var car_mesh: Node3D = car.get_node_or_null("CarMesh")
 	if car_mesh and car_mesh.top_level:
 		car_mesh.global_position = target_pos + Vector3(0, -1, 0)  # sphere_offset 默认 DOWN
+	# 重新记录出生点 (覆盖 car._record_initial_position 之前记录的旧值)
+	# 这样按 B 键复位时会回到 TrackSetup 调整后的正确位置
+	if car.has_method("_record_initial_position"):
+		car.call("_record_initial_position")
 	print("[TrackSetup] Car 已落到: ", target_pos)

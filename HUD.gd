@@ -104,8 +104,26 @@ var _anchor_shake_t: float = 0.0          # 蓝色抖动计时器
 var _anchor_glow_t: float = 0.0           # 黄色闪耀计时器
 var _anchor_shader_mat: ShaderMaterial = null  # 锚点图标 shader 材质
 
-# 锚点 UI 图标路径
+# 锡点指示器 UI 图标路径
 const ANCHOR_UI_TEXTURE_PATH := "res://assets/ui/anchor_ui.png"
+
+# ============================================================
+#  赛道名称 + 计时器 + 成绩列表
+# ============================================================
+# 设计:
+#   · 右上角显示当前赛道名称 (从 TrackRunnerState.track_display_name 读取)
+#   · 计时器状态机: READY(预备) → RUNNING(计时中) → FINISHED(到达终点)
+#   · 进入场景/按B → READY, 显示"预备..."
+#   · 按前方向键 → RUNNING, 开始计时 mm:ss:cc
+#   · 到达终点 → FINISHED, 停止计时, 生成成绩记录
+enum TimerState { READY, RUNNING, FINISHED }
+var _timer_state: int = TimerState.READY
+var _timer_elapsed: float = 0.0          # 计时器累计时间 (秒)
+var _timer_label: Label = null           # 左上角计时器显示
+var _ready_label: Label = null           # "预备..." 提示
+var _track_name_label: Label = null      # 右上角赛道名称
+var _results_container: VBoxContainer = null  # 左上角成绩列表
+var _result_count: int = 0               # 已生成的成绩数量
 
 
 func _ready() -> void:
@@ -117,6 +135,8 @@ func _ready() -> void:
 	call_deferred("_connect_to_car")
 	# 创建锚点指示器 UI
 	_build_anchor_indicator()
+	# 创建赛道名称 + 计时器 + 成绩列表 UI
+	_build_timer_ui()
 
 
 func _connect_to_car() -> void:
@@ -158,6 +178,10 @@ func _connect_to_car() -> void:
 		car.connect("songqian_drift_triggered", _on_songqian_drift_triggered)
 	if car.has_signal("songqian_back_boost_triggered"):
 		car.connect("songqian_back_boost_triggered", _on_songqian_back_boost_triggered)
+	if car.has_signal("reset_to_origin_triggered") and not car.is_connected("reset_to_origin_triggered", _on_reset_to_origin):
+		car.connect("reset_to_origin_triggered", _on_reset_to_origin)
+	if car.has_signal("finish_line_reached") and not car.is_connected("finish_line_reached", _on_finish_line_reached):
+		car.connect("finish_line_reached", _on_finish_line_reached)
 	# 钩索信号挂在 GrappleHook 节点上(它是 car 的子节点). 延迟连接, 因为 GrappleHook 是 call_deferred 挂的
 	call_deferred("_connect_to_grapple_hook", car)
 
@@ -254,6 +278,9 @@ func _process(delta: float) -> void:
 	# 锚点指示器: 每帧更新位置和颜色
 	_update_anchor_indicator()
 
+	# 计时器更新
+	_update_timer(delta)
+
 
 func _on_speed_changed(kmh: float) -> void:
 	speed_label.text = "%d" % int(kmh)
@@ -325,7 +352,7 @@ func _on_boost_triggered(type_name: String) -> void:
 				txt = "氮气"
 				col = _nitro_color_for_variant(_current_nitro_variant)
 			"grapple_boost":
-				txt = "增压弹射"
+				txt = "钩索弹射"
 				col = Color(0.3, 0.85, 1.0, 1.0)
 			"grapple_nitro":
 				txt = "氮气弹射"
@@ -354,10 +381,10 @@ func _on_boost_triggered(type_name: String) -> void:
 func _on_combo_triggered(combo_name: String, breakthrough_count: int) -> void:
 	# 弹字白名单:
 	# 普通叠喷: CW / CWW / WCW
-	# 钩索叠喷: 氮气弹射 / 弹射CW / 增压弹射CW / 增压弹射CWW
+	# 钩索叠喷: 氮气弹射 / 弹射CW / 钩索弹射CW / 钩索弹射CWW
 	var valid_combos: Array[String] = [
 		"CW", "CWW", "WCW",
-		"氮气弹射", "弹射CW", "增压弹射CW", "增压弹射CWW"
+		"氮气弹射", "弹射CW", "钩索弹射CW", "钩索弹射CWW"
 	]
 	if combo_name not in valid_combos:
 		return
@@ -372,7 +399,7 @@ func _on_combo_triggered(combo_name: String, breakthrough_count: int) -> void:
 		col = NITRO_COLOR_GOLD
 	else:
 		col = W_COLOR_BLUE
-	# CW/氮气弹射 是短叠喷; CWW/WCW/增压弹射CW/增压弹射CWW 是终结型, 持续更长
+	# CW/氮气弹射 是短叠喷; CWW/WCW/钩索弹射CW/钩索弹射CWW 是终结型, 持续更长
 	var is_short_combo: bool = (combo_name == "CW" or combo_name == "氮气弹射" or combo_name == "弹射CW")
 	var combo_hold: float = popup_hold_time + (0.2 if is_short_combo else 0.4)
 	# 【炫点文案】钩索叠喷直接显示中文名; 普通叠喷用 "叠喷 CW" 格式
@@ -436,7 +463,7 @@ func _on_songqian_state_changed(active: bool) -> void:
 
 func _on_air_boost_triggered(air_time: float) -> void:
 	# 【炫点文案】中文. 气泡时长参数保留原 default (不带 hold/fade 参数)
-	# combo 保护期内不覆盖叠喷弹字 (例如"增压弹射CWW"不应被"空喷"覆盖)
+	# combo 保护期内不覆盖叠喷弹字 (例如"钩索弹射CWW"不应被"空喷"覆盖)
 	var now: float = Time.get_ticks_msec() / 1000.0
 	if now < _combo_protect_until:
 		return
@@ -843,13 +870,12 @@ func _update_anchor_indicator() -> void:
 		and screen_pos.y >= margin and screen_pos.y <= vp_size.y - margin
 
 	if in_screen:
-		# 屏幕内: 直接显示在投影位置 + UI偏移 + 动画偏移
-		_anchor_icon.position = screen_pos - Vector2(ANCHOR_ICON_SIZE * 0.5, ANCHOR_ICON_SIZE * 0.5) + anchor_ui_offset + anim_offset
-		# 根据距离缩放 (近大远小, 但有上下限) × 动画缩放
-		var scale_factor: float = clampf(1.0 - nearest_dist / 80.0, 0.5, 1.5)
-		_anchor_icon.scale = Vector2(scale_factor, scale_factor) * anim_scale
+		# 锚点在屏幕内: 隐藏指示器 (不遮挡视野)
+		_anchor_indicator.visible = false
+		return
 	else:
-		# 屏幕外: 贴到屏幕边缘
+		# 屏幕外: 贴到屏幕边缘, 提示玩家锚点方向
+		_anchor_indicator.visible = true
 		var center: Vector2 = vp_size * 0.5
 		var dir: Vector2
 		if is_behind:
@@ -883,3 +909,185 @@ func _calc_edge_position(center: Vector2, dir: Vector2, vp_size: Vector2, margin
 	if absf(dir.y) > 0.001:
 		t = minf(t, half_h / absf(dir.y))
 	return center + dir * t
+
+
+# ============================================================
+#  赛道名称 + 计时器 + 成绩列表
+# ============================================================
+
+## 构建计时器相关 UI 元素 (在 _ready 中调用)
+func _build_timer_ui() -> void:
+	var root: Control = get_node_or_null("Root")
+	if root == null:
+		return
+
+	# --- 右上角: 赛道名称 ---
+	_track_name_label = Label.new()
+	_track_name_label.name = "TrackNameLabel"
+	_track_name_label.add_theme_font_size_override("font_size", 20)
+	_track_name_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.5, 0.9))
+	_track_name_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	_track_name_label.add_theme_constant_override("outline_size", 3)
+	_track_name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_track_name_label.layout_mode = 1
+	_track_name_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_track_name_label.offset_left = -300.0
+	_track_name_label.offset_top = 50.0
+	_track_name_label.offset_right = -20.0
+	_track_name_label.offset_bottom = 80.0
+	_track_name_label.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_track_name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(_track_name_label)
+	# 延迟读取赛道名称 (等 TrackRunner/TrackSetup 设置完)
+	call_deferred("_update_track_name_display")
+
+	# --- 左上角: 计时器 ---
+	_timer_label = Label.new()
+	_timer_label.name = "TimerLabel"
+	_timer_label.add_theme_font_size_override("font_size", 36)
+	_timer_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 1.0))
+	_timer_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	_timer_label.add_theme_constant_override("outline_size", 4)
+	_timer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_timer_label.layout_mode = 1
+	_timer_label.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_timer_label.offset_left = 20.0
+	_timer_label.offset_top = 20.0
+	_timer_label.offset_right = 250.0
+	_timer_label.offset_bottom = 60.0
+	_timer_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_timer_label.text = "00:00:00"
+	root.add_child(_timer_label)
+
+	# --- 左上角: "预备..." 提示 ---
+	_ready_label = Label.new()
+	_ready_label.name = "ReadyLabel"
+	_ready_label.add_theme_font_size_override("font_size", 28)
+	_ready_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.2, 1.0))
+	_ready_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	_ready_label.add_theme_constant_override("outline_size", 3)
+	_ready_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_ready_label.layout_mode = 1
+	_ready_label.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_ready_label.offset_left = 20.0
+	_ready_label.offset_top = 60.0
+	_ready_label.offset_right = 250.0
+	_ready_label.offset_bottom = 95.0
+	_ready_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ready_label.text = "预备..."
+	root.add_child(_ready_label)
+
+	# --- 左上角: 成绩列表容器 ---
+	_results_container = VBoxContainer.new()
+	_results_container.name = "ResultsContainer"
+	_results_container.layout_mode = 1
+	_results_container.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_results_container.offset_left = 20.0
+	_results_container.offset_top = 100.0
+	_results_container.offset_right = 300.0
+	_results_container.offset_bottom = 500.0
+	_results_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_results_container.add_theme_constant_override("separation", 4)
+	root.add_child(_results_container)
+
+	# 初始状态: READY
+	_enter_ready_state()
+
+
+## 从 TrackRunnerState 读取赛道名称并显示
+func _update_track_name_display() -> void:
+	if _track_name_label == null:
+		return
+	var st: Node = get_node_or_null("/root/TrackRunnerState")
+	if st and "track_display_name" in st:
+		var tn: String = String(st.get("track_display_name"))
+		if tn != "":
+			_track_name_label.text = "🗺️ " + tn
+			return
+	# 如果没有 TrackRunnerState 或名称为空, 用当前场景名
+	var scene_name: String = get_tree().current_scene.name if get_tree().current_scene else ""
+	if scene_name != "":
+		_track_name_label.text = "🗺️ " + scene_name
+
+
+## 进入预备状态 (显示"预备...", 计时器归零)
+func _enter_ready_state() -> void:
+	_timer_state = TimerState.READY
+	_timer_elapsed = 0.0
+	if _timer_label:
+		_timer_label.text = "00:00:00"
+		_timer_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 0.6))
+	if _ready_label:
+		_ready_label.text = "预备..."
+		_ready_label.visible = true
+
+
+## 进入计时状态 (隐藏"预备...", 开始计时)
+func _enter_running_state() -> void:
+	_timer_state = TimerState.RUNNING
+	_timer_elapsed = 0.0
+	if _timer_label:
+		_timer_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 1.0))
+	if _ready_label:
+		_ready_label.visible = false
+
+
+## 进入完成状态 (停止计时, 生成成绩)
+func _enter_finished_state() -> void:
+	_timer_state = TimerState.FINISHED
+	if _ready_label:
+		_ready_label.visible = false
+	# 生成成绩记录
+	_add_result_record(_timer_elapsed)
+
+
+## 每帧更新计时器
+func _update_timer(delta: float) -> void:
+	if _timer_state == TimerState.RUNNING:
+		_timer_elapsed += delta
+		if _timer_label:
+			_timer_label.text = _format_time(_timer_elapsed)
+	# READY 状态下检测前方向键按下 → 开始计时
+	elif _timer_state == TimerState.READY:
+		if Input.is_action_pressed("ui_up") or Input.is_key_pressed(KEY_UP) or Input.is_key_pressed(KEY_W):
+			_enter_running_state()
+
+
+## 格式化时间为 mm:ss:cc (分:秒:百分秒)
+func _format_time(seconds: float) -> String:
+	var total_cs: int = int(seconds * 100.0)
+	var cs: int = total_cs % 100
+	var total_s: int = total_cs / 100
+	var s: int = total_s % 60
+	var m: int = total_s / 60
+	return "%02d:%02d:%02d" % [m, s, cs]
+
+
+## 添加一条成绩记录到成绩列表
+func _add_result_record(elapsed: float) -> void:
+	if _results_container == null:
+		return
+	_result_count += 1
+	var record_label := Label.new()
+	record_label.add_theme_font_size_override("font_size", 18)
+	record_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	record_label.add_theme_constant_override("outline_size", 3)
+	record_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# 颜色: 第一条金色, 后续白色
+	if _result_count == 1:
+		record_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.2, 1.0))
+	else:
+		record_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 0.85))
+	record_label.text = "#%d  %s" % [_result_count, _format_time(elapsed)]
+	_results_container.add_child(record_label)
+
+
+## 按B/终点传送回出生点时的回调 → 进入预备状态
+func _on_reset_to_origin() -> void:
+	_enter_ready_state()
+
+
+## 到达终点时的回调 → 停止计时, 生成成绩
+func _on_finish_line_reached() -> void:
+	if _timer_state == TimerState.RUNNING:
+		_enter_finished_state()

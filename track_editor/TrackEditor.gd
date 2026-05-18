@@ -39,6 +39,7 @@ const BLOCK_LIBRARY: Dictionary = {
 	"turn_90_right":  "res://track_editor/blocks/turn_90_right.tscn",
 	"turn_180":       "res://track_editor/blocks/turn_180.tscn",
 	"speed_pad":      "res://track_editor/blocks/speed_pad.tscn",
+	"finish_line":    "res://track_editor/blocks/finish_line.tscn",
 }
 
 # 路段积木显示信息 (UI 列表用)
@@ -60,6 +61,7 @@ const BLOCK_INFO: Array = [
 #   kind   : 内部分类: "block"=走 BLOCK_LIBRARY tscn 实例化; "anchor"=代码生成锚点; "spawn"=唯一出生点
 const MECHANISM_INFO: Array = [
 	{"id": "speed_pad",   "label": "🟨 加速带",  "hotkey": KEY_6, "kind": "block"},
+	{"id": "finish_line", "label": "🏁 终点",    "hotkey": KEY_9, "kind": "block"},
 	{"id": "anchor",      "label": "🪝 钩索锚点", "hotkey": KEY_7, "kind": "anchor"},
 	{"id": "spawn_point", "label": "🟢 出生点",  "hotkey": KEY_8, "kind": "spawn"},
 ]
@@ -1435,17 +1437,11 @@ func _set_place_y_offset(v: float) -> void:
 	_rebuild_grid_lines()
 
 
-# 把当前 yaw/pitch/roll 转成额外的 Basis (绕本地轴, 顺序 Yaw→Pitch→Roll)
+# 把当前 yaw/pitch/roll 转成额外的 Basis (YXZ 欧拉角顺序, 与 get_euler 一致)
 # 应用方式: final_xform = base_xform * extra_basis (本地坐标系叠加, 让斜坡跟着磁吸方向走)
 func _get_place_extra_basis() -> Basis:
-	var b := Basis()
-	# Yaw 绕本地 Y 轴 (向上)
-	b = b.rotated(Vector3.UP, deg_to_rad(_place_yaw_deg))
-	# Pitch 绕本地 X 轴 (向右)
-	b = b.rotated(Vector3.RIGHT, deg_to_rad(_place_pitch_deg))
-	# Roll 绕本地 Z 轴 (向后, -Z 是车头, +Z 是车尾)
-	b = b.rotated(Vector3.BACK, deg_to_rad(_place_roll_deg))
-	return b
+	var euler := Vector3(deg_to_rad(_place_pitch_deg), deg_to_rad(_place_yaw_deg), deg_to_rad(_place_roll_deg))
+	return Basis.from_euler(euler)
 
 
 # ============================================================
@@ -1895,6 +1891,16 @@ func _on_sel_pos_changed(axis: int, v: float) -> void:
 		0: delta.x = v - old_pos.x
 		1: delta.y = v - old_pos.y
 		2: delta.z = v - old_pos.z
+	# Undo: 记录所有选中积木的旧位置和新位置
+	var idx_arr: Array = _selected_block_indices.duplicate()
+	var old_positions: Array = []
+	var new_positions: Array = []
+	for i in idx_arr:
+		var ii: int = int(i)
+		if ii >= 0 and ii < _placed_blocks.size():
+			var n: Node3D = _placed_blocks[ii]["node"]
+			if n != null:
+				old_positions.append(n.global_position)
 	if _selected_block_indices.size() <= 1:
 		# 单选: 只动这一个
 		first.global_position = old_pos + delta
@@ -1906,6 +1912,21 @@ func _on_sel_pos_changed(axis: int, v: float) -> void:
 				var n: Node3D = _placed_blocks[ii]["node"]
 				if n != null:
 					n.global_position += delta
+	# 收集新位置
+	for i in idx_arr:
+		var ii: int = int(i)
+		if ii >= 0 and ii < _placed_blocks.size():
+			var n: Node3D = _placed_blocks[ii]["node"]
+			if n != null:
+				new_positions.append(n.global_position)
+	# 入 undo 栈
+	if not old_positions.is_empty():
+		_undo_push({
+			"op": "move",
+			"indices": idx_arr,
+			"old_positions": old_positions,
+			"new_positions": new_positions,
+		})
 	# 选中里有 spawn 时同步回 _spawn_position
 	for idx in _selected_block_indices:
 		var i2: int = int(idx)
@@ -1914,7 +1935,9 @@ func _on_sel_pos_changed(axis: int, v: float) -> void:
 			break
 
 
-# 角度 SpinBox 改值: 重新用 yaw/pitch/roll 组合 basis
+# 角度 SpinBox 改值: 用欧拉角 (YXZ 顺序) 重建 basis
+# Godot 默认欧拉顺序 EULER_ORDER_YXZ: Vector3(pitch_x, yaw_y, roll_z)
+# 读取时 get_euler() 返回 (pitch, yaw, roll), 写回时用 Basis.from_euler 保证一致
 # axis: 0=Yaw, 1=Pitch, 2=Roll
 func _on_sel_rot_changed(_axis: int, _v: float) -> void:
 	# 多选时角度 SpinBox 已 editable=false, 这里再加一层保护避免误改
@@ -1925,16 +1948,25 @@ func _on_sel_rot_changed(_axis: int, _v: float) -> void:
 	var node: Node3D = _placed_blocks[_selected_block_index]["node"]
 	if node == null:
 		return
+	# Undo: 记录旋转前的 transform
+	var old_xform: Transform3D = node.global_transform
 	# 不分轴, 直接重组 basis (从所有 SpinBox 读最新值)
 	var yaw_r: float = deg_to_rad(_sel_yaw_spin.value)
 	var pitch_r: float = deg_to_rad(_sel_pitch_spin.value)
 	var roll_r: float = deg_to_rad(_sel_roll_spin.value)
-	var b := Basis()
-	b = b.rotated(Vector3.UP, yaw_r)
-	b = b.rotated(Vector3.RIGHT, pitch_r)
-	b = b.rotated(Vector3.BACK, roll_r)
+	# 用 Basis.from_euler 保证与 get_euler() 的读写一致性 (YXZ 顺序)
+	var euler := Vector3(pitch_r, yaw_r, roll_r)
+	var b := Basis.from_euler(euler)
 	var pos: Vector3 = node.global_position
-	node.global_transform = Transform3D(b, pos).orthonormalized()
+	var new_xform := Transform3D(b, pos)
+	node.global_transform = new_xform
+	# 入 undo 栈 (复用 rotate op)
+	_undo_push({
+		"op": "rotate",
+		"indices": [_selected_block_index],
+		"old_xforms": [old_xform],
+		"new_xforms": [new_xform],
+	})
 	# spawn 同步
 	if String(_placed_blocks[_selected_block_index].get("kind", "")) == "spawn":
 		_sync_spawn_from_placed()
@@ -2331,11 +2363,15 @@ func _pick_wall_segment_at_mouse() -> Dictionary:
 #       这样选中/hover/拖拽/_pick 全自动适用
 # ============================================================
 func _build_spawn_marker() -> void:
-	_spawn_marker = MeshInstance3D.new()
+	# 用 Node3D 作为根节点, 包含车身 BoxMesh + 车头箭头 (指示朝向)
+	_spawn_marker = Node3D.new()
 	_spawn_marker.name = "SpawnMarker"
+	# 车身 BoxMesh (半透明绿色)
+	var body_mi := MeshInstance3D.new()
+	body_mi.name = "BodyMesh"
 	var box := BoxMesh.new()
 	box.size = Vector3(2.5, 1.0, 4.5)   # 模拟车身大小
-	_spawn_marker.mesh = box
+	body_mi.mesh = box
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = Color(0.3, 1.0, 0.4, 0.5)
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -2343,7 +2379,27 @@ func _build_spawn_marker() -> void:
 	mat.emission = Color(0.3, 1.0, 0.4)
 	mat.emission_energy_multiplier = 0.6
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_spawn_marker.material_override = mat
+	body_mi.material_override = mat
+	_spawn_marker.add_child(body_mi)
+	# 车头箭头 (指示车头朝向 = -Z 方向)
+	# 用 PrismMesh 做三角形箭头, 放在车身前方
+	var arrow_mi := MeshInstance3D.new()
+	arrow_mi.name = "ArrowMesh"
+	var prism := PrismMesh.new()
+	prism.size = Vector3(1.8, 0.3, 1.5)   # 宽 1.8m, 高 0.3m, 深 1.5m
+	arrow_mi.mesh = prism
+	var arrow_mat := StandardMaterial3D.new()
+	arrow_mat.albedo_color = Color(1.0, 1.0, 0.2, 0.8)
+	arrow_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	arrow_mat.emission_enabled = true
+	arrow_mat.emission = Color(1.0, 1.0, 0.2)
+	arrow_mat.emission_energy_multiplier = 1.2
+	arrow_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	arrow_mi.material_override = arrow_mat
+	# PrismMesh 默认尖端朝 +Y, 需要旋转让尖端朝 -Z (车头方向)
+	arrow_mi.rotation.x = deg_to_rad(90.0)   # 尖端从 +Y 转到 -Z
+	arrow_mi.position = Vector3(0.0, 0.5, -3.0)   # 放在车身前方
+	_spawn_marker.add_child(arrow_mi)
 	# 添加 StaticBody3D 让 raycast 能命中 (否则 _pick_placed_block_at_mouse 选不到)
 	var body := StaticBody3D.new()
 	var col_shape := CollisionShape3D.new()

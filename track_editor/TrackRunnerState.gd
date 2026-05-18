@@ -11,5 +11,8 @@ extends Node
 # 空字符串 = 默认加载 user://tracks/_test.tres
 var track_to_load: String = ""
 
+# 当前赛道的显示名称 (由 TrackRunner/TrackSetup 设置, HUD 读取)
+var track_display_name: String = ""
+
 # 上次保存编辑器状态用于"返回编辑器"功能 (未来扩展)
 var last_editor_track_path: String = ""

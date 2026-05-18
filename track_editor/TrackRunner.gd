@@ -136,6 +136,10 @@ func _load_track(data: Resource) -> void:
 	print("[TrackRunner] 赛道加载完成: ", String(data.get("track_name")),
 		" | 积木 ", blocks_arr.size(),
 		" 锚点 ", anchors_arr.size())
+	# 把赛道名称写入全局状态, 供 HUD 读取显示
+	var st: Node = get_node_or_null("/root/TrackRunnerState")
+	if st and "track_display_name" in st:
+		st.set("track_display_name", String(data.get("track_name")))
 
 
 func _spawn_default_car_and_camera(spawn_pos: Vector3, spawn_yaw: float) -> void:
