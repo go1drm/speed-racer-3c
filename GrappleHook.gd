@@ -217,6 +217,14 @@ var _logged_attached_rope: bool = false
 @export var rope_color: Color = Color(0.05, 0.05, 0.05, 1.0)
 ## 绳子起点偏移 (相对车 transform 本地坐标). 让绳子从车头/车顶发出, 而不是车球心
 @export var rope_origin_offset: Vector3 = Vector3(0.0, 0.5, -0.5)
+## 绳子遮挡赛车时自动变透明的开关
+@export var rope_occlusion_fade: bool = true
+## 遮挡判定距离阈值 (米): 绳子到"摄像机→赛车"视线的距离 < 此值时视为遮挡
+@export_range(0.1, 5.0, 0.1) var rope_occlusion_threshold: float = 1.5
+## 遮挡时绳子的最低不透明度 (0=完全透明, 1=不透明)
+@export_range(0.0, 1.0, 0.05) var rope_occlusion_min_alpha: float = 0.15
+## 透明度过渡速度 (越大越快切换透明/不透明)
+@export_range(1.0, 30.0, 0.5) var rope_occlusion_fade_speed: float = 10.0
 
 @export_group("Rope Charged FX (增压充能电光)")
 ## 充能电光颜色 (金黄色)
@@ -332,6 +340,8 @@ var is_counter_steering: bool = false
 var swing_travel_distance: float = 0.0
 # 上一帧车的位置, 用于计算帧间位移
 var _last_car_pos: Vector3 = Vector3.ZERO
+# 绳子遮挡透明度: 当前 alpha 值 (1.0=不透明, 0.0=全透明), 用于平滑过渡
+var _rope_current_alpha: float = 1.0
 
 # ============================================================
 # 检测区域可视化 (L 键切换)
@@ -1084,6 +1094,45 @@ func _redraw_rope(t: float) -> void:
 	if t < 0.999:
 		_logged_attached_rope = false
 
+	# === 绳子遮挡赛车时自动变透明 ===
+	# 原理: 计算绳子线段到"摄像机→赛车中心"视线的最短距离
+	# 如果距离 < 阈值, 说明绳子在视线附近遮挡了赛车, 平滑过渡到透明
+	if rope_occlusion_fade and _rope_mat and car != null:
+		var cam: Camera3D = get_viewport().get_camera_3d() if get_viewport() else null
+		if cam != null:
+			var cam_pos: Vector3 = cam.global_position
+			var car_center: Vector3 = car.global_position
+			# 计算绳子线段 (p0→p_end) 到视线线段 (cam_pos→car_center) 的最短距离
+			var occlude_dist: float = _segment_to_segment_distance(p0, p_end, cam_pos, car_center)
+			# 根据距离计算目标 alpha: 距离越近越透明
+			var target_alpha: float = 1.0
+			if occlude_dist < rope_occlusion_threshold:
+				# 线性映射: dist=0 → min_alpha, dist=threshold → 1.0
+				target_alpha = lerpf(rope_occlusion_min_alpha, 1.0, clampf(occlude_dist / rope_occlusion_threshold, 0.0, 1.0))
+			# 平滑过渡
+			var dt: float = get_process_delta_time()
+			_rope_current_alpha = move_toward(_rope_current_alpha, target_alpha, rope_occlusion_fade_speed * dt)
+			# 应用透明度
+			if _rope_current_alpha < 0.99:
+				_rope_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+				var c: Color = _rope_mat.albedo_color
+				_rope_mat.albedo_color = Color(c.r, c.g, c.b, _rope_current_alpha)
+				# 充能状态下 emission 也要跟着衰减
+				if _rope_charged:
+					_rope_mat.emission_energy_multiplier *= _rope_current_alpha
+			else:
+				# 完全不透明: 关闭透明模式 (性能更好)
+				_rope_mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
+				var c2: Color = _rope_mat.albedo_color
+				_rope_mat.albedo_color = Color(c2.r, c2.g, c2.b, 1.0)
+	else:
+		# 遮挡检测关闭时确保绳子不透明
+		if _rope_mat and _rope_current_alpha < 0.99:
+			_rope_current_alpha = 1.0
+			_rope_mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
+			var c3: Color = _rope_mat.albedo_color
+			_rope_mat.albedo_color = Color(c3.r, c3.g, c3.b, 1.0)
+
 
 # 取当前 _rope_array_mesh 实际编进去的半径 (从第一个顶点的 X 读)
 # 用于检测"用户改了 rope_thickness 是否需要重建 mesh"
@@ -1107,8 +1156,38 @@ func _sample_curve_safe(c: Curve, t: float, fallback: float) -> float:
 
 
 # ============================================================
-#  外部查询接口 (Camera/HUD 用)
+# 线段到线段最短距离 (用于绳子遮挡检测)
 # ============================================================
+# 数学: 两条线段 S1(s)=A+s*(B-A), S2(t)=C+t*(D-C), s,t∈[0,1]
+# 求 min |S1(s)-S2(t)|
+# 参考: "Real-Time Collision Detection" by Christer Ericson, Chapter 5.1.9
+func _segment_to_segment_distance(a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> float:
+	var ab: Vector3 = b - a   # 线段1方向
+	var cd: Vector3 = d - c   # 线段2方向
+	var ac: Vector3 = c - a
+	var d1: float = ab.dot(ab)   # |AB|²
+	var d2: float = cd.dot(cd)   # |CD|²
+	var d3: float = ab.dot(cd)
+	var d4: float = ab.dot(ac)
+	var d5: float = cd.dot(ac)
+	var denom: float = d1 * d2 - d3 * d3
+	# s, t 参数 (线段上的投影位置)
+	var s: float = 0.0
+	var t_param: float = 0.0
+	if denom > 0.0001:
+		# 非平行情况
+		s = clampf((d4 * d2 - d5 * d3) / denom, 0.0, 1.0)
+		t_param = (d5 + s * d3) / maxf(d2, 0.0001)
+		t_param = clampf(t_param, 0.0, 1.0)
+		# 重新计算 s (因为 t 被 clamp 了)
+		s = clampf((t_param * d3 + d4) / maxf(d1, 0.0001), 0.0, 1.0)
+	else:
+		# 近似平行: 取线段1起点投影到线段2
+		s = 0.0
+		t_param = clampf(d5 / maxf(d2, 0.0001), 0.0, 1.0)
+	var closest1: Vector3 = a + ab * s
+	var closest2: Vector3 = c + cd * t_param
+	return closest1.distance_to(closest2)
 func is_attached() -> bool:
 	return state == State.ATTACHED
 

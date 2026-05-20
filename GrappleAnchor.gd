@@ -125,8 +125,8 @@ func _apply_model_scale() -> void:
 	if _vis_root == null:
 		return
 	# FBX 模型原始尺寸约 1m 左右, 用 anchor_radius 作为缩放因子
-	# 基础缩放 2.5 (用户要求放大到 2.5 倍)
-	var s: float = (anchor_radius / 1.5) * 2.5
+	# 基础缩放 5.0 (放大到 5 倍)
+	var s: float = (anchor_radius / 1.5) * 5.0
 	_vis_root.scale = Vector3(s, s, s)
 
 

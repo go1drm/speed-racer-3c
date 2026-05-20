@@ -3,13 +3,12 @@ extends Node3D
 ## ============================================================
 ## 终点 (Finish Line) — 编辑器机关
 ## ============================================================
-## 一个带地面光环特效的圆环结构，圆环中心插着一面旗子。
+## 一个带地面光环特效的圆环结构，圆环顶部有立体"终点"二字轻轻摇摆。
 ## 赛车撞进该范围 0.2 秒后，被传送回出生点。
 ##
 ## 子节点结构 (rebuild 后):
 ##   Ring (MeshInstance3D)           — 圆环 (TorusMesh), 竖直放置
-##   FlagPole (MeshInstance3D)       — 旗杆 (CylinderMesh)
-##   FlagCloth (MeshInstance3D)      — 旗面 (BoxMesh, 薄片)
+##   FinishText (MeshInstance3D)     — 立体"终点"二字 (TextMesh), 跟随圆环颜色, 轻轻摇摆
 ##   GroundHalo (MeshInstance3D)     — 地面光环 (圆形发光面片)
 ##   PickBody (StaticBody3D)         — 编辑器选中盒
 ##     PickShape (CollisionShape3D)
@@ -70,11 +69,15 @@ var _loading: bool = false
 
 # 内部节点引用
 var _ring_mesh: MeshInstance3D = null
-var _flag_pole: MeshInstance3D = null
-var _flag_cloth: MeshInstance3D = null
+var _finish_text: MeshInstance3D = null
 var _ground_halo: MeshInstance3D = null
 var _pick_body: StaticBody3D = null
 var _trigger_area: Area3D = null
+
+# 摇摆动画参数
+var _sway_time: float = 0.0
+const SWAY_SPEED: float = 1.5       # 摇摆频率 (rad/s)
+const SWAY_ANGLE: float = 0.08      # 摇摆最大角度 (rad, 约4.5°)
 
 # 运行时: 正在等待传送的车 { car_instance_id: timer_node }
 var _pending_teleports: Dictionary = {}
@@ -84,6 +87,14 @@ func _ready() -> void:
 	_rebuild()
 
 
+func _process(delta: float) -> void:
+	# "终点"二字轻轻摇摆动画
+	if _finish_text == null:
+		return
+	_sway_time += delta * SWAY_SPEED
+	_finish_text.rotation.z = sin(_sway_time) * SWAY_ANGLE
+
+
 # ============================================================
 # 重建几何 + 选中盒 + 触发器
 # ============================================================
@@ -91,8 +102,7 @@ func _rebuild() -> void:
 	for c in get_children():
 		c.queue_free()
 	_ring_mesh = null
-	_flag_pole = null
-	_flag_cloth = null
+	_finish_text = null
 	_ground_halo = null
 	_pick_body = null
 	_trigger_area = null
@@ -143,39 +153,28 @@ func _rebuild() -> void:
 	_ring_mesh.material_override = ring_mat
 	add_child(_ring_mesh)
 
-	# ---------- 3. 旗杆 (圆柱) ----------
-	_flag_pole = MeshInstance3D.new()
-	_flag_pole.name = "FlagPole"
-	var pole_mesh := CylinderMesh.new()
-	var pole_height: float = height + radius + 1.5
-	pole_mesh.top_radius = 0.08
-	pole_mesh.bottom_radius = 0.08
-	pole_mesh.height = pole_height
-	_flag_pole.mesh = pole_mesh
-	_flag_pole.position = Vector3(0.0, pole_height * 0.5, 0.0)
-	var pole_mat := StandardMaterial3D.new()
-	pole_mat.albedo_color = Color(0.8, 0.8, 0.8)
-	pole_mat.metallic = 0.9
-	pole_mat.roughness = 0.2
-	_flag_pole.material_override = pole_mat
-	add_child(_flag_pole)
-
-	# ---------- 4. 旗面 (薄片 BoxMesh) ----------
-	_flag_cloth = MeshInstance3D.new()
-	_flag_cloth.name = "FlagCloth"
-	var cloth_mesh := BoxMesh.new()
-	cloth_mesh.size = Vector3(1.5, 1.0, 0.05)
-	_flag_cloth.mesh = cloth_mesh
-	# 旗面挂在旗杆顶部偏右
-	_flag_cloth.position = Vector3(0.75, pole_height - 0.5, 0.0)
-	var cloth_mat := StandardMaterial3D.new()
-	cloth_mat.albedo_color = col
-	cloth_mat.emission_enabled = true
-	cloth_mat.emission = col
-	cloth_mat.emission_energy_multiplier = 1.0
-	cloth_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_flag_cloth.material_override = cloth_mat
-	add_child(_flag_cloth)
+	# ---------- 3. 立体"终点"二字 (TextMesh) ----------
+	_finish_text = MeshInstance3D.new()
+	_finish_text.name = "FinishText"
+	var text_mesh := TextMesh.new()
+	text_mesh.text = "终点"
+	# 文字大小占圆环直径的 1/4
+	var text_size: float = radius * 0.5
+	text_mesh.font_size = int(text_size * 40.0)  # font_size 单位是像素, 缩放后匹配世界尺寸
+	text_mesh.depth = text_size * 0.15           # 立体厚度
+	text_mesh.pixel_size = 0.01                  # 像素到世界单位的换算
+	_finish_text.mesh = text_mesh
+	# 放在圆环顶部 (圆环中心高度 + 半径方向偏上)
+	_finish_text.position = Vector3(0.0, height + radius * 0.55, 0.0)
+	var text_mat := StandardMaterial3D.new()
+	text_mat.albedo_color = col
+	text_mat.emission_enabled = true
+	text_mat.emission = col
+	text_mat.emission_energy_multiplier = 2.0
+	text_mat.metallic = 0.4
+	text_mat.roughness = 0.3
+	_finish_text.material_override = text_mat
+	add_child(_finish_text)
 
 	# ---------- 5. 编辑器选中盒 ----------
 	_pick_body = StaticBody3D.new()
@@ -191,7 +190,9 @@ func _rebuild() -> void:
 	_pick_body.add_child(pick_shape)
 	add_child(_pick_body)
 
-	# ---------- 6. 触发 Area3D (圆柱形) ----------
+	# ---------- 6. 触发 Area3D (圆柱形, 横躺像隧道) ----------
+	# 圆环竖直放置 (绕X轴90°), 车从Z方向穿过
+	# 所以触发圆柱也绕X轴90°, 轴心朝Z方向, 车穿过圆环即触发
 	_trigger_area = Area3D.new()
 	_trigger_area.name = "Trigger"
 	_trigger_area.monitoring = false
@@ -200,9 +201,11 @@ func _rebuild() -> void:
 	var trigger_shape := CollisionShape3D.new()
 	trigger_shape.name = "TriggerShape"
 	var cyl := CylinderShape3D.new()
-	cyl.radius = radius
-	cyl.height = height * 2.0 + 2.0
+	cyl.radius = radius   # 圆柱半径 = 圆环半径, 覆盖整个圆环截面
+	cyl.height = radius * 0.6  # 圆柱深度 (Z方向厚度), 足够宽容
 	trigger_shape.shape = cyl
+	# 绕X轴旋转90°, 让圆柱轴心从Y变为Z (像隧道)
+	trigger_shape.rotation.x = deg_to_rad(90.0)
 	trigger_shape.position = Vector3(0.0, height, 0.0)
 	_trigger_area.add_child(trigger_shape)
 
@@ -237,26 +240,25 @@ func _on_car_entered(body: Node) -> void:
 	var key: int = body.get_instance_id()
 	if _pending_teleports.has(key):
 		return   # 已经在等待传送了
-	# 创建延迟计时器
+	# 进入圆环即判定成功, 不要求停留在区域内
+	# 先立即通知 HUD 停止计时 (拿到最终时间)
+	if body.has_signal("finish_line_reached"):
+		body.emit_signal("finish_line_reached")
+	# 创建延迟计时器 (延迟只是传送前的视觉缓冲, 不影响判定)
 	var timer := get_tree().create_timer(teleport_delay)
 	_pending_teleports[key] = timer
 	timer.timeout.connect(func() -> void:
 		_pending_teleports.erase(key)
-		# 再次确认车还在触发区内 (可能已经开出去了)
-		if _trigger_area and _trigger_area.get_overlapping_bodies().has(body):
-			# 先通知 HUD 停止计时 (在传送之前, 这样 HUD 能拿到最终时间)
-			if body.has_signal("finish_line_reached"):
-				body.emit_signal("finish_line_reached")
+		if is_instance_valid(body):
 			body.call("_reset_to_origin")
 			print("[Block_FinishLine] 传送! 车已回到出生点")
 	)
+	print("[Block_FinishLine] 终点判定成功! 延迟 %.2fs 后传送" % teleport_delay)
 
 
 func _on_car_exited(body: Node) -> void:
-	var key: int = body.get_instance_id()
-	# 车离开触发区: 取消待传送 (还没到 0.2 秒就开出去了)
-	if _pending_teleports.has(key):
-		_pending_teleports.erase(key)
+	# 车离开触发区不取消判定 (穿过圆环即算成功)
+	pass
 
 
 # ============================================================

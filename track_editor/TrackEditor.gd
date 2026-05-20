@@ -40,6 +40,7 @@ const BLOCK_LIBRARY: Dictionary = {
 	"turn_180":       "res://track_editor/blocks/turn_180.tscn",
 	"speed_pad":      "res://track_editor/blocks/speed_pad.tscn",
 	"finish_line":    "res://track_editor/blocks/finish_line.tscn",
+	"wall":           "res://track_editor/blocks/wall.tscn",
 }
 
 # 路段积木显示信息 (UI 列表用)
@@ -62,6 +63,7 @@ const BLOCK_INFO: Array = [
 const MECHANISM_INFO: Array = [
 	{"id": "speed_pad",   "label": "🟨 加速带",  "hotkey": KEY_6, "kind": "block"},
 	{"id": "finish_line", "label": "🏁 终点",    "hotkey": KEY_9, "kind": "block"},
+	{"id": "wall",        "label": "🧱 墙",      "hotkey": KEY_0, "kind": "block"},
 	{"id": "anchor",      "label": "🪝 钩索锚点", "hotkey": KEY_7, "kind": "anchor"},
 	{"id": "spawn_point", "label": "🟢 出生点",  "hotkey": KEY_8, "kind": "spawn"},
 ]
@@ -111,9 +113,14 @@ var _cam_pitch: float = -0.4    # 默认略往下看
 var _cam_distance: float = 50.0  # 视点距离 (滚轮控制)
 var _cam_focus: Vector3 = Vector3.ZERO   # 相机看的中心点 (WASD 平移)
 const CAM_MOVE_SPEED: float = 30.0
+const CAM_MOVE_SPEED_MAX: float = 150.0   # 长按加速后的最大速度
+const CAM_ACCEL_DELAY: float = 0.4        # 按住多久后开始加速 (秒)
+const CAM_ACCEL_RAMP: float = 2.5         # 加速斜率 (每秒倍率增长)
 const CAM_ROTATE_SENSITIVITY: float = 0.005
 const CAM_ZOOM_SPEED: float = 5.0
 var _is_rotating_cam: bool = false
+# 长按加速: 累计按住 WASD 的时间
+var _cam_move_hold_time: float = 0.0
 # A 键焦点诊断: 第一次按 A 触发"焦点抢救"时打印一行, 帮助定位 Bug
 var _logged_a_focus: bool = false
 
@@ -2993,11 +3000,20 @@ func _physics_process(delta: float) -> void:
 			focus_owner.release_focus()
 		move.x += 1.0
 	if move.length_squared() > 0.0:
-		move = move.normalized() * CAM_MOVE_SPEED * delta
+		# 长按加速: 累计按住时间, 超过延迟后逐渐提速
+		_cam_move_hold_time += delta
+		var speed: float = CAM_MOVE_SPEED
+		if _cam_move_hold_time > CAM_ACCEL_DELAY:
+			var accel_time: float = _cam_move_hold_time - CAM_ACCEL_DELAY
+			speed = minf(CAM_MOVE_SPEED + accel_time * CAM_ACCEL_RAMP * CAM_MOVE_SPEED, CAM_MOVE_SPEED_MAX)
+		move = move.normalized() * speed * delta
 		# 移动方向相对相机水平朝向
 		var yaw_basis := Basis(Vector3.UP, _cam_yaw)
 		_cam_focus += yaw_basis * move
 		_update_camera_transform()
+	else:
+		# 松开按键, 重置累计时间
+		_cam_move_hold_time = 0.0
 
 
 func _update_camera_transform() -> void:

@@ -22,6 +22,16 @@ extends RigidBody3D
 #  目标顶速 ~42 m/s (max_speed=45 难以达到, 体现"越接近顶速越乏力")
 # ============================================================
 
+# ---------------- 双人模式 ----------------
+## 玩家 ID: 0=1P(键盘), 1=2P(手柄). 由 CoopMode 设置
+var player_id: int = 0
+
+## 获取当前玩家对应的 action 名 (双人模式下 2P 用 p2_ 前缀)
+func _act(base_action: String) -> String:
+	if player_id == 0:
+		return base_action
+	return "p2_" + base_action
+
 # ---------------- 基础移动 ----------------
 @export_group("Movement")
 @export var max_speed: float = 45.0              ## 巡航极速(无喷射时能达到的最高速度, m/s)
@@ -64,6 +74,8 @@ extends RigidBody3D
 @export var friction_long_speed_curve_drift: Curve
 @export var friction_lat_speed_curve_drift: Curve
 @export var drift_extra_decel: float = 2.5               ## 漂移额外整体减速(沿惯性反向)
+## 漂移额外能耗曲线: X=漂移时间归一化(0~drift_head_yaw_duration_ref), Y=能耗倍率
+@export var drift_extra_decel_curve: Curve
 ## 松前(漂移中松开前进键)时, drift_extra_decel 的倍率.
 ## 数学: final_decel = drift_extra_decel × lerp(1.0, songqian_mult, _drift_slip_factor)
 ## 默认 0.3 = 松前时额外能耗只保留 30%, 让车滑得更远. 设 1.0 = 不变, 设 0 = 松前完全没能耗
@@ -195,6 +207,14 @@ extends RigidBody3D
 @export var drift_speed_brake_strength: float = 18.0     ## 超过漂移上限时反向刹车力
 @export var drift_speed_brake_curve: Curve               ## 刹车强度随漂移持续时间的倍率曲线(X=0→刚入漂, X=1→到达 drift_head_yaw_duration_ref 秒)
 @export var drift_counter_steer_break_time: float = 0.25 ## 反打超过此时长断漂
+## 漂移低速推力: 入弯时速度过低, 给予玩家一个朝车头方向+原速度方向的推力帮助起速
+@export var drift_low_speed_push: float = 12.0           ## 推力强度(m/s²)
+## 低速推力速度阈值(drift_min_speed 的倍率). 速度低于 drift_min_speed × 此值 时触发推力
+@export var drift_low_speed_push_threshold: float = 1.2
+## 原速度方向推力占比: 0=全部朝车头, 1=全部朝原速度方向, 0.5=各一半
+@export_range(0.0, 1.0, 0.05) var drift_low_speed_push_velocity_ratio: float = 0.4
+## 低速推力曲线: X=当前速度/阈值速度(0=静止,1=阈值), Y=推力倍率. 推荐速度越低推力越大
+@export var drift_low_speed_push_curve: Curve
 
 # ---------------- 漂移自动回正 (漂移持续一段时间后车头自动朝速度方向缓慢回正) ----------------
 @export_group("Drift Auto Straighten")
@@ -999,6 +1019,7 @@ var _drift_lockout_left: float = 0.0              # 撞墙断漂后的入漂冷�
 # 撞墙断漂后, 玩家必须先松开 Q 再重新按下才能再次入漂
 # 防止"按住 Q 撞墙→CD 走完→Q 还按着→自动续漂"
 var _require_release_q: bool = false
+var _p2_debug_timer: float = 0.0  # 2P 调试计时器 (每秒打印一次输入状态)
 var _post_drift_steer_cooldown_left: float = 0.0  # 退漂转向冷却剩余秒数
 # 撞墙锁速窗口 (硬碰硬反弹)
 var _wall_hit_lock_left: float = 0.0    # 锁速窗口剩余秒数
@@ -1324,6 +1345,10 @@ func _on_grapple_boost_window_opened(dist_ratio: float, pull_time: float = 0.0, 
 	_grapple_boost_dist_ratio = dist_ratio
 	_grapple_pull_time = pull_time
 	_grapple_swing_distance = swing_distance
+	# 钩索释放时重置空喷标记: 钩索拉动期间可能已在空中消耗过空喷,
+	# 释放后应允许玩家再次触发空喷 (释放本身算一次新的"起飞")
+	_air_boost_armed = false
+	_air_boost_armed_left = 0.0
 	print("[Car] 弹射窗口开启: %.2fs, 绳长比例=%.2f, 拉动时间=%.2f, 荡动位移=%.1fm" % [window_time, dist_ratio, pull_time, swing_distance])
 
 
@@ -1443,11 +1468,48 @@ func _read_input() -> void:
 		throttle_input = 0.0
 		steer_input = 0.0
 		return
-	throttle_input = Input.get_axis("brake", "accelerate")
-	steer_input = Input.get_axis("steer_right", "steer_left")
+
+	# 双人模式: 根据 player_id 选择不同的输入 action
+	var act_accel: String = "accelerate" if player_id == 0 else "p2_accelerate"
+	var act_brake: String = "brake" if player_id == 0 else "p2_brake"
+	var act_steer_r: String = "steer_right" if player_id == 0 else "p2_steer_right"
+	var act_steer_l: String = "steer_left" if player_id == 0 else "p2_steer_left"
+	var act_drift: String = "drift" if player_id == 0 else "p2_drift"
+	var act_boost: String = "boost" if player_id == 0 else "p2_boost"
+	var act_nitro: String = "nitro" if player_id == 0 else "p2_nitro"
+	var act_grapple: String = "grapple" if player_id == 0 else "p2_grapple"
+
+	throttle_input = Input.get_axis(act_brake, act_accel)
+	steer_input = Input.get_axis(act_steer_r, act_steer_l)
+
+	# 2P 手柄摇杆: 基于角度的前进/刹车判定
+	# 360° 圆形中只有最下方 40° (±20°) 视为刹车, 其余 320° 都视为前进
+	if player_id == 1:
+		var raw_x: float = Input.get_axis("p2_steer_left", "p2_steer_right")  # -1=左, +1=右
+		var raw_y: float = Input.get_axis("p2_accelerate", "p2_brake")        # -1=上, +1=下
+		var stick_len: float = Vector2(raw_x, raw_y).length()
+		if stick_len > 0.15:  # 摇杆有有效输入 (超过死区)
+			# 计算摇杆角度: atan2(y, x), 纯向下=90°, 纯向上=-90°
+			var angle_deg: float = rad_to_deg(atan2(raw_y, raw_x))
+			# 只有角度在 70°~110° (纯向下 ±20°) 时才算刹车
+			# 其他所有方向都视为前进 (throttle_input >= 0)
+			var is_brake_zone: bool = (angle_deg >= 70.0 and angle_deg <= 110.0)
+			if not is_brake_zone:
+				# 不在刹车区: 强制满油门前进
+				# 无论摇杆推向哪个方向(左/右/上/斜向), 只要不在刹车区就全速前进
+				throttle_input = 1.0
+		# 转向保持不变 (steer_input 已经由 get_axis 正确计算)
+
+	# 2P 输入调试: 每秒打印一次输入状态 (帮助诊断手柄是否被正确读取)
+	if player_id == 1:
+		_p2_debug_timer += get_physics_process_delta_time()
+		if _p2_debug_timer >= 1.0:
+			_p2_debug_timer = 0.0
+			var spd: float = linear_velocity.length()
+			print("[Car P1 输入] throttle=%.2f steer=%.2f speed=%.1f airborne=%s" % [throttle_input, steer_input, spd, str(_is_airborne)])
 
 	# 撞墙断漂后: 需要玩家先松开 Q 才能解除"禁止再次入漂"flag
-	if _require_release_q and not Input.is_action_pressed("drift"):
+	if _require_release_q and not Input.is_action_pressed(act_drift):
 		_require_release_q = false
 		print("[Car] Q 已松开, 解除撞墙后禁漂锁")
 
@@ -1467,7 +1529,9 @@ func _read_input() -> void:
 	#   · 空中 + NORMAL: 记录到预输入缓冲, 落地时回放
 	#   · 地面 + NORMAL → 启动入漂宽限期
 	#   · 地面 + DRIFT → 手动退漂(不喷)
-	if Input.is_action_just_pressed("drift") and not _require_release_q:
+	if Input.is_action_just_pressed(act_drift) and not _require_release_q:
+		if player_id == 1:
+			print("[Car P1] RB/LB 按下检测到! airborne=%s state=%s" % [str(_is_airborne), State.keys()[state]])
 		if _is_airborne:
 			if state == State.NORMAL:
 				# 空中按 Q 求落地后起漂 → 缓冲, 落地瞬间回放
@@ -1488,7 +1552,7 @@ func _read_input() -> void:
 				#   · 满油门按 Q (非松前) → 普通手动退漂(原行为)
 				if songqian_drift_enabled and _is_in_songqian:
 					# 检查三喷触发: Q 同帧 + W 持续按住 + 车头偏角 ≥ 阈值
-					if songqian_back_boost_enabled and Input.is_action_pressed("boost"):
+					if songqian_back_boost_enabled and Input.is_action_pressed(act_boost):
 						var cur_yaw_deg: float = _calc_songqian_yaw_deg()
 						if absf(cur_yaw_deg) >= songqian_back_min_yaw_deg:
 							_trigger_songqian_back_boost(cur_yaw_deg)
@@ -1502,7 +1566,7 @@ func _read_input() -> void:
 	# 宽限期内: 每帧重试入漂(直到成功或宽限期结束)
 	if _drift_input_grace_left > 0.0 and state == State.NORMAL and not _require_release_q:
 		# 玩家松开 Q 取消宽限期(避免持续按住 Q 时一直尝试)
-		if not Input.is_action_pressed("drift"):
+		if not Input.is_action_pressed(act_drift):
 			_drift_input_grace_left = 0.0
 		else:
 			if _try_start_drift():
@@ -1513,7 +1577,7 @@ func _read_input() -> void:
 					_drift_input_grace_left = 0.0
 
 	# W 小喷：NORMAL 时如果刚好蓄满可直接小喷 / DRIFT 时角度够了退漂+小喷
-	if Input.is_action_just_pressed("boost"):
+	if Input.is_action_just_pressed(act_boost):
 		# 空中按 W: 除了现有"空喷意图缓存", 同时设置落地预输入缓冲
 		# 这样如果落地瞬间空喷条件没满足(例如 air_time 太短), 落地后也能回放 W 给落地喷/窗口消费
 		if _is_airborne:
@@ -1521,22 +1585,32 @@ func _read_input() -> void:
 		_try_boost_w()
 
 	# E 氮气
-	if Input.is_action_just_pressed("nitro"):
+	if Input.is_action_just_pressed(act_nitro):
 		_try_nitro()
 
 	# 空格 钩索 (GrappleHook 自己管状态机, car 这里只做路由)
 	# 按下 → 试射出钩索 (如果 IDLE 找锚点, 如果 ATTACHED 提前释放)
 	# 松开 → 如果开启了 release_on_button_release, 触发提前释放
 	if _grapple_hook != null:
-		if Input.is_action_just_pressed("grapple"):
+		if Input.is_action_just_pressed(act_grapple):
 			if _grapple_hook.has_method("try_fire"):
 				_grapple_hook.call("try_fire")
-		elif Input.is_action_just_released("grapple"):
+		elif Input.is_action_just_released(act_grapple):
 			if _grapple_hook.has_method("try_release"):
 				_grapple_hook.call("try_release")
 
+	# 2P 复位 (LT 扳机): 类似 B 键的快速回到出生点
+	if player_id == 1 and Input.is_action_just_pressed("p2_reset"):
+		_reset_to_origin()
+		print("[Car] 2P LT: 快速回到出生点")
+
 
 func _unhandled_input(event: InputEvent) -> void:
+	# 双人模式: 2P 不响应键盘事件和手柄按钮事件
+	# (2P 的所有输入通过 _read_input 中的 p2_* action 处理, 不走 _unhandled_input)
+	if player_id != 0:
+		if event is InputEventKey or event is InputEventJoypadButton:
+			return
 	# R 键: 按住回溯, 松开退出 (用户要求"按住 R 不停倒退")
 	# 双击 R 仍然能复位 (300ms 内连按 2 次 = 旧的复位行为)
 	if event is InputEventKey and not event.echo:
@@ -1560,7 +1634,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		# 小键盘 0 (KEY_KP_0): 切换自定义位置模式
 		elif (ek.keycode == KEY_KP_0 or ek.physical_keycode == KEY_KP_0) and ek.pressed:
-			if freefly_enabled and not _rewind_active:
+			if player_id == 0 and freefly_enabled and not _rewind_active:
 				_toggle_freefly()
 			get_viewport().set_input_as_handled()
 		# B 键: 快速回到出生点 (任何地图中按 B 立即复位)
@@ -1572,6 +1646,11 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _reset_to_origin() -> void:
 	if not _initial_recorded:
+		_auto_place_on_ground()
+		return
+	# 安全检查: 如果出生点在原点附近 (可能是未正确初始化), 打印警告
+	if _initial_car_mesh_position.length() < 0.1:
+		push_warning("[Car] P%d 出生点异常 (接近原点), 尝试 _auto_place_on_ground" % player_id)
 		_auto_place_on_ground()
 		return
 	global_position = _initial_car_mesh_position - sphere_offset
@@ -1596,7 +1675,7 @@ func _reset_to_origin() -> void:
 	# 短暂冻结物理防止车被弹走 (下一帧 _physics_process 会检查此标志)
 	_reset_freeze_frames = 3
 	emit_signal("reset_to_origin_triggered")
-	print("[Car] 已复位到出生点: pos=", _initial_car_mesh_position, " basis_z=", _initial_car_mesh_basis.z)
+	print("[Car] P%d 已复位到出生点: pos=%s basis_z=%s" % [player_id, str(_initial_car_mesh_position), str(_initial_car_mesh_basis.z)])
 
 
 # ============================================================
@@ -1689,6 +1768,14 @@ func _init_default_curves() -> void:
 		c6.add_point(Vector2(0.5, 1.2))
 		c6.add_point(Vector2(1.0, 1.0))
 		friction_lat_speed_curve_drift = c6
+	# 漂移额外能耗曲线: X=漂移时间归一化, Y=能耗倍率. 默认前期低后期高
+	if drift_extra_decel_curve == null:
+		var c6b := Curve.new()
+		c6b.add_point(Vector2(0.0, 0.5))
+		c6b.add_point(Vector2(0.4, 0.8))
+		c6b.add_point(Vector2(0.7, 1.0))
+		c6b.add_point(Vector2(1.0, 1.5))
+		drift_extra_decel_curve = c6b
 	# 入漂: ease-out(起始快, 末端缓)
 	if drift_engage_curve == null:
 		var c7 := Curve.new()
@@ -1729,6 +1816,14 @@ func _init_default_curves() -> void:
 		c11.add_point(Vector2(0.7, 1.0))
 		c11.add_point(Vector2(1.0, 1.4))
 		drift_speed_brake_curve = c11
+	# 漂移低速推力曲线: 速度越低推力越大(X=0静止→最大推力, X=1阈值速度→推力消失)
+	if drift_low_speed_push_curve == null:
+		var c11b := Curve.new()
+		c11b.add_point(Vector2(0.0, 1.5))
+		c11b.add_point(Vector2(0.3, 1.2))
+		c11b.add_point(Vector2(0.7, 0.6))
+		c11b.add_point(Vector2(1.0, 0.0))
+		drift_low_speed_push_curve = c11b
 	# 空喷曲线: 起步爆发 + 中段保持 + 末尾衰减
 	if air_boost_curve == null:
 		var c12 := Curve.new()
@@ -2173,6 +2268,28 @@ func _apply_friction(delta: float) -> void:
 		var cp_force: Vector3 = cp_diff * drift_centripetal_pull * drift_intensity * cp_time_k * total_speed * mass
 		apply_central_force(cp_force)
 
+	# -------- 【漂移低速推力】--------
+	# 入弯时速度过低, 给予玩家朝车头方向+原速度方向的推力帮助起速
+	# 条件: 处于漂移状态 && 速度低于阈值
+	# 数学: F = (forward×(1-ratio) + velocity_dir×ratio) × push × curve × mass
+	if state == State.DRIFT and drift_low_speed_push > 0.0 and drift_intensity > 0.01:
+		var push_threshold_speed: float = drift_min_speed * drift_low_speed_push_threshold
+		if total_speed < push_threshold_speed:
+			var speed_ratio_push: float = clampf(total_speed / maxf(push_threshold_speed, 0.01), 0.0, 1.0)
+			var push_curve_k: float = _sample_curve_safe(drift_low_speed_push_curve, speed_ratio_push, 1.0)
+			# 车头方向
+			var push_fwd: Vector3 = -car_mesh.global_transform.basis.z
+			push_fwd.y = 0.0
+			if push_fwd.length() > 0.001:
+				push_fwd = push_fwd.normalized()
+			# 原速度方向(有速度时用速度方向, 无速度时退化为车头方向)
+			var push_vel: Vector3 = push_fwd
+			if total_speed > 0.5:
+				push_vel = v.normalized()
+			# 混合: ratio=0 全车头, ratio=1 全速度方向
+			var push_dir: Vector3 = push_fwd.lerp(push_vel, drift_low_speed_push_velocity_ratio).normalized()
+			apply_central_force(push_dir * drift_low_speed_push * push_curve_k * mass)
+
 	# 空气阻力(与速度平方成正比, 沿惯性反向)
 	if total_speed > 0.5 and friction_air_drag > 0.0:
 		var air_force: Vector3 = -v.normalized() * friction_air_drag * total_speed * total_speed * mass
@@ -2184,8 +2301,10 @@ func _apply_friction(delta: float) -> void:
 	#   decel_mult = lerp(1.0, songqian_mult, _drift_slip_factor)
 	# 例: songqian_mult=0.3 时, 满油门→1.0 倍能耗; 完全松前→0.3 倍能耗, 车滑得更远
 	if drift_intensity > 0.01 and total_speed > 0.5:
+		var decel_t_norm: float = clampf(drift_elapsed / maxf(drift_head_yaw_duration_ref, 0.01), 0.0, 1.0)
+		var decel_curve_k: float = _sample_curve_safe(drift_extra_decel_curve, decel_t_norm, 1.0)
 		var decel_mult: float = lerpf(1.0, drift_extra_decel_songqian_mult, clampf(_drift_slip_factor, 0.0, 1.0))
-		apply_central_force(-v.normalized() * drift_extra_decel * drift_intensity * decel_mult * mass)
+		apply_central_force(-v.normalized() * drift_extra_decel * decel_curve_k * drift_intensity * decel_mult * mass)
 
 
 # 短程宽松地面探测: 当 ground_ray 偶发脱离时用球体中心沿世界 -Y 再探一下
@@ -2811,8 +2930,8 @@ func _update_visuals(delta: float) -> void:
 		# 旧实现: _songqian_yaw_offset 是"额外叠加在 car_mesh.basis 上的旋转量",
 		#        松前期间朝 drift_dir 方向插值到 songqian_yaw_limit_deg, 离开松前回零.
 		# 已知不足: 这个 limit 只限制"额外叠加层", 不限制"基础转向 + 叠加"的总偏角,
-        #          所以视觉上车头能转过 90° (和基础转向叠加).
-        #          这个 90° 上限的真正语义之后单独再讨论怎么实现, 先恢复正常漂移可玩性.
+		#          所以视觉上车头能转过 90° (和基础转向叠加).
+		#          这个 90° 上限的真正语义之后单独再讨论怎么实现, 先恢复正常漂移可玩性.
 		var target_offset_deg: float = (songqian_yaw_limit_deg * drift_dir) if _is_in_songqian else 0.0
 		var step_deg: float = songqian_yaw_speed_deg * delta
 		var prev_offset: float = _songqian_yaw_offset
@@ -2880,10 +2999,10 @@ func _update_visuals(delta: float) -> void:
 		ramp = smoothstep(0.0, drift_counter_response_time, _counter_steer_hold_time)
 	var effective_smooth: float = drift_counter_lean_smooth * ramp
 	_counter_lean_factor = lerpf(_counter_lean_factor, counter_target, clampf(effective_smooth * delta, 0.0, 1.0))
-	# 车身侧倾: 不再受反打影响, 漂移时永远保持完整侧倾(让"漂移姿态"视觉始终对得上)
+	# 车身侧倾: 反打时跟随 _counter_lean_factor 回正(与车头 yaw 同步)
 	# 漂移氮气时, 侧倾视觉额外加成(更夸张的过弯姿态)
 	var tilt_nitro_mult: float = drift_nitro_body_tilt_mult if _is_drift_nitro() else 1.0
-	lean_drift = deg_to_rad(drift_body_tilt) * drift_dir * drift_intensity * tilt_time_k * tilt_nitro_mult
+	lean_drift = deg_to_rad(drift_body_tilt) * drift_dir * drift_intensity * tilt_time_k * tilt_nitro_mult * _counter_lean_factor
 	body_mesh.rotation.z = lerp(body_mesh.rotation.z, lean_base + lean_drift, 6.0 * delta)
 
 	# ============ V2 车头 yaw (漂移时偏转 + 时间曲线动态晃动) ============
@@ -3077,6 +3196,10 @@ func _try_start_drift() -> bool:
 	if _drift_lockout_left > 0.0:
 		print("[Car] _try_start_drift 被 CD 拦截 lockout=%.2fs" % _drift_lockout_left)
 		return false
+	# 2P 调试: 打印漂移条件 (帮助诊断为什么漂移不出来)
+	if player_id == 1:
+		var spd: float = linear_velocity.length()
+		print("[Car P1] 漂移条件: speed=%.1f(需>%.1f) steer=%.2f(需>0.15) throttle=%.2f(需>0.05)" % [spd, drift_min_speed, steer_input, throttle_input])
 	if linear_velocity.length() < drift_min_speed:
 		return false
 	if absf(steer_input) < 0.15:
@@ -3152,7 +3275,7 @@ func _try_start_drift() -> bool:
 	emit_signal("drift_started", drift_mode)
 	if drift_fx_node and drift_fx_node.has_method("set_drifting"):
 		drift_fx_node.set_drifting(true)
-	print("[Car] 进入漂移 mode=", drift_mode, " fx=", drift_fx_node != null, " (lockout=%.2f grace=%.2f Qpressed=%s)" % [_drift_lockout_left, _drift_input_grace_left, str(Input.is_action_pressed("drift"))])
+	print("[Car] 进入漂移 mode=", drift_mode, " fx=", drift_fx_node != null, " (lockout=%.2f grace=%.2f Qpressed=%s)" % [_drift_lockout_left, _drift_input_grace_left, str(Input.is_action_pressed(_act("drift")))])
 	return true
 
 
@@ -3295,6 +3418,15 @@ func _check_drift_timeout(delta: float) -> void:
 		if _low_speed_grace_left > 0.0:
 			print("[Car] 速度恢复, 退出宽限期")
 			_low_speed_grace_left = 0.0
+
+	# ============ 反打超时断漂 ============
+	# 连续反打时长 _counter_steer_hold_time 超过 drift_counter_steer_break_time 则立即断漂
+	# (不给小喷奖励, failed=true)
+	if drift_counter_steer_break_time > 0.0 and _counter_steer_hold_time >= drift_counter_steer_break_time:
+		print("[Car] 反打超时断漂: 连续反打 %.2fs >= %.2fs" % [_counter_steer_hold_time, drift_counter_steer_break_time])
+		_counter_steer_hold_time = 0.0
+		_end_drift(false, false, true)
+		return
 
 
 # ============================================================
@@ -3544,7 +3676,7 @@ func _update_double_charge(delta: float) -> void:
 		return
 
 	# 任意喷射期间持续按住 Q
-	if Input.is_action_pressed("drift"):
+	if Input.is_action_pressed(_act("drift")):
 		_double_charge_t += delta
 		var prog: float = clampf(_double_charge_t / maxf(double_charge_hold_time, 0.001), 0.0, 1.0)
 		emit_signal("double_charge_progress", prog)

@@ -90,7 +90,7 @@ const PARAMS := [
 	["friction_lat_drift",        "漂移侧向抓地",       0.0,  15.0,  0.1,
 		"漂移时侧向抓地(需要远小于正常值, 否则甩不出去).", "friction_lat_speed_curve_drift"],
 	["drift_extra_decel",         "漂移额外能耗",       0.0,  20.0,  0.1,
-		"漂移时额外沿惯性反向施加的整体减速力(模拟轮胎打滑功耗).", ""],
+		"漂移时额外沿惯性反向施加的整体减速力(模拟轮胎打滑功耗). 实际力 = 此值 × 曲线采样值.", "drift_extra_decel_curve"],
 	["drift_extra_decel_songqian_mult", "松前能耗倍率",  0.0,  3.0,   0.05,
 		"松前(松开油门)时 drift_extra_decel 的倍率. 0.3=松前时能耗只剩 30% 车滑得更远, 1.0=不变.", ""],
 	["__group", "松前 (松油门漂)"],
@@ -154,6 +154,12 @@ const PARAMS := [
 		"漂移超过最高速度时反向刹车力的强度. 实际施加 = 此值 × 超速比例 × 时间曲线(随漂移持续时间变化).", "drift_speed_brake_curve"],
 	["drift_counter_steer_break_time", "反打断漂秒数",  0.05, 1.5,   0.05,
 		"漂移中持续反向打方向超过此时长会自动退漂。", ""],
+	["drift_low_speed_push",      "入弯低速推力",       0.0,  60.0,  0.5,
+		"漂移中速度低于阈值时, 朝车头+原速度方向给予的推力(m/s²). 帮助低速入弯起速. 0=关闭.", "drift_low_speed_push_curve"],
+	["drift_low_speed_push_threshold", "低速推力阈值倍率", 0.5, 3.0,  0.05,
+		"速度低于(最低入漂车速 × 此值)时触发低速推力. 1.2=阈值为入漂速度的 120%.", ""],
+	["drift_low_speed_push_velocity_ratio", "速度方向占比", 0.0, 1.0, 0.05,
+		"推力中原速度方向的占比. 0=全部朝车头, 1=全部朝原速度方向, 0.4=车头60%+速度方向40%.", ""],
 	["drift_auto_exit_enabled",   "车正自动退漂",       0,    1,     1,
 		"1=车头摆正且无侧向速度时自动退出漂移; 0=只手动 Q/低速/超时退漂。", ""],
 	["drift_auto_exit_lat_speed", "自动退漂侧速阈值",   0.0,  10.0,  0.1,
@@ -801,6 +807,14 @@ const GRAPPLE_PARAMS := [
 		"绳子发出点相对 CarMesh 本地 Y. 正数=从车顶发出, 负数=车底.", ""],
 	["rope_origin_offset.z",         "绳子起点 Z(本地)",          -3.0, 3.0,   0.05,
 		"绳子发出点相对 CarMesh 本地 Z. 负数=车头(FBX 车头朝 -Z), 正数=车尾.", ""],
+	["rope_occlusion_fade",          "遮挡自动透明",              0, 1, 1,
+		"绳子遮挡赛车时自动变透明. 1=启用, 0=禁用.", ""],
+	["rope_occlusion_threshold",     "遮挡判定距离(米)",          0.1, 5.0, 0.1,
+		"绳子到'摄像机→赛车'视线的距离 < 此值时视为遮挡. 越大越容易触发透明.", ""],
+	["rope_occlusion_min_alpha",     "遮挡最低不透明度",          0.0, 1.0, 0.05,
+		"遮挡时绳子的最低不透明度. 0=完全透明, 0.15=微微可见(推荐), 1=不透明.", ""],
+	["rope_occlusion_fade_speed",    "透明过渡速度",              1.0, 30.0, 0.5,
+		"透明度变化速度. 越大越快切换透明/不透明. 推荐 8~15.", ""],
 
 	["__group", "增压充能电光"],
 	["__color", "电光颜色", "rope_charged_color", "grapple",
@@ -876,6 +890,28 @@ const GRAPPLE_PARAMS := [
 # 这一组参数比较特殊: 不是节点上的 @export, 而是 Godot 渲染管线的运行时设置
 # (Viewport / RenderingServer / 环境). 通过 _apply_graphics() 直接调用引擎 API
 # 修改值不写 cfg 中 [tune] 段还会写, 但 _bind_car 不读节点, 而是从 _graphics_values 读
+# 🪢 双人绳子 (CoopMode 的绳子物理参数) - kind="coop"
+# 参数作用在 CoopMode autoload 单例上
+const COOP_PARAMS := [
+	["__group", "双人模式"],
+	["coop_enabled",              "双人模式开关",         0,    1,     1,
+		"1=启用双人共玩模式(分屏+2P手柄). 需要重启场景生效. 按 L 键连接/断开绳子.", ""],
+	["__group", "绳子物理"],
+	["rope_length",               "绳子长度(米)",         5.0,  50.0,  1.0,
+		"两车之间绳子的自然长度. 超过此长度+弹性余量后开始施加拉力.", ""],
+	["rope_stiffness",            "绳子刚度(N/m)",        100.0, 5000.0, 50.0,
+		"弹簧系数. 越大绳子越硬(拉伸后回弹越猛). 推荐 500~1500.", ""],
+	["rope_damping",              "绳子阻尼",             0.0,  200.0,  5.0,
+		"阻尼系数. 防止绳子无限振荡. 越大越快稳定. 推荐 30~80.", ""],
+	["rope_elasticity",           "弹性余量(米)",         0.0,  10.0,   0.5,
+		"超过自然长度多少米后才开始施力. 0=一超过就拉; 2=有2米的松弛空间.", ""],
+	["rope_max_force",            "最大拉力(N)",          500.0, 20000.0, 100.0,
+		"绳子拉力上限. 防止极端拉伸时瞬间弹飞. 推荐 3000~8000.", ""],
+	["__group", "绳子视觉"],
+	["rope_visual_thickness",     "绳子粗细(米)",         0.02, 0.5,   0.01,
+		"绳子视觉渲染的粗细.", ""],
+]
+
 #
 # 设计目的: 让玩家不重启就能切画质, 4060 笔记本也能调低保流畅, 4080 桌面机可以拉满
 const GRAPHICS_PARAMS := [
@@ -938,12 +974,14 @@ const CURVE_PROPS := {
 	"friction_lat_speed_curve_normal":    {"target": "car"},
 	"friction_long_speed_curve_drift":    {"target": "car"},
 	"friction_lat_speed_curve_drift":     {"target": "car"},
+	"drift_extra_decel_curve":            {"target": "car"},
 	"drift_engage_curve":                 {"target": "car"},
 	"drift_disengage_curve":              {"target": "car"},
 	"drift_head_yaw_curve":               {"target": "car"},
 	"drift_body_tilt_curve":              {"target": "car"},
 	"drift_centripetal_curve":            {"target": "car"},
 	"drift_speed_brake_curve":            {"target": "car"},
+	"drift_low_speed_push_curve":         {"target": "car"},
 	"drift_auto_straighten_curve":        {"target": "car"},
 	"air_boost_curve":                    {"target": "car"},
 	"landing_boost_curve":                {"target": "car"},
@@ -976,12 +1014,14 @@ const LEGACY_USER_DIR_NAMES: Array[String] = [
 	"简单飞车试验场",       # 2026-05-12 定型稿改的新名
 ]
 
-## 返回 cfg 保存目录的绝对路径 (app_userdata\SimpleRacerLab)
-## 做法: 拿当前 user_data_dir (app_userdata\<config_name>), 上一层得到 app_userdata, 再拼别名
+## 返回 cfg 保存目录的绝对路径
+## 开发时 (编辑器/debug 运行): 用项目根目录, 方便 git 管理
+## 导出后: 用可执行文件所在目录, 确保可读写
 static func _stable_cfg_dir() -> String:
-	var current := OS.get_user_data_dir()            # 例: .../app_userdata/简单飞车试验场
-	var parent := current.get_base_dir()              # 例: .../app_userdata
-	return parent.path_join(STABLE_PROJECT_ALIAS)     # 例: .../app_userdata/SimpleRacerLab
+	if OS.has_feature("editor") or OS.is_debug_build():
+		return ProjectSettings.globalize_path("res://")
+	else:
+		return OS.get_executable_path().get_base_dir()
 
 static func _stable_cfg_path() -> String:
 	return _stable_cfg_dir().path_join("tune.cfg")
@@ -1184,6 +1224,24 @@ func _bind_car() -> void:
 			var v = _read_prop(ghook, prop)
 			if first_bind:
 				_defaults[prop] = v
+			if _rows.has(prop) and not cfg_keys.has(prop):
+				_rows[prop].slider.set_value_no_signal(float(v))
+				_rows[prop].spin.set_value_no_signal(float(v))
+
+	# CoopMode 参数 (双人绳子)
+	var coop = get_node_or_null("/root/CoopMode")
+	if coop:
+		for p in COOP_PARAMS:
+			if p.size() < 2:
+				continue
+			var prop: String = p[0]
+			if prop.begins_with("__"):
+				continue
+			if not prop in coop:
+				continue
+			var v = coop.get(prop)
+			if first_bind:
+				_defaults[prop] = float(v) if v != null else 0.0
 			if _rows.has(prop) and not cfg_keys.has(prop):
 				_rows[prop].slider.set_value_no_signal(float(v))
 				_rows[prop].spin.set_value_no_signal(float(v))
@@ -1392,26 +1450,70 @@ func _dispatch_apply(kind: String, prop: String, v: float) -> bool:
 	# 返回 true = 至少应用到一个目标; false = 失败. 用于 _load_from_file 收集失败列表.
 	match kind:
 		"fx":
-			return _apply_to(_get_drift_fx(), prop, v)
+			var ok: bool = _apply_to(_get_drift_fx(), prop, v)
+			# 双人模式: 同步 fx 参数到 2P 的 DriftFX
+			var coop = get_node_or_null("/root/CoopMode")
+			if coop and coop.get("_active") and coop.get("_car_2p"):
+				var fx_2p = coop._car_2p.get("drift_fx_node") if "drift_fx_node" in coop._car_2p else null
+				if fx_2p:
+					_apply_to(fx_2p, prop, v)
+			return ok
 		"cam":
-			return _apply_to(_get_camera(), prop, v)
+			var ok: bool = _apply_to(_get_camera(), prop, v)
+			# 双人模式: 同步 cam 参数到分屏摄像机
+			var coop = get_node_or_null("/root/CoopMode")
+			if coop and coop.get("_active"):
+				if coop.get("_camera_1p"):
+					_apply_to(coop._camera_1p, prop, v)
+				if coop.get("_camera_2p"):
+					_apply_to(coop._camera_2p, prop, v)
+			return ok
 		"car_mesh":
-			return _apply_to(_get_car_mesh(), prop, v)
+			var ok: bool = _apply_to(_get_car_mesh(), prop, v)
+			# 双人模式: 同步 car_mesh 参数到 2P 的 CarMesh
+			var coop = get_node_or_null("/root/CoopMode")
+			if coop and coop.get("_active") and coop.get("_car_2p"):
+				var mesh_2p = coop._car_2p.get_node_or_null("CarMesh")
+				if mesh_2p:
+					_apply_to(mesh_2p, prop, v)
+			return ok
 		"boost_fx":
 			# 应用到所有 BoostFX (玉麒麟 5 个 tailpipe 都同步)
 			var any_ok: bool = false
 			for fx in _get_boost_fx_all():
 				if _apply_to(fx, prop, v):
 					any_ok = true
+			# 双人模式: 同步 boost_fx 参数到 2P 的所有 BoostFX
+			var coop = get_node_or_null("/root/CoopMode")
+			if coop and coop.get("_active") and coop.get("_car_2p"):
+				var fx_2p_list: Array = []
+				_collect_boost_fx_recursive(coop._car_2p, fx_2p_list)
+				for fx_2p in fx_2p_list:
+					_apply_to(fx_2p, prop, v)
 			return any_ok
 		"grapple":
-			return _apply_to(_get_grapple_hook(), prop, v)
+			var ok: bool = _apply_to(_get_grapple_hook(), prop, v)
+			# 双人模式: 同步 grapple 参数到 2P 的 GrappleHook
+			var coop = get_node_or_null("/root/CoopMode")
+			if coop and coop.get("_active") and coop.get("_car_2p"):
+				var hook_2p = coop._car_2p.get_node_or_null("GrappleHook")
+				if hook_2p:
+					_apply_to(hook_2p, prop, v)
+			return ok
+		"coop":
+			var coop = get_node_or_null("/root/CoopMode")
+			return _apply_to(coop, prop, v)
 		"graphics":
 			# 图形设置直接走引擎 API, 不依赖 car 节点
 			_apply_graphics(prop, v)
 			return true
 		_:
-			return _apply_to(car, prop, v)
+			var ok: bool = _apply_to(car, prop, v)
+			# 双人模式: 同步参数到 2P 赛车 (两车 3C 完全一致)
+			var coop = get_node_or_null("/root/CoopMode")
+			if coop and coop.get("_active") and coop.get("_car_2p"):
+				_apply_to(coop._car_2p, prop, v)
+			return ok
 
 
 func _get_car_mesh() -> Node:
@@ -1929,6 +2031,11 @@ func _build_ui() -> void:
 	var grapple_list: VBoxContainer = _create_tab_page("🪝 钩索")
 	for p in GRAPPLE_PARAMS:
 		_add_param_row(grapple_list, p, "grapple")
+
+	# 🪢 绳子 Tab (CoopMode 双人模式绳子物理参数)
+	var coop_list: VBoxContainer = _create_tab_page("🪢 绳子")
+	for p in COOP_PARAMS:
+		_add_param_row(coop_list, p, "coop")
 
 	# 🖼️ 图形 Tab (kind="graphics", 直接调引擎 API, 不依赖任何节点)
 	# 用户可以实时切画质: 4060 笔记本调低保流畅, 4080 桌面机拉满
