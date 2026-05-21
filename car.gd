@@ -1084,6 +1084,8 @@ var _pending_landing_q_left: float = 0.0   # 预输入 Q 剩余有效秒数 (倒
 # 决定: 钩索期间是否抑制引擎力, 摩擦削减多少 (具体倍率/开关参数都在 GrappleHook.gd 里, 这里只读 flag)
 # 由 GrappleHook 通过 car.set("_grapple_active", true/false) 直接修改 (而不是走信号), 因为物理读取需要每帧实时
 var _grapple_active: bool = false
+# 绳子(CoopMode)摩擦削减倍率: 由 CoopMode 每帧设置, 1.0=正常, <1.0=削减摩擦(后车卡墙时被拉动更容易)
+var _rope_friction_mult: float = 1.0
 # 钩索系统节点引用 (由 _spawn_grapple_hook 在 _ready 后填入, 给 _read_input 路由空格键用)
 var _grapple_hook: Node = null
 # 钩索释放后车头摆正倒计时 (秒). GrappleHook._release() 设置此值, 每帧递减
@@ -1668,6 +1670,10 @@ func _reset_to_origin() -> void:
 	# 退出钩索状态
 	if _grapple_hook and _grapple_hook.has_method("force_release"):
 		_grapple_hook.call("force_release")
+	# 复位时清空绳子缠绕锚点 (防止复位后绳子还绕着旧路径)
+	var coop = get_node_or_null("/root/CoopMode")
+	if coop and coop.get("_rope_connected"):
+		coop._rope_wrap_points.clear()
 	# 出生/复位自带氮气
 	if spawn_nitro_enabled:
 		nitro_stock = mini(spawn_nitro_stock, max_nitro_stock)
@@ -2237,6 +2243,13 @@ func _apply_friction(delta: float) -> void:
 		var grapple_friction_mult: float = float(_grapple_hook.get("friction_mult_during_pull"))
 		long_k *= grapple_friction_mult
 		lat_k  *= grapple_friction_mult
+
+	# === 绳子(CoopMode)摩擦削减 ===
+	# 后车被绳子拉着卡墙时, CoopMode 会设置 _rope_friction_mult < 1.0
+	# 降低摩擦让后车能被前车拉动, 不至于摩擦把拉力完全吃掉
+	if _rope_friction_mult < 1.0:
+		long_k *= _rope_friction_mult
+		lat_k  *= _rope_friction_mult
 
 	# 沿各自速度分量反方向施加冲量
 	var long_impulse: Vector3 = -forward * v_long * long_k * delta

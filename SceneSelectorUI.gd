@@ -12,6 +12,7 @@ extends CanvasLayer
 # UI 节点
 var _toggle_btn: Button          # 右上角"地图"按钮
 var _panel: PanelContainer        # 列表面板 (展开时显示)
+var _scroll: ScrollContainer      # 滚动容器 (让列表可滚动)
 var _list_vbox: VBoxContainer     # 列表内容 vbox
 var _expanded: bool = false       # 列表是否展开
 
@@ -98,10 +99,20 @@ func _build_ui() -> void:
 	var sep := HSeparator.new()
 	vb.add_child(sep)
 
+	# 滚动容器 (让地图列表在屏幕内全部可见, 超出时可滚动)
+	_scroll = ScrollContainer.new()
+	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	# 设置一个默认最小高度, _relayout 中会根据屏幕大小动态调整
+	_scroll.custom_minimum_size = Vector2(300, 400)
+	vb.add_child(_scroll)
+
 	# 列表本体
 	_list_vbox = VBoxContainer.new()
 	_list_vbox.add_theme_constant_override("separation", 4)
-	vb.add_child(_list_vbox)
+	_list_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_scroll.add_child(_list_vbox)
 
 	_rebuild_track_buttons()
 
@@ -426,6 +437,12 @@ func _relayout() -> void:
 	if btn_size.x <= 0.0:
 		btn_size = Vector2(80, 32)
 	_toggle_btn.position = Vector2(vp.x - btn_size.x - 12, 12)
+	# 动态设置滚动容器高度 = 屏幕高度的 80% 减去标题/按钮占用的空间
+	var max_scroll_h: float = vp.y * 0.80 - btn_size.y - 80.0
+	if max_scroll_h < 200.0:
+		max_scroll_h = 200.0
+	if _scroll:
+		_scroll.custom_minimum_size.y = int(max_scroll_h)
 	# 面板: 按钮下方
 	if _panel.visible:
 		# 等一帧让 PanelContainer 算出真实尺寸, 再贴到右上
