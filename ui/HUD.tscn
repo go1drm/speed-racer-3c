@@ -1,6 +1,6 @@
 [gd_scene load_steps=6 format=3 uid="uid://dhud0qqcar02"]
 
-[ext_resource type="Script" path="res://HUD.gd" id="1_hud"]
+[ext_resource type="Script" path="res://ui/HUD.gd" id="1_hud"]
 [ext_resource type="Texture2D" path="res://assets/ui/boost_flame.png" id="2_flame"]
 
 [sub_resource type="StyleBoxFlat" id="SBFlatBG"]

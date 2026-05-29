@@ -3684,7 +3684,7 @@ func _on_clear_pressed() -> void:
 
 func _on_back_pressed() -> void:
 	# 切回主场景 (qinghuaci)
-	get_tree().change_scene_to_file("res://track_qinghuaci.tscn")
+	get_tree().change_scene_to_file("res://tracks/track_qinghuaci.tscn")
 
 
 # ============================================================

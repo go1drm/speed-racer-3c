@@ -1,6 +1,6 @@
 [gd_scene load_steps=34 format=3 uid="uid://bfxboost01car"]
 
-[ext_resource type="Script" path="res://BoostFX.gd" id="1_fx"]
+[ext_resource type="Script" path="res://fx/BoostFX.gd" id="1_fx"]
 
 ; ============================================================
 ;  喷射粒子特效 (v2: 细长焰柱 + 星星散粒)

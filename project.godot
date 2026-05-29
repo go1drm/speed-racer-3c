@@ -15,18 +15,18 @@ compatibility/default_parent_skeleton_in_mesh_instance_3d=true
 [application]
 
 config/name="简单飞车试验场"
-run/main_scene="res://track_qinghuaci.tscn"
+run/main_scene="res://tracks/track_qinghuaci.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
 config/icon="res://icon.svg"
 
 [autoload]
 
-TrackSwitcher="*res://TrackSwitcher.gd"
-CarSwitcher="*res://CarSwitcher.gd"
-SceneSelectorUI="*res://SceneSelectorUI.gd"
+TrackSwitcher="*res://system/TrackSwitcher.gd"
+CarSwitcher="*res://system/CarSwitcher.gd"
+SceneSelectorUI="*res://ui/SceneSelectorUI.gd"
 TrackRunnerState="*res://track_editor/TrackRunnerState.gd"
-CoopMode="*res://CoopMode.gd"
-JoypadDebug="*res://JoypadDebug.gd"
+CoopMode="*res://core/CoopMode.gd"
+JoypadDebug="*res://system/JoypadDebug.gd"
 
 [debug]
 

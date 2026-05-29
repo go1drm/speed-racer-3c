@@ -43,6 +43,50 @@ var rope_wrap_max_anchors: int = 20         ## 最大缠绕锚点数量
 var rope_wrap_min_spacing: float = 2.0      ## 锚点之间的最小间距 (米), 防止重复添加
 var rope_wrap_min_seg_len: float = 0.5      ## 最短段检测阈值 (米), 太短的段不检测
 
+## ============================================================
+## 绳子模式2: 距离档位系统 (5档颜色 + 效果)
+## ============================================================
+## 模式2总开关 (由 Tuner 控制)
+var rope_mode2_enabled: bool = false
+## 5档距离阈值 (米): 两车距离 < 阈值[i] 则为第 i+1 档
+## 档位1(最近/绿色) → 档位5(最远/红色)
+var rope_mode2_dist_1: float = 8.0    ## 距离 < 此值 = 1档(绿色)
+var rope_mode2_dist_2: float = 15.0   ## 距离 < 此值 = 2档(黄绿)
+var rope_mode2_dist_3: float = 22.0   ## 距离 < 此值 = 3档(黄色)
+var rope_mode2_dist_4: float = 30.0   ## 距离 < 此值 = 4档(橙色)
+## 距离 >= dist_4 = 5档(红色)
+
+## 1档效果: 自动集气 (每秒给两车增加 charge 点数)
+var rope_mode2_tier1_charge_per_sec: float = 30.0
+## 2档效果: 两车获得速度加成倍率
+var rope_mode2_tier2_speed_mult: float = 1.05
+## 3档效果: 无特殊效果 (中性档位)
+## 4档效果: 后车获得轻微前车拉力
+var rope_mode2_tier4_pull_force: float = 500.0
+## 5档效果: 后车获得强力前车拉力 (类似原版绳子拉扯)
+var rope_mode2_tier5_pull_force: float = 1500.0
+
+## 5档颜色 (由 Tuner 控制, 默认绿→红渐变)
+var rope_mode2_color_1: Color = Color(0.0, 1.0, 0.2, 1.0)   ## 1档: 绿色
+var rope_mode2_color_2: Color = Color(0.5, 1.0, 0.0, 1.0)   ## 2档: 黄绿
+var rope_mode2_color_3: Color = Color(1.0, 1.0, 0.0, 1.0)   ## 3档: 黄色
+var rope_mode2_color_4: Color = Color(1.0, 0.5, 0.0, 1.0)   ## 4档: 橙色
+var rope_mode2_color_5: Color = Color(1.0, 0.1, 0.0, 1.0)   ## 5档: 红色
+
+## 内部状态: 当前档位 (1~5, 0=未激活)
+var _rope_mode2_current_tier: int = 0
+
+## 模式2集气粒子特效参数 (Tuner 可调)
+var rope_mode2_charge_particle_count: int = 40       ## 粒子数量
+var rope_mode2_charge_particle_radius: float = 2.5   ## 发射球半径 (粒子从多远聚合)
+var rope_mode2_charge_particle_speed: float = 3.0    ## 粒子聚合速度
+var rope_mode2_charge_particle_size: float = 0.08    ## 粒子大小
+var rope_mode2_charge_particle_color: Color = Color(0.3, 0.6, 1.0, 0.9)  ## 粒子颜色 (蓝色)
+
+## 内部状态: 集气粒子特效
+var _charge_particles_1p: GPUParticles3D = null
+var _charge_particles_2p: GPUParticles3D = null
+
 ## 绳子缠绕系统内部状态
 var _rope_wrap_points: Array[Vector3] = []  ## 绳子缠绕锚点列表 (沿墙面的拐点)
 var _rope_total_length: float = 0.0         ## 绳子当前总路径长度 (含缠绕)
@@ -117,7 +161,10 @@ func _physics_process(delta: float) -> void:
 		_update_follow(delta)
 	# 绳子物理
 	if _rope_connected and not _follow_active:
-		_apply_rope_physics(delta)
+		if rope_mode2_enabled:
+			_apply_rope_mode2(delta)
+		else:
+			_apply_rope_physics(delta)
 		_update_rope_visual()
 
 
@@ -183,7 +230,7 @@ func _find_car_recursive(node: Node) -> RigidBody3D:
 
 ## 实例化 2P 赛车
 func _spawn_2p_car() -> void:
-	var car_scene: PackedScene = load("res://car.tscn") as PackedScene
+	var car_scene: PackedScene = load("res://core/car.tscn") as PackedScene
 	if car_scene == null:
 		push_error("[CoopMode] 无法加载 car.tscn")
 		return
@@ -444,7 +491,7 @@ func _setup_split_screen() -> void:
 	vpc_2p.add_child(_viewport_2p)
 
 	# 为每个 viewport 创建摄像机 (使用与单人模式完全一致的 Camera3D.gd 脚本)
-	var cam_script: GDScript = load("res://Camera3D.gd") as GDScript
+	var cam_script: GDScript = load("res://core/Camera3D.gd") as GDScript
 	var car_mesh_1p: Node3D = _car_1p.get_node_or_null("CarMesh") if _car_1p else null
 	var car_mesh_2p: Node3D = _car_2p.get_node_or_null("CarMesh") if _car_2p else null
 
@@ -508,7 +555,7 @@ func _setup_dual_hud() -> void:
 	if _original_hud:
 		_original_hud.visible = false
 
-	var hud_scene: PackedScene = load("res://HUD.tscn") as PackedScene
+	var hud_scene: PackedScene = load("res://ui/HUD.tscn") as PackedScene
 	if hud_scene == null:
 		push_warning("[CoopMode] 无法加载 HUD.tscn, 跳过 HUD 适配")
 		return
@@ -743,12 +790,345 @@ func _toggle_rope() -> void:
 	else:
 		_rope_wrap_points.clear()
 		_cleanup_rope_visual()
+		_cleanup_charge_particles()
 		# 绳子断开时恢复两车摩擦
 		if _car_1p and "_rope_friction_mult" in _car_1p:
 			_car_1p.set("_rope_friction_mult", 1.0)
 		if _car_2p and "_rope_friction_mult" in _car_2p:
 			_car_2p.set("_rope_friction_mult", 1.0)
 		print("[CoopMode] 绳子已断开!")
+
+
+## ============================================================
+## 绳子模式2: 距离档位系统逻辑
+## ============================================================
+func _apply_rope_mode2(delta: float) -> void:
+	var pos_1p: Vector3 = _car_1p.global_position
+	var pos_2p: Vector3 = _car_2p.global_position
+
+	# ---- 0. 缠绕检测: 绳子不穿墙, 沿墙面缠绕 (与模式1共用) ----
+	_update_rope_wrap(pos_1p, pos_2p)
+
+	# ---- 1. 计算绳子总路径长度 (含缠绕锚点) ----
+	var path_points: Array[Vector3] = _get_rope_path(pos_1p, pos_2p)
+	_rope_total_length = 0.0
+	for i in range(path_points.size() - 1):
+		_rope_total_length += path_points[i].distance_to(path_points[i + 1])
+
+	# 使用绳子总路径长度作为距离判断依据 (含缠绕, 比直线距离更准确)
+	var dist: float = _rope_total_length
+
+	# ---- 2. 计算当前档位 (1~5) ----
+	var tier: int = 5  # 默认最远档
+	if dist < rope_mode2_dist_1:
+		tier = 1
+	elif dist < rope_mode2_dist_2:
+		tier = 2
+	elif dist < rope_mode2_dist_3:
+		tier = 3
+	elif dist < rope_mode2_dist_4:
+		tier = 4
+	_rope_mode2_current_tier = tier
+
+	# ---- 3. 根据档位施加效果 ----
+	match tier:
+		1:
+			# 1档: 自动集气 (两车都获得 charge)
+			_mode2_auto_charge(delta)
+			_mode2_reset_friction()
+		2:
+			# 2档: 速度加成 (给两车施加沿运动方向的推力)
+			_mode2_speed_boost(delta)
+			_mode2_reset_friction()
+		3:
+			# 3档: 中性, 无特殊效果
+			_mode2_reset_friction()
+		4:
+			# 4档: 后车获得轻微前车拉力
+			_ensure_charge_particles_emitting(false)
+			_mode2_rear_pull(delta, rope_mode2_tier4_pull_force)
+		5:
+			# 5档: 后车获得强力前车拉力
+			_ensure_charge_particles_emitting(false)
+			_mode2_rear_pull(delta, rope_mode2_tier5_pull_force)
+
+
+## 模式2辅助: 恢复两车摩擦为正常值 (1~3档不拉扯时调用)
+func _mode2_reset_friction() -> void:
+	if _car_1p and "_rope_friction_mult" in _car_1p:
+		_car_1p.set("_rope_friction_mult", 1.0)
+	if _car_2p and "_rope_friction_mult" in _car_2p:
+		_car_2p.set("_rope_friction_mult", 1.0)
+	# 非1档时停止集气粒子
+	if _rope_mode2_current_tier != 1:
+		_ensure_charge_particles_emitting(false)
+
+
+## 模式2效果: 自动集气 (1档)
+func _mode2_auto_charge(delta: float) -> void:
+	# 启动集气粒子特效
+	_ensure_charge_particles_emitting(true)
+
+	var charge_inc: float = rope_mode2_tier1_charge_per_sec * delta
+	# 给两辆车都增加 charge
+	for car in [_car_1p, _car_2p]:
+		if car == null:
+			continue
+		if "charge" in car and "charge_nitro_full" in car and "nitro_stock" in car and "max_nitro_stock" in car:
+			car.charge += charge_inc
+			# 检查是否集满一格
+			var _pending: int = car.get("_pending_nitro") if "_pending_nitro" in car else 0
+			while car.charge >= car.charge_nitro_full and car.nitro_stock + _pending < car.max_nitro_stock:
+				car.charge -= car.charge_nitro_full
+				car.nitro_stock += 1
+				car.emit_signal("nitro_stock_changed", car.nitro_stock, car.max_nitro_stock)
+			# 夹紧防溢出
+			if car.nitro_stock + _pending >= car.max_nitro_stock:
+				car.charge = minf(car.charge, car.charge_nitro_full - 1.0)
+			# 通知 HUD 更新集气槽
+			if car.has_signal("charge_changed"):
+				car.emit_signal("charge_changed", car.charge, car.charge_nitro_full)
+
+
+## 模式2效果: 速度加成 (2档)
+func _mode2_speed_boost(delta: float) -> void:
+	# 给两车沿运动方向施加一个小推力, 模拟速度加成
+	var boost_accel: float = (rope_mode2_tier2_speed_mult - 1.0) * 50.0  # 转换为加速度
+	for car in [_car_1p, _car_2p]:
+		if car == null:
+			continue
+		var vel: Vector3 = car.linear_velocity
+		if vel.length() > 1.0:
+			var push_dir: Vector3 = vel.normalized()
+			car.apply_central_force(push_dir * boost_accel * car.mass)
+
+
+## 模式2效果: 后车拉力 (4档/5档) - 复刻模式1的完整绳子物理
+## 包含: 沿路径拉力方向、弹簧阻尼、前后车分配、转向自由度、摩擦削减、卡墙处理
+func _mode2_rear_pull(delta: float, pull_force: float) -> void:
+	var pos_1p: Vector3 = _car_1p.global_position
+	var pos_2p: Vector3 = _car_2p.global_position
+
+	# ---- 1. 沿绳子路径计算各端拉力方向 (与模式1一致) ----
+	var path_points: Array[Vector3] = _get_rope_path(pos_1p, pos_2p)
+
+	# 1P 端: 从 1P 指向第一个有效节点 (跳过距离太近的锚点)
+	var dir_1p: Vector3 = Vector3.ZERO
+	for pi in range(1, path_points.size()):
+		var diff: Vector3 = path_points[pi] - path_points[0]
+		if diff.length() > 0.5:
+			dir_1p = diff.normalized()
+			break
+	if dir_1p == Vector3.ZERO:
+		dir_1p = (path_points[path_points.size() - 1] - path_points[0]).normalized()
+
+	# 2P 端: 从 2P 指向最后一个有效节点 (跳过距离太近的锚点)
+	var dir_2p: Vector3 = Vector3.ZERO
+	var last_idx: int = path_points.size() - 1
+	for pi in range(last_idx - 1, -1, -1):
+		var diff: Vector3 = path_points[pi] - path_points[last_idx]
+		if diff.length() > 0.5:
+			dir_2p = diff.normalized()
+			break
+	if dir_2p == Vector3.ZERO:
+		dir_2p = (path_points[0] - path_points[last_idx]).normalized()
+
+	# ---- 2. 弹簧力 + 阻尼力 (使用配置的 pull_force 作为基础力) ----
+	var spring_force: float = pull_force
+
+	# 阻尼力: 沿绳子方向的相对速度
+	var rel_vel_1p: float = _car_1p.linear_velocity.dot(dir_1p)
+	var rel_vel_2p: float = _car_2p.linear_velocity.dot(dir_2p)
+	var damping_1p: float = -rope_damping * rel_vel_1p * 0.5
+	var damping_2p: float = -rope_damping * rel_vel_2p * 0.5
+
+	# ---- 3. 判断谁是前车/后车 ----
+	var v1_pulling_away: float = _car_1p.linear_velocity.dot(-dir_1p)
+	var v2_pulling_away: float = _car_2p.linear_velocity.dot(-dir_2p)
+
+	var force_1p: float
+	var force_2p: float
+
+	if v1_pulling_away > v2_pulling_away:
+		# 1P 是前车, 2P 是后车
+		force_1p = clampf((spring_force + damping_1p) * rope_front_pull_ratio, 0.0, rope_max_force)
+		force_2p = clampf((spring_force + damping_2p) * rope_rear_pull_ratio, 0.0, rope_max_force)
+	else:
+		# 2P 是前车, 1P 是后车
+		force_1p = clampf((spring_force + damping_1p) * rope_rear_pull_ratio, 0.0, rope_max_force)
+		force_2p = clampf((spring_force + damping_2p) * rope_front_pull_ratio, 0.0, rope_max_force)
+
+	# ---- 4. 施加力 (后车有转向自由度) ----
+	if v1_pulling_away > v2_pulling_away:
+		# 1P 是前车: 纯中心力回拉
+		_car_1p.apply_central_force(dir_1p * force_1p)
+		# 2P 是后车: 带转向自由度
+		_apply_force_with_steer_freedom(_car_2p, dir_2p * force_2p, rope_rear_steer_freedom)
+	else:
+		# 2P 是前车: 纯中心力回拉
+		_car_2p.apply_central_force(dir_2p * force_2p)
+		# 1P 是后车: 带转向自由度
+		_apply_force_with_steer_freedom(_car_1p, dir_1p * force_1p, rope_rear_steer_freedom)
+
+	# ---- 5. 后车摩擦削减 + 卡墙处理 ----
+	var rear_car: RigidBody3D
+	var front_car: RigidBody3D
+	var rear_pull_dir: Vector3
+	if v1_pulling_away > v2_pulling_away:
+		rear_car = _car_2p
+		front_car = _car_1p
+		rear_pull_dir = dir_2p
+	else:
+		rear_car = _car_1p
+		front_car = _car_2p
+		rear_pull_dir = dir_1p
+
+	# 摩擦削减: 拉力越大摩擦越小
+	var stretch: float = _rope_total_length - rope_length - rope_elasticity
+	var stretch_ratio: float = clampf(stretch / maxf(rope_length, 1.0), 0.0, 1.0)
+	var target_friction: float = lerpf(1.0, rope_friction_mult_when_pulled, stretch_ratio)
+	rear_car.set("_rope_friction_mult", target_friction)
+
+	# 卡墙处理: 后车速度低于阈值时
+	var rear_speed_kmh: float = rear_car.linear_velocity.length() * 3.6
+	if rear_speed_kmh < rope_stuck_speed_threshold:
+		# (a) 抬升力: 让后车脱离地面摩擦
+		rear_car.apply_central_force(Vector3.UP * rear_car.mass * 5.0)
+		# (b) 墙面滑动修正: 检测后车前方是否有墙, 将拉力修正为沿墙面切线方向
+		var space_state: PhysicsDirectSpaceState3D = rear_car.get_world_3d().direct_space_state
+		if space_state:
+			var ray_start: Vector3 = rear_car.global_position
+			var ray_end: Vector3 = ray_start + rear_pull_dir * 3.0
+			var query := PhysicsRayQueryParameters3D.create(ray_start, ray_end)
+			query.collision_mask = 1  # 只检测静态环境
+			query.exclude = [_car_1p.get_rid(), _car_2p.get_rid()]
+			var result: Dictionary = space_state.intersect_ray(query)
+			if result.size() > 0:
+				# 前方有墙! 将拉力投影到墙面切线方向
+				var wall_normal: Vector3 = result["normal"]
+				var slide_dir: Vector3 = rear_pull_dir - wall_normal * rear_pull_dir.dot(wall_normal)
+				if slide_dir.length() > 0.1:
+					slide_dir = slide_dir.normalized()
+					var slide_force: float = rear_car.mass * 15.0
+					rear_car.apply_central_force(slide_dir * slide_force)
+
+	# 前车保持正常摩擦
+	front_car.set("_rope_friction_mult", 1.0)
+
+
+## ============================================================
+## 模式2集气粒子特效: 蓝色粒子聚合效果
+## ============================================================
+
+## 创建单个车的集气粒子 (蓝色粒子从外向内聚合到车身)
+func _create_charge_particle_for_car(car: RigidBody3D) -> GPUParticles3D:
+	var p := GPUParticles3D.new()
+	p.name = "CoopChargeParticles"
+	p.amount = rope_mode2_charge_particle_count
+	p.lifetime = 0.8
+	p.emitting = false
+	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	p.explosiveness = 0.0
+	p.randomness = 0.3
+
+	# 粒子 mesh: 小球
+	var sm := SphereMesh.new()
+	sm.radius = rope_mode2_charge_particle_size
+	sm.height = rope_mode2_charge_particle_size * 2.0
+	sm.radial_segments = 6
+	sm.rings = 3
+	p.draw_pass_1 = sm
+
+	# 材质: 蓝色发光半透明 (加法混合)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = rope_mode2_charge_particle_color
+	mat.emission_enabled = true
+	mat.emission = Color(0.2, 0.5, 1.0, 1.0)
+	mat.emission_energy_multiplier = 6.0
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	p.material_override = mat
+
+	# 粒子处理材质: 球形发射 + 负速度 (向内聚合)
+	var proc := ParticleProcessMaterial.new()
+	proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	proc.emission_sphere_radius = rope_mode2_charge_particle_radius
+	# 负方向 = 粒子从球面向中心聚合
+	proc.direction = Vector3(0, 0, 0)
+	proc.spread = 180.0
+	# 使用 attractor 效果: 初始速度向外, 但被重力拉回中心
+	# 实际做法: 初始速度为负 (radial_velocity) 让粒子向内飞
+	proc.radial_velocity_min = -rope_mode2_charge_particle_speed
+	proc.radial_velocity_max = -rope_mode2_charge_particle_speed * 0.6
+	proc.initial_velocity_min = 0.0
+	proc.initial_velocity_max = 0.5
+	proc.gravity = Vector3(0, 0.5, 0)  # 轻微上浮感
+	proc.scale_min = 0.5
+	proc.scale_max = 1.2
+	# 粒子颜色渐变: 从外到内越来越亮
+	proc.color = rope_mode2_charge_particle_color
+	# 生命周期内缩小 (到达中心时消失)
+	var scale_curve := CurveTexture.new()
+	var curve := Curve.new()
+	curve.add_point(Vector2(0.0, 1.0))   # 出生时正常大小
+	curve.add_point(Vector2(0.7, 0.8))   # 中途略缩
+	curve.add_point(Vector2(1.0, 0.0))   # 到达中心时消失
+	scale_curve.curve = curve
+	proc.scale_curve = scale_curve
+	# 透明度渐变: 出生时半透明, 中间最亮, 消失时淡出
+	var alpha_curve := CurveTexture.new()
+	var a_curve := Curve.new()
+	a_curve.add_point(Vector2(0.0, 0.3))  # 出生时较淡
+	a_curve.add_point(Vector2(0.4, 1.0))  # 中间最亮
+	a_curve.add_point(Vector2(1.0, 0.0))  # 消失
+	alpha_curve.curve = a_curve
+	proc.alpha_curve = alpha_curve
+
+	p.process_material = proc
+
+	# 挂载到车身上
+	car.add_child(p)
+	p.position = Vector3(0, 0.8, 0)  # 稍微抬高到车身中部
+
+	return p
+
+
+## 确保集气粒子处于正确的发射状态
+func _ensure_charge_particles_emitting(emitting: bool) -> void:
+	# 1P 粒子
+	if _car_1p:
+		if _charge_particles_1p == null and emitting:
+			_charge_particles_1p = _create_charge_particle_for_car(_car_1p)
+		if _charge_particles_1p and _charge_particles_1p.emitting != emitting:
+			_charge_particles_1p.emitting = emitting
+	# 2P 粒子
+	if _car_2p:
+		if _charge_particles_2p == null and emitting:
+			_charge_particles_2p = _create_charge_particle_for_car(_car_2p)
+		if _charge_particles_2p and _charge_particles_2p.emitting != emitting:
+			_charge_particles_2p.emitting = emitting
+
+
+## 清理集气粒子 (绳子断开或模式切换时调用)
+func _cleanup_charge_particles() -> void:
+	if _charge_particles_1p and is_instance_valid(_charge_particles_1p):
+		_charge_particles_1p.queue_free()
+	_charge_particles_1p = null
+	if _charge_particles_2p and is_instance_valid(_charge_particles_2p):
+		_charge_particles_2p.queue_free()
+	_charge_particles_2p = null
+
+
+## 获取模式2当前档位对应的颜色
+func _get_mode2_tier_color() -> Color:
+	match _rope_mode2_current_tier:
+		1: return rope_mode2_color_1
+		2: return rope_mode2_color_2
+		3: return rope_mode2_color_3
+		4: return rope_mode2_color_4
+		5: return rope_mode2_color_5
+		_: return rope_mode2_color_3
 
 
 ## 绳子物理: 非对称 + 缠绕 + 后车转向自由度
@@ -915,8 +1295,10 @@ func _update_rope_wrap(pos_1p: Vector3, pos_2p: Vector3) -> void:
 	if space_state == null:
 		return
 
+	var exclude_rids: Array[RID] = [_car_1p.get_rid(), _car_2p.get_rid()]
+
 	# ---- 添加新锚点: 多次迭代, 直到所有段都不穿墙或达到迭代上限 ----
-	var max_total_iterations: int = 30  # 总迭代上限 (防止极端情况死循环)
+	var max_total_iterations: int = 50  # 总迭代上限 (防止极端情况死循环)
 	var total_iterations: int = 0
 	var found_collision: bool = true
 
@@ -927,45 +1309,71 @@ func _update_rope_wrap(pos_1p: Vector3, pos_2p: Vector3) -> void:
 		for i in range(path.size() - 1):
 			var seg_start: Vector3 = path[i]
 			var seg_end: Vector3 = path[i + 1]
+			var seg_len: float = seg_start.distance_to(seg_end)
 			# 跳过太短的段
-			if seg_start.distance_to(seg_end) < rope_wrap_min_seg_len:
+			if seg_len < rope_wrap_min_seg_len:
 				continue
 
+			# 双向射线检测: 正向 + 反向, 确保不遗漏穿墙
 			var query := PhysicsRayQueryParameters3D.create(seg_start, seg_end)
 			query.collision_mask = 1  # 只检测静态环境 (layer 1)
-			query.exclude = [_car_1p.get_rid(), _car_2p.get_rid()]
+			query.exclude = exclude_rids
 			var result: Dictionary = space_state.intersect_ray(query)
+
+			# 如果正向没检测到, 尝试反向
+			var hit_pos: Vector3
+			var hit_normal: Vector3
+			var has_hit: bool = false
 			if result.size() > 0:
-				var hit_pos: Vector3 = result["position"]
-				var hit_normal: Vector3 = result["normal"]
+				hit_pos = result["position"]
+				hit_normal = result["normal"]
+				has_hit = true
+			else:
+				# 反向射线: seg_end → seg_start
+				var rev_query := PhysicsRayQueryParameters3D.create(seg_end, seg_start)
+				rev_query.collision_mask = 1
+				rev_query.exclude = exclude_rids
+				var rev_result: Dictionary = space_state.intersect_ray(rev_query)
+				if rev_result.size() > 0:
+					hit_pos = rev_result["position"]
+					hit_normal = rev_result["normal"]
+					has_hit = true
+
+			if has_hit:
 
 				# 计算锚点位置: 碰撞点沿法线偏移
-				var actual_offset: float = rope_wrap_offset
-				var anchor: Vector3 = hit_pos + hit_normal * actual_offset
-				# Y 坐标约束
-				anchor.y = clampf(anchor.y, minf(seg_start.y, seg_end.y) - 1.0, maxf(seg_start.y, seg_end.y) + 1.0)
+				var anchor: Vector3 = hit_pos + hit_normal * rope_wrap_offset
 
-				# 二次验证: 确保锚点不在墙内
-				var verify_query := PhysicsRayQueryParameters3D.create(anchor, anchor + hit_normal * 1.0)
-				verify_query.collision_mask = 1
-				verify_query.exclude = [_car_1p.get_rid(), _car_2p.get_rid()]
-				var verify_result: Dictionary = space_state.intersect_ray(verify_query)
-				if verify_result.size() > 0:
-					# 锚点在墙内, 使用更大偏移 (至少 2m) 确保脱离墙体
-					anchor = anchor + hit_normal * maxf(rope_wrap_offset * 2.0, 2.0)
+				# 确保锚点不在墙内: 从锚点沿法线方向射线检测
+				var inside_check := PhysicsRayQueryParameters3D.create(anchor, anchor + hit_normal * 0.5)
+				inside_check.collision_mask = 1
+				inside_check.exclude = exclude_rids
+				# 反向检测: 从锚点向墙内射线, 如果命中说明锚点在墙外(正确)
+				var reverse_check := PhysicsRayQueryParameters3D.create(anchor, anchor - hit_normal * 0.5)
+				reverse_check.collision_mask = 1
+				reverse_check.exclude = exclude_rids
+				var reverse_result: Dictionary = space_state.intersect_ray(reverse_check)
+				if reverse_result.size() == 0:
+					# 从锚点向墙内射线没命中, 说明锚点可能在墙内, 增大偏移
+					anchor = hit_pos + hit_normal * (rope_wrap_offset * 2.5)
 
-				# 三次验证: 从锚点向两端射线, 确保锚点位置合理
-				# 如果从 seg_start 到 anchor 仍然穿墙, 说明锚点位置不对, 需要更大偏移
-				var check_to_anchor := PhysicsRayQueryParameters3D.create(seg_start, anchor)
-				check_to_anchor.collision_mask = 1
-				check_to_anchor.exclude = [_car_1p.get_rid(), _car_2p.get_rid()]
-				var check_result: Dictionary = space_state.intersect_ray(check_to_anchor)
-				if check_result.size() > 0:
-					# 从起点到锚点仍然穿墙, 用碰撞点作为新的锚点基础
-					var new_hit: Vector3 = check_result["position"]
-					var new_normal: Vector3 = check_result["normal"]
-					anchor = new_hit + new_normal * rope_wrap_offset
-					anchor.y = clampf(anchor.y, minf(seg_start.y, seg_end.y) - 1.0, maxf(seg_start.y, seg_end.y) + 1.0)
+				# 双向验证: 确保 seg_start→anchor 和 anchor→seg_end 都不穿墙
+				# 如果 seg_start→anchor 穿墙, 在碰撞点处再加一个锚点
+				var check_start := PhysicsRayQueryParameters3D.create(seg_start, anchor)
+				check_start.collision_mask = 1
+				check_start.exclude = exclude_rids
+				var check_start_result: Dictionary = space_state.intersect_ray(check_start)
+				if check_start_result.size() > 0:
+					# seg_start→anchor 仍穿墙, 用新碰撞点重新计算锚点
+					var new_hit_pos: Vector3 = check_start_result["position"]
+					var new_hit_normal: Vector3 = check_start_result["normal"]
+					anchor = new_hit_pos + new_hit_normal * rope_wrap_offset
+					# 再次反向验证
+					var rv2 := PhysicsRayQueryParameters3D.create(anchor, anchor - new_hit_normal * 0.5)
+					rv2.collision_mask = 1
+					rv2.exclude = exclude_rids
+					if space_state.intersect_ray(rv2).size() == 0:
+						anchor = new_hit_pos + new_hit_normal * (rope_wrap_offset * 2.5)
 
 				# 避免与已有锚点太近 (防止重复添加)
 				var too_close: bool = false
@@ -981,18 +1389,21 @@ func _update_rope_wrap(pos_1p: Vector3, pos_2p: Vector3) -> void:
 					close_anchor_idx = -1  # 不能移动端点
 
 				if not too_close:
-					# 插入到对应位置 (path[0]=1P, 所以锚点索引 = i-1 对应 _rope_wrap_points)
-					var insert_idx: int = clampi(i - 1, 0, _rope_wrap_points.size())
-					# 但如果 i=0 (1P到第一个节点穿墙), 插入到开头
-					if i == 0:
-						insert_idx = 0
+					# 正确的插入位置: path 中第 i 段穿墙 (path[i]→path[i+1])
+					# path = [1P, anchor0, anchor1, ..., anchorN, 2P]
+					# 第 i 段对应 _rope_wrap_points 中的第 i 个位置 (在第 i 个锚点之前插入)
+					# 但 path[0]=1P 不是锚点, 所以实际插入位置 = i
+					var insert_idx: int = clampi(i, 0, _rope_wrap_points.size())
 					_rope_wrap_points.insert(insert_idx, anchor)
 					found_collision = true
 					total_iterations += 1
 					break  # 重新从头检测所有段
 				elif close_anchor_idx >= 0:
-					# 附近已有锚点但绳子仍穿墙 → 将已有锚点向法线方向推远
-					_rope_wrap_points[close_anchor_idx] = _rope_wrap_points[close_anchor_idx] + hit_normal * rope_wrap_offset
+					# 附近已有锚点但绳子仍穿墙 → 将已有锚点移动到新计算的位置
+					# (比简单推远更准确)
+					var old_anchor: Vector3 = _rope_wrap_points[close_anchor_idx]
+					var new_anchor: Vector3 = (old_anchor + anchor) * 0.5 + hit_normal * rope_wrap_offset * 0.5
+					_rope_wrap_points[close_anchor_idx] = new_anchor
 					found_collision = true
 					total_iterations += 1
 					break  # 重新从头检测
@@ -1003,7 +1414,6 @@ func _update_rope_wrap(pos_1p: Vector3, pos_2p: Vector3) -> void:
 	_try_unwrap_points(pos_1p, pos_2p, space_state)
 
 	# ---- 最终验证: 确保绳子路径中没有穿墙段 ----
-	# 如果仍有穿墙段, 标记绳子为"穿墙状态" (物理层可以据此调整行为)
 	var final_path: Array[Vector3] = _get_rope_path(pos_1p, pos_2p)
 	_rope_has_penetration = false
 	for i in range(final_path.size() - 1):
@@ -1011,11 +1421,18 @@ func _update_rope_wrap(pos_1p: Vector3, pos_2p: Vector3) -> void:
 		var seg_end: Vector3 = final_path[i + 1]
 		if seg_start.distance_to(seg_end) < 0.1:
 			continue
-		var query := PhysicsRayQueryParameters3D.create(seg_start, seg_end)
-		query.collision_mask = 1
-		query.exclude = [_car_1p.get_rid(), _car_2p.get_rid()]
-		var result: Dictionary = space_state.intersect_ray(query)
-		if result.size() > 0:
+		# 正向检测
+		var fq := PhysicsRayQueryParameters3D.create(seg_start, seg_end)
+		fq.collision_mask = 1
+		fq.exclude = exclude_rids
+		if space_state.intersect_ray(fq).size() > 0:
+			_rope_has_penetration = true
+			break
+		# 反向检测
+		var fq_rev := PhysicsRayQueryParameters3D.create(seg_end, seg_start)
+		fq_rev.collision_mask = 1
+		fq_rev.exclude = exclude_rids
+		if space_state.intersect_ray(fq_rev).size() > 0:
 			_rope_has_penetration = true
 			break
 
@@ -1029,6 +1446,8 @@ func _try_unwrap_points(pos_1p: Vector3, pos_2p: Vector3, space_state: PhysicsDi
 	if _rope_wrap_points.size() == 0:
 		return
 
+	var exclude_rids: Array[RID] = [_car_1p.get_rid(), _car_2p.get_rid()]
+
 	# 循环检查, 直到一轮中没有任何锚点被移除
 	var removed_any: bool = true
 	var max_iterations: int = _rope_wrap_points.size() + 5  # 安全上限防止死循环
@@ -1040,20 +1459,32 @@ func _try_unwrap_points(pos_1p: Vector3, pos_2p: Vector3, space_state: PhysicsDi
 		var path: Array[Vector3] = _get_rope_path(pos_1p, pos_2p)
 
 		# 从后往前遍历锚点 (倒序遍历, 移除时不影响前面的索引)
-		# path 中: index 0 = 1P, index 1~N = 锚点, index N+1 = 2P
-		# 锚点 i 对应 path[i+1], 其前一个节点是 path[i], 后一个节点是 path[i+2]
 		var anchor_idx: int = _rope_wrap_points.size() - 1
 		while anchor_idx >= 0:
 			var path_idx: int = anchor_idx + 1  # 锚点在 path 中的索引
 			var prev_node: Vector3 = path[path_idx - 1]  # 前一个节点 (1P 或上一个锚点)
 			var next_node: Vector3 = path[path_idx + 1]  # 后一个节点 (下一个锚点或 2P)
 
-			# 如果跳过这个锚点, 前后两个节点之间不穿墙, 就移除它
-			var query := PhysicsRayQueryParameters3D.create(prev_node, next_node)
-			query.collision_mask = 1
-			query.exclude = [_car_1p.get_rid(), _car_2p.get_rid()]
-			var result: Dictionary = space_state.intersect_ray(query)
-			if result.size() == 0:
+			# 双向射线检测: 确保跳过这个锚点后, 前后节点之间真的不穿墙
+			var can_remove: bool = true
+
+			# 正向: prev_node → next_node
+			if prev_node.distance_to(next_node) > 0.1:
+				var q1 := PhysicsRayQueryParameters3D.create(prev_node, next_node)
+				q1.collision_mask = 1
+				q1.exclude = exclude_rids
+				if space_state.intersect_ray(q1).size() > 0:
+					can_remove = false
+
+			# 反向: next_node → prev_node (捕获单面碰撞体的情况)
+			if can_remove and prev_node.distance_to(next_node) > 0.1:
+				var q2 := PhysicsRayQueryParameters3D.create(next_node, prev_node)
+				q2.collision_mask = 1
+				q2.exclude = exclude_rids
+				if space_state.intersect_ray(q2).size() > 0:
+					can_remove = false
+
+			if can_remove:
 				# 不穿墙了! 这个锚点不再需要, 移除
 				_rope_wrap_points.remove_at(anchor_idx)
 				removed_any = true
@@ -1130,13 +1561,22 @@ func _update_rope_visual() -> void:
 		seg_mesh.rotate_object_local(Vector3.RIGHT, deg_to_rad(90.0))
 		seg_mesh.scale = Vector3(1.0, seg_len, 1.0)
 
-	# 绳子颜色随拉伸程度变化 (松弛=金色, 拉紧=红色)
+	# 绳子颜色: 模式2用档位颜色, 模式1用拉伸程度变色
 	if _rope_mat:
-		var stretch_amount: float = _rope_total_length - rope_length
-		var tension: float = clampf(stretch_amount / maxf(rope_elasticity * 2.0, 1.0), 0.0, 1.0)
-		var col: Color = rope_color.lerp(Color(1.0, 0.2, 0.1), tension)
-		_rope_mat.albedo_color = col
-		_rope_mat.emission = col
+		if rope_mode2_enabled:
+			# 模式2: 根据档位显示对应颜色
+			var tier_col: Color = _get_mode2_tier_color()
+			_rope_mat.albedo_color = tier_col
+			_rope_mat.emission = tier_col
+			_rope_mat.emission_energy_multiplier = 1.5
+		else:
+			# 模式1: 颜色随拉伸程度变化 (松弛=金色, 拉紧=红色)
+			var stretch_amount: float = _rope_total_length - rope_length
+			var tension: float = clampf(stretch_amount / maxf(rope_elasticity * 2.0, 1.0), 0.0, 1.0)
+			var col: Color = rope_color.lerp(Color(1.0, 0.2, 0.1), tension)
+			_rope_mat.albedo_color = col
+			_rope_mat.emission = col
+			_rope_mat.emission_energy_multiplier = 0.5
 
 
 ## 清理绳子视觉

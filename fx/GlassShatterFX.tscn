@@ -1,6 +1,6 @@
 [gd_scene format=3 uid="uid://n46ipt4rw321"]
 
-[ext_resource type="Script" path="res://GlassShatterFX.gd" id="1_script"]
+[ext_resource type="Script" path="res://fx/GlassShatterFX.gd" id="1_script"]
 
 ; ============================================================
 ;  玻璃渣碎开特效 (撞墙瞬间在撞击点位播放)

@@ -6,8 +6,8 @@
 ;  旧 SUV 版本另存为 car_suv.tscn, F3 可切回
 ; ============================================================
 
-[ext_resource type="Script" path="res://car.gd" id="1_script"]
-[ext_resource type="PackedScene" uid="uid://dyuqilin00mesh" path="res://YuqilinMesh.tscn" id="3_mesh"]
+[ext_resource type="Script" path="res://core/car.gd" id="1_script"]
+[ext_resource type="PackedScene" uid="uid://dyuqilin00mesh" path="res://car_mesh/YuqilinMesh.tscn" id="3_mesh"]
 
 [sub_resource type="PhysicsMaterial" id="PM"]
 friction = 0.8

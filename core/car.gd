@@ -1,6 +1,8 @@
 extends RigidBody3D
 ## ============================================================
 ##  QQ飞车式车辆控制器 v3 —— 炸弹猫精调版
+
+const DriftSystemScript := preload("res://core/DriftSystem.gd")
 ##  操作：↑↓←→ 方向 · Q 点按入漂 · W 小喷退漂 · E 氮气
 ##  核心：点按Q入漂 → 方向键控制漂移角度 → 角度足够后按W退漂+小喷
 ##  集气公式：侧向滑移距离 × 基础率 + 车头角速度 × 权重
@@ -182,6 +184,57 @@ func _act(base_action: String) -> String:
 @export_range(0.0, 50.0, 0.5) var drift_centripetal_pull: float = 0.0     ## 漂移向心拉力系数(车头把速度方向带过去)
 ## 向心拉力与速度的耦合曲线: X=0→低速弯, X=1→drift_head_yaw_duration_ref 秒时的速度参考
 @export var drift_centripetal_curve: Curve                                ## 可选, 留空则线性
+
+# ---------------- QQ飞车漂移系统 (新) ----------------
+@export_group("QQ Speed Drift System")
+## QQ飞车漂移系统开关: true=使用QQ飞车力学模型, false=使用旧系统
+@export var qqspeed_drift_enabled: bool = false
+## 漂移视觉效果开关 (车身侧倾、yaw偏移)
+@export var qqspeed_drift_visual: bool = true
+## 起漂最低速度 (内部单位, 默认18)
+@export var qqsd_start_vec: float = 18.0
+## 高速漂退漂钳速
+@export var qqsd_end_vec_first: float = 50.0
+## 低速漂退漂钳速
+@export var qqsd_end_vec_second: float = 16.0
+## 侧滑摩擦系数 (漂移角越大减速越猛)
+@export_range(0.0, 5.0, 0.01) var qqsd_slid_fric_force: float = 1.2
+## 滚动摩擦系数 (漂移角越小减速越猛)
+@export_range(0.0, 5.0, 0.01) var qqsd_roll_fric_force: float = 1.0
+## 回扳判定角度 (度, 45°是黄金漂移角)
+@export_range(10.0, 90.0, 1.0) var qqsd_banner_angle_deg: float = 45.0
+## 方向键扭矩基础 (反扳模式)
+@export_range(0.0, 20.0, 0.1) var qqsd_dir_key_twist: float = 5.9
+## 反扳扭矩扣减量
+@export_range(0.0, 5.0, 0.1) var qqsd_dir_key_twist_param_a: float = 0.5
+## 反扳扭矩保底量
+@export_range(0.0, 5.0, 0.1) var qqsd_dir_key_twist_param_b: float = 1.5
+## 顺扳扭矩基础 (反按方向键回正)
+@export_range(0.0, 20.0, 0.1) var qqsd_banner_key_twist: float = 6.0
+## 顺扳扭矩下限扣减量
+@export_range(0.0, 5.0, 0.1) var qqsd_banner_key_twist_param_a: float = 1.2
+## 顺扳扭矩上限附加量
+@export_range(0.0, 5.0, 0.1) var qqsd_banner_key_twist_param_b: float = 0.0
+## 自动回正扭矩基础
+@export_range(0.0, 30.0, 0.1) var qqsd_banner_twist: float = 4.2
+## 自动回正扭矩增长指数
+@export_range(0.5, 3.0, 0.1) var qqsd_banner_twist_param_a: float = 1.3
+## 最大角速度上限 (rad/s)
+@export_range(0.5, 15.0, 0.1) var qqsd_max_wec: float = 3.5
+## 方向键助推力基础
+@export_range(0.0, 10.0, 0.1) var qqsd_dir_key_force: float = 1.5
+## 油门驱动力基础
+@export_range(0.0, 30.0, 0.5) var qqsd_dir_up_key_force: float = 10.0
+## 回扳侧推力基础
+@export_range(0.0, 20.0, 0.1) var qqsd_banner_vec_force: float = 6.0
+## 全松键反向力
+@export_range(0.0, 10.0, 0.1) var qqsd_release_key_force: float = 3.0
+## 撞墙速度衰减倍率 (0.5=打对折)
+@export_range(0.0, 1.0, 0.05) var qqsd_wall_crash_speed_mult: float = 0.5
+## 速度效果系数 (内部单位到游戏单位的转换)
+@export_range(0.1, 5.0, 0.1) var qqsd_vec_effect: float = 1.0
+## 角速度效果系数
+@export_range(0.1, 10.0, 0.1) var qqsd_wec_effect: float = 3.7
 
 # ---------------- 漂移触发与状态 ----------------
 @export_group("Drift")
@@ -590,7 +643,7 @@ func _act(base_action: String) -> String:
 ## 90°=正面撞(完全弹回), 0°=平行墙(完全擦过). 推荐 15~25°
 @export_range(0.0, 90.0, 1.0) var wall_grazing_angle_deg: float = 20.0
 ## 玻璃渣特效场景
-@export var glass_shatter_fx_scene: PackedScene = preload("res://GlassShatterFX.tscn")
+@export var glass_shatter_fx_scene: PackedScene = preload("res://fx/GlassShatterFX.tscn")
 ## 玻璃渣触发的最小撞击速度 (m/s) - 低于此速度的轻碰不出特效
 @export var glass_shatter_min_speed: float = 3.0
 
@@ -783,14 +836,14 @@ func _act(base_action: String) -> String:
 @onready var left_wheel: Node3D = get_node_or_null("CarMesh/suv2/wheel_frontLeft")
 
 @export var auto_spawn_hud: bool = true
-@export var hud_scene: PackedScene = preload("res://HUD.tscn")
-@export var fx_scene: PackedScene = preload("res://BoostFX.tscn")
-@export var drift_fx_scene: PackedScene = preload("res://DriftFX.tscn")
-@export var tuner_scene: PackedScene = preload("res://Tuner.tscn")
+@export var hud_scene: PackedScene = preload("res://ui/HUD.tscn")
+@export var fx_scene: PackedScene = preload("res://fx/BoostFX.tscn")
+@export var drift_fx_scene: PackedScene = preload("res://fx/DriftFX.tscn")
+@export var tuner_scene: PackedScene = preload("res://ui/Tuner.tscn")
 @export var auto_spawn_tuner: bool = true
 ## 钩索系统场景. spawn 在 car 节点下作为子节点, 通过 _grapple_active 状态字段
 ## 反向影响 car 物理 (引擎抑制 / 摩擦削减), 通过空格键 (project.godot 里的 grapple action) 触发
-@export var grapple_hook_scene: PackedScene = preload("res://GrappleHook.tscn")
+@export var grapple_hook_scene: PackedScene = preload("res://grapple/GrappleHook.tscn")
 @export var auto_spawn_grapple: bool = true
 
 # ---------------- 信号 ----------------
@@ -917,6 +970,9 @@ var _pending_nitro: int = 0      # 漂移期间累计待结算的氮气格(等�
 var fx_node: Node3D = null              # 第一个 BoostFX (兼容旧引用, 用于 play_boost / set_nitro_variant 等单点调用)
 var fx_nodes: Array[Node3D] = []        # 所有 BoostFX 实例 (按 tailpipe 数量挂多个)
 var drift_fx_node: Node3D = null
+
+# QQ飞车漂移系统实例
+var _drift_system: RefCounted = null
 
 # 撞墙检测
 var _last_frame_speed: float = 0.0
@@ -1120,6 +1176,9 @@ var _reset_freeze_frames: int = 0
 func _ready() -> void:
 	# 初始化 V2 默认曲线(玩家没设时给合理值)
 	_init_default_curves()
+	# 初始化 QQ飞车漂移系统
+	_drift_system = DriftSystemScript.new()
+	_sync_drift_system_params()
 	# 如果关键节点缺失, 至少把 Tuner 和 HUD 起来, 方便诊断/调整
 	if not car_mesh or not body_mesh:
 		push_error("[Car] 关键节点缺失! 车辆控制禁用, 但会启动 Tuner/HUD 以便诊断。")
@@ -1445,9 +1504,14 @@ func _physics_process(delta: float) -> void:
 	if on_ground:
 		# 注: 之前为修弯坡抖动加过 angular_velocity = Vector3.ZERO,
 		#     但配合 lock_rotation=true 一起会让 friction 失效, 已回滚.
-		_apply_engine_and_brake(delta)
-		_apply_friction(delta)
-		_apply_ground_stick(delta)
+		if qqspeed_drift_enabled and _drift_system != null and _drift_system.is_drifting:
+			# QQ飞车漂移系统: 漂移中由 DriftSystem 统一处理力和扭矩
+			_apply_qqspeed_drift(delta)
+			_apply_ground_stick(delta)
+		else:
+			_apply_engine_and_brake(delta)
+			_apply_friction(delta)
+			_apply_ground_stick(delta)
 
 	# 喷射推力: 无论空中/地面都施加(空中时按 boost_air_efficiency 缩放)
 	_apply_boost_thrust(delta)
@@ -1862,6 +1926,100 @@ func _init_default_curves() -> void:
 		c15.add_point(Vector2(0.8, 0.5))
 		c15.add_point(Vector2(1.0, 0.3))   # 接近顶速: 弱助推
 		uphill_assist_speed_curve = c15
+
+## 同步 QQ飞车漂移系统参数 (从 car 的 export 变量同步到 DriftSystem 实例)
+func _sync_drift_system_params() -> void:
+	if _drift_system == null:
+		return
+	_drift_system.start_vec = qqsd_start_vec
+	_drift_system.end_vec_first = qqsd_end_vec_first
+	_drift_system.end_vec_second = qqsd_end_vec_second
+	_drift_system.slid_fric_force = qqsd_slid_fric_force
+	_drift_system.roll_fric_force = qqsd_roll_fric_force
+	_drift_system.banner_angle_deg = qqsd_banner_angle_deg
+	_drift_system.dir_key_twist = qqsd_dir_key_twist
+	_drift_system.dir_key_twist_param_a = qqsd_dir_key_twist_param_a
+	_drift_system.dir_key_twist_param_b = qqsd_dir_key_twist_param_b
+	_drift_system.banner_key_twist = qqsd_banner_key_twist
+	_drift_system.banner_key_twist_param_a = qqsd_banner_key_twist_param_a
+	_drift_system.banner_key_twist_param_b = qqsd_banner_key_twist_param_b
+	_drift_system.banner_twist = qqsd_banner_twist
+	_drift_system.banner_twist_param_a = qqsd_banner_twist_param_a
+	_drift_system.max_wec = qqsd_max_wec
+	_drift_system.dir_key_force = qqsd_dir_key_force
+	_drift_system.dir_up_key_force = qqsd_dir_up_key_force
+	_drift_system.banner_vec_force = qqsd_banner_vec_force
+	_drift_system.release_key_force = qqsd_release_key_force
+	_drift_system.wall_crash_speed_mult = qqsd_wall_crash_speed_mult
+	_drift_system.vec_effect = qqsd_vec_effect
+	_drift_system.wec_effect = qqsd_wec_effect
+	_drift_system.visual_enabled = qqspeed_drift_visual
+
+## QQ飞车漂移物理: 每帧调用, 替代旧的 _apply_friction + _apply_engine_and_brake 中的漂移部分
+func _apply_qqspeed_drift(delta: float) -> void:
+	if _drift_system == null or not _drift_system.is_drifting:
+		return
+	# 同步参数 (Tuner 可能随时改)
+	_sync_drift_system_params()
+	# 准备输入
+	var v_horiz: Vector3 = linear_velocity
+	v_horiz.y = 0.0
+	var speed: float = v_horiz.length()
+	var forward: Vector3 = -car_mesh.global_transform.basis.z
+	forward.y = 0.0
+	if forward.length() > 0.001:
+		forward = forward.normalized()
+	var velocity_dir: Vector3 = Vector3.ZERO
+	if speed > 0.5:
+		velocity_dir = v_horiz.normalized()
+	else:
+		velocity_dir = forward
+	var shift_pressed: bool = Input.is_action_pressed(_act("drift"))
+	# 调用 DriftSystem 更新
+	var result: Dictionary = _drift_system.update(
+		delta, speed, forward, velocity_dir,
+		steer_input, throttle_input, shift_pressed, _is_airborne
+	)
+	# 处理退漂
+	if result["exit_drift"]:
+		var is_normal: bool = result["exit_normal"]
+		# 撞墙速度衰减
+		var wall_mult: float = result["wall_speed_mult"]
+		if wall_mult < 1.0:
+			linear_velocity *= wall_mult
+		# 退漂钳速
+		var clamp_spd: float = result["clamp_speed"]
+		if clamp_spd > 0.0:
+			var cur_h_speed: float = Vector3(linear_velocity.x, 0, linear_velocity.z).length()
+			if cur_h_speed > clamp_spd:
+				var ratio: float = clamp_spd / cur_h_speed
+				linear_velocity.x *= ratio
+				linear_velocity.z *= ratio
+		_drift_system.end_drift(is_normal)
+		_end_drift(is_normal, false, not is_normal)
+		return
+	# 施加力
+	# 沿速度方向的力 (加速/减速)
+	var force_along: float = result["force_along_velocity"]
+	if absf(force_along) > 0.001 and speed > 0.5:
+		apply_central_force(velocity_dir * force_along * mass)
+	elif absf(force_along) > 0.001:
+		apply_central_force(forward * force_along * mass)
+	# 侧向力 (回扳侧推)
+	var force_lat: float = result["force_lateral"]
+	if absf(force_lat) > 0.001:
+		var right: Vector3 = car_mesh.global_transform.basis.x
+		right.y = 0.0
+		if right.length() > 0.001:
+			right = right.normalized()
+		apply_central_force(right * force_lat * mass)
+	# 扭矩 → 直接旋转车头 (通过 angular_velocity 或直接旋转 car_mesh)
+	# QQ飞车的扭矩是控制车头旋转, 不是物理刚体扭矩
+	var torque_yaw: float = _drift_system.drift_angular_velocity
+	if absf(torque_yaw) > 0.001:
+		var yaw_rad: float = torque_yaw * delta
+		var new_basis: Basis = car_mesh.global_transform.basis.rotated(Vector3.UP, yaw_rad)
+		car_mesh.global_transform.basis = new_basis.orthonormalized()
 
 
 # ============================================================
@@ -2761,13 +2919,16 @@ func _update_visuals(delta: float) -> void:
 				var straighten_amount: float = minf(straighten_rate * delta, absf(slip_as))
 				turn_rad += straighten_amount * signf(slip_as)
 
-	var new_basis: Basis = car_mesh.global_transform.basis.rotated(
-		car_mesh.global_transform.basis.y, turn_rad
-	)
-	car_mesh.global_transform.basis = car_mesh.global_transform.basis.slerp(
-		new_basis, turn_speed * delta
-	)
-	car_mesh.global_transform = car_mesh.global_transform.orthonormalized()
+	# QQ飞车漂移系统: 漂移中车头旋转由 _apply_qqspeed_drift 中的 DriftSystem 控制
+	# 这里只处理非漂移状态的转向
+	if not (qqspeed_drift_enabled and _drift_system != null and _drift_system.is_drifting):
+		var new_basis: Basis = car_mesh.global_transform.basis.rotated(
+			car_mesh.global_transform.basis.y, turn_rad
+		)
+		car_mesh.global_transform.basis = car_mesh.global_transform.basis.slerp(
+			new_basis, turn_speed * delta
+		)
+		car_mesh.global_transform = car_mesh.global_transform.orthonormalized()
 
 	# ============================================================
 	# 【空中车头跟随速度方向 / 钩索切线对齐】(真实飞行物理 / Apex swing)
@@ -3016,6 +3177,9 @@ func _update_visuals(delta: float) -> void:
 	# 漂移氮气时, 侧倾视觉额外加成(更夸张的过弯姿态)
 	var tilt_nitro_mult: float = drift_nitro_body_tilt_mult if _is_drift_nitro() else 1.0
 	lean_drift = deg_to_rad(drift_body_tilt) * drift_dir * drift_intensity * tilt_time_k * tilt_nitro_mult * _counter_lean_factor
+	# QQ飞车漂移系统: 视觉开关关闭时不显示漂移侧倾和 yaw 偏移
+	if qqspeed_drift_enabled and not qqspeed_drift_visual:
+		lean_drift = 0.0
 	body_mesh.rotation.z = lerp(body_mesh.rotation.z, lean_base + lean_drift, 6.0 * delta)
 
 	# ============ V2 车头 yaw (漂移时偏转 + 时间曲线动态晃动) ============
@@ -3025,6 +3189,9 @@ func _update_visuals(delta: float) -> void:
 	# 【反打回正】最后乘上 _counter_lean_factor: 反打越猛, 车头越朝运动方向转回来
 	var yaw_time_k: float = _sample_curve_safe(drift_head_yaw_curve, drift_t_norm, 1.0)
 	var drift_yaw_rad: float = deg_to_rad(drift_yaw_offset) * drift_dir * drift_intensity * yaw_time_k * _counter_lean_factor
+	# QQ飞车漂移系统: 视觉开关关闭时不显示 yaw 偏移
+	if qqspeed_drift_enabled and not qqspeed_drift_visual:
+		drift_yaw_rad = 0.0
 	# 两者插值合并(drift_intensity=0 时全用 base, =1 时全用 drift)
 	var target_head_yaw: float = lerpf(base_head_yaw, drift_yaw_rad, drift_intensity)
 	body_mesh.rotation.y = lerp(body_mesh.rotation.y, target_head_yaw, 6.0 * delta)
@@ -3288,13 +3455,21 @@ func _try_start_drift() -> bool:
 	emit_signal("drift_started", drift_mode)
 	if drift_fx_node and drift_fx_node.has_method("set_drifting"):
 		drift_fx_node.set_drifting(true)
-	print("[Car] 进入漂移 mode=", drift_mode, " fx=", drift_fx_node != null, " (lockout=%.2f grace=%.2f Qpressed=%s)" % [_drift_lockout_left, _drift_input_grace_left, str(Input.is_action_pressed(_act("drift")))])
+	# QQ飞车漂移系统: 同步启动
+	if qqspeed_drift_enabled and _drift_system != null:
+		_sync_drift_system_params()
+		var spd: float = linear_velocity.length()
+		_drift_system.try_start_drift(spd, drift_dir)
+	print("[Car] 进入漂移 mode=", drift_mode, " fx=", drift_fx_node != null, " qqsd=%s" % str(qqspeed_drift_enabled), " (lockout=%.2f grace=%.2f Qpressed=%s)" % [_drift_lockout_left, _drift_input_grace_left, str(Input.is_action_pressed(_act("drift")))])
 	return true
 
 
 func _end_drift(_success_boost: bool = false, manual: bool = false, failed: bool = false) -> void:
 	if state != State.DRIFT:
 		return
+	# QQ飞车漂移系统: 同步结束
+	if qqspeed_drift_enabled and _drift_system != null and _drift_system.is_drifting:
+		_drift_system.end_drift(not failed)
 	# 松前下任何方式断漂(自动/手动/低速/撞墙)都自动算 failed: 不开小喷窗口
 	# 因为"松前断漂不算是正常的漂移断漂"
 	if _is_in_songqian and not failed:
@@ -3356,6 +3531,12 @@ func _end_drift(_success_boost: bool = false, manual: bool = false, failed: bool
 
 func _check_drift_timeout(delta: float) -> void:
 	if state != State.DRIFT:
+		return
+	# QQ飞车漂移系统: 退漂由 DriftSystem.update() 在 _apply_qqspeed_drift 中处理
+	if qqspeed_drift_enabled and _drift_system != null and _drift_system.is_drifting:
+		# 仍然累计 drift_elapsed 和集气用的角度 (保留集气系统)
+		if not _is_airborne:
+			drift_elapsed += delta
 		return
 	# 【空中漂移延续】起飞前在漂移状态 → 空中期间:
 	#   · 不累计 drift_elapsed (否则空中飞得久会自己超时断漂)

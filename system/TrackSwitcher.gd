@@ -19,19 +19,19 @@ extends Node
 ##   hotkey_label: 快捷键的显示文本 (UI 按钮上显示, 比如 "F1")
 const TRACKS: Array = [
 	{
-		"path": "res://track.tscn",
+		"path": "res://tracks/track.tscn",
 		"name": "Track 1 (默认赛道)",
 		"hotkey": KEY_F1,
 		"hotkey_label": "F1",
 	},
 	{
-		"path": "res://track_qinghuaci.tscn",
+		"path": "res://tracks/track_qinghuaci.tscn",
 		"name": "Track 2 (青花瓷)",
 		"hotkey": KEY_F2,
 		"hotkey_label": "F2",
 	},
 	{
-		"path": "res://track_paiweilali.tscn",
+		"path": "res://tracks/track_paiweilali.tscn",
 		"name": "Track 3 (派位拉力)",
 		"hotkey": KEY_F3,
 		"hotkey_label": "F3",

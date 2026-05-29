@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://ddriftfxcar04"]
 
-[ext_resource type="Script" path="res://DriftFX.gd" id="1_drift"]
+[ext_resource type="Script" path="res://fx/DriftFX.gd" id="1_drift"]
 
 [node name="DriftFX" type="Node3D"]
 script = ExtResource("1_drift")

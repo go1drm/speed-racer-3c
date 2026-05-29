@@ -87,7 +87,7 @@ func _load_track(data: Resource) -> void:
 	var anchors_root := Node3D.new()
 	anchors_root.name = "Anchors"
 	add_child(anchors_root)
-	var anchor_scene: PackedScene = load("res://GrappleAnchor.tscn") as PackedScene
+	var anchor_scene: PackedScene = load("res://grapple/GrappleAnchor.tscn") as PackedScene
 	var anchors_arr: Array = data.get("grapple_anchors")
 	if anchor_scene != null:
 		for a in anchors_arr:
@@ -144,7 +144,7 @@ func _load_track(data: Resource) -> void:
 
 func _spawn_default_car_and_camera(spawn_pos: Vector3, spawn_yaw: float) -> void:
 	# Car
-	var car_scene: PackedScene = load("res://car.tscn") as PackedScene
+	var car_scene: PackedScene = load("res://core/car.tscn") as PackedScene
 	if car_scene == null:
 		push_error("[TrackRunner] 无法加载 car.tscn")
 		return
@@ -160,7 +160,7 @@ func _spawn_default_car_and_camera(spawn_pos: Vector3, spawn_yaw: float) -> void
 		car_mesh_node.global_position = spawn_pos + sphere_off
 		car_mesh_node.global_transform.basis = car_basis
 	# Camera (复用现有 Camera3D.gd)
-	var cam_script := load("res://Camera3D.gd")
+	var cam_script := load("res://core/Camera3D.gd")
 	var cam := Camera3D.new()
 	cam.name = "Camera3D"
 	cam.set_script(cam_script)

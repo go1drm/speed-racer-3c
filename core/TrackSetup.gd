@@ -41,7 +41,7 @@ func _generate_track_collision() -> void:
 	print("[TrackSetup] 为 Track 生成了 %d 个碰撞网格" % count)
 
 
-const SpeedPadScript := preload("res://SpeedPad.gd")
+const SpeedPadScript := preload("res://core/SpeedPad.gd")
 
 ## 加速带/弹射器推力配置 (可在场景里覆盖)
 @export_group("Speed Pads (加速带 / 弹射器)")

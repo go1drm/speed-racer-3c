@@ -1,10 +1,10 @@
 [gd_scene format=3]
 
 [ext_resource type="PackedScene" path="res://assets/custom_tracks/E_Paiweilali07_Pick.FBX" id="1_track_fbx"]
-[ext_resource type="PackedScene" path="res://car.tscn" id="2_car"]
-[ext_resource type="Script" path="res://Camera3D.gd" id="3_cam"]
-[ext_resource type="Script" path="res://TrackSetup.gd" id="4_setup"]
-[ext_resource type="PackedScene" path="res://GrappleAnchor.tscn" id="5_grapple_anchor"]
+[ext_resource type="PackedScene" path="res://core/car.tscn" id="2_car"]
+[ext_resource type="Script" path="res://core/Camera3D.gd" id="3_cam"]
+[ext_resource type="Script" path="res://core/TrackSetup.gd" id="4_setup"]
+[ext_resource type="PackedScene" path="res://grapple/GrappleAnchor.tscn" id="5_grapple_anchor"]
 
 [sub_resource type="ProceduralSkyMaterial" id="SkyMat"]
 sky_top_color = Color(0.45, 0.55, 0.7, 1)

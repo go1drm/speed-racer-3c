@@ -2,7 +2,7 @@ extends SceneTree
 
 func _init():
 	var cfg := ConfigFile.new()
-	var err := cfg.load("res://tune.cfg")
+var err := cfg.load("res://config/tune.cfg")
 	if err != OK:
 		print("加载 cfg 失败: ", err)
 		quit()

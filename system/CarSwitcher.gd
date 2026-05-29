@@ -5,8 +5,8 @@ extends Node
 ##  · F4 → 玉麒麟 (car.tscn) - 当前默认
 ## ============================================================
 
-const CAR_SUV: String = "res://car_suv.tscn"
-const CAR_DEFAULT: String = "res://car.tscn"   # 玉麒麟
+const CAR_SUV: String = "res://core/car_suv.tscn"
+const CAR_DEFAULT: String = "res://core/car.tscn"   # 玉麒麟
 
 
 func _unhandled_input(event: InputEvent) -> void:

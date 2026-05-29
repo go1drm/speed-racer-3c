@@ -1,0 +1,588 @@
+QQ飞车退漂条件说明
+2026-05-22 11:29
+目录
+QQ飞车退漂条件说明
+一、退漂的两种类型
+二、退漂的 3 个关键参数（策划可配）
+三、闭源物理库内部的 9 种退漂判定
+3.1 撞墙累积判定（行 402）
+3.2 角度回落判定（行 485）★最常见
+3.3 高速漂速度掉破 FirstEndVec（行 544）
+3.4 高速漂速度掉到 SecondEndVec（行 548）
+3.5 低速漂速度掉到 SecondEndVec（行 550）
+3.6 漂移角过大（行 560）
+3.7 漂移角过小持续（行 576）
+3.8 定时器到期（行 635/637）★重要兜底
+3.9 小刮漂定时器到期（行 648）★ 重要短时漂兜底
+四、游戏工程外部的 12 种强制打断
+4.8 防作弊机制说明
+五、撞墙处理的附加效果（不是退漂条件，但密切相关）
+六、退漂条件优先级总览
+七、常见退漂场景解读
+场景 A：标准漂移松键退漂
+场景 B：漂移中撞墙
+场景 C：速度不足自动退漂
+场景 D：玩家死按 Shift 的极限漂移
+场景 E：短时小角度漂移（最易触发条件 3.9）★
+八、调试方法
+8.1 游戏内实时观察
+8.2 日志对比
+九、相关文档
+十、版本信息
+QQ飞车退漂条件说明
+本文档详细说明飞车漂移过程中车辆在什么情况下会结束漂移。面向策划、测试、关卡设计等同学，用于理解退
+漂时机、调试漂移相关问题。
+配套文档：
+一句话总结：退漂条件可以分成闭源物理库内部的 9 种自动判定和游戏工程外部的 12 种强制打断，每个都有自
+己的触发机制和数据参数。
+一、退漂的两种类型
+退漂结束后，系统会用一个枚举值记录"怎么结束的"：
+枚举值
+中文含义
+场景
+ENM_DET_Normal
+正常退漂
+玩家主动松键、速度太低、角度自然
+回正等合法退出
+ENM_DET_Abnormal
+异常退漂
+撞墙累积、模式强制打断、反外挂判
+定、角度失控
+这个值通过 GetLastDriftEndType()  接口查询，可用于数据分析和比赛评分。
+二、退漂的 3 个关键参数（策划可配）
+来自 bin/Data/Config/DriftCfg.lua （实际生效的配置）：
+参数名
+默认值
+雪地值
+作用
+fEndVecFist
+50.0
+180.0
+高速漂结束速度阈值
+fEndVecSecon
+16.0
+2.0
+低速漂结束速度阈值
+fBannerAngle
+45.0°
+45.0°
+回扳判定角度（退漂阈值
+基准）
+衍生阈值（C++ 代码中由 fBannerAngle  计算）：
+名字
+公式
+值
+用途
+BANNERANGLE_DEC
+fBannerAngle - 5°
+40°
+角度回落退漂阈值
+BANNERANGLE_ADD
+fBannerAngle + 5°
+50°
+Banner 状态触发阈值
+三、闭源物理库内部的 9 种退漂判定
+源码位置：H:/QQSpeed_CoreKart/trunk/CoreKart/source/DriftCenter.cpp
+所有判定都在 DriftLoop  每帧被调用时检查。
+3.1 撞墙累积判定（行 402）
+QQ飞车漂移减速机制说明
+触发条件：
+漂移中撞墙 → 系统置 SetCollision(true)  打标
+打标后连续 0.3 秒仍处于漂移状态
+退漂类型：Abnormal
+关键参数：
+撞墙累积时长阈值：0.3 秒（硬编码）
+代码逻辑：
+玩家体验：
+漂移中刮蹭墙一下（< 0.3 秒）→ 不退漂，但速度会打对折（见 3.10）
+漂移中持续贴墙 → 0.3 秒后异常退漂
+3.2 角度回落判定（行 485）★最常见
+触发条件（必须同时满足）：
+本帧漂移角 < 40°（低于 BANNERANGLE_DEC ）
+上一帧漂移角 ≥ 40°（刚刚穿过 40° 下降沿）
+且 满足以下任一：
+玩家松开 Shift 键（!bShift ）
+或漂移逻辑角速度 |LDWZ| < ClockWec （见下方说明）
+退漂类型：Normal
+关键参数：
+参数
+值
+来源
+阈值 BANNERANGLE_DEC
+40°
+计算自 fBannerAngle=45°  - 5°
+ClockWec
+名义 0.5，实际 0（Bug）
+见下方注释
+⚠️ ClockWec Bug 注释：
+源码里有两个变量名字几乎一样：
+m_pDriftBaseParam->fClockWec = 0.5 （配置值，DriftCfg.lua 里写 0.5）
+m_fClockWec （成员变量，从未被赋值，永远是 0）
+接口 ClockWec()  返回的是 m_fClockWec ——所以实际生效值是 0，不是 0.5。
+这导致 |LDWZ| < 0  永远为 false，条件 2 实际简化为："角度下降穿过 40° 的那一帧 + 玩家松开 Shift 键"。
+边沿触发特性（重要）：
+这是单帧判定，只在"角度从 ≥40° 变到 <40°"的那一帧检查
+if (m_bCollision) {
+1
+    m_fDriftTimeAfterCollision += 本帧时长;
+2
+    if (m_fDriftTimeAfterCollision > 0.3) DriftEnd(false);
+3
+}
+4
+如果那一帧玩家没松 Shift，就错过这次判定
+后续需要靠其他条件（如 3.8 定时器）兜底
+玩家体验：
+漂移中松 Shift，车头自然回正到 40° 以下 → 正常退漂
+玩家死按 Shift 不松 → 错过本条，需等 3.8 兜底（最多晚 0.8 秒）
+3.3 高速漂速度掉破 FirstEndVec（行 544）
+触发条件（必须同时满足）：
+当前速度 < fEndVecFist （50）
+且 松 Shift 键 或 方向键都没按
+且 起漂时速度 > fEndVecFist （50，即"高速漂"）
+退漂类型：Normal
+关键参数：
+参数
+值
+来源
+fEndVecFist
+50.0
+DriftCfg.lua
+起漂速度阈值
+50.0
+同一个 fEndVecFist
+代码逻辑：
+玩家体验：从高速起漂（> 50）后，速度掉到 50 以下 + 松键，正常退漂。
+3.4 高速漂速度掉到 SecondEndVec（行 548）
+触发条件（必须同时满足）：
+当前速度 < fEndVecSecon （16）
+且 起漂时速度 > fEndVecFist （50）
+退漂类型：Normal
+关键参数：
+fEndVecSecon ：16.0（DriftCfg.lua）
+玩家体验：高速起漂后速度跌破 16 → 不管按什么键都强制退漂。
+3.5 低速漂速度掉到 SecondEndVec（行 550）
+触发条件（必须同时满足）：
+if (速度 < fEndVecFist)
+1
+    if (!bShift || (!bLeft && !bRight))
+2
+        if (起漂时速度 > fEndVecFist)
+3
+            DriftEnd(true);
+4
+当前速度 < fEndVecSecon （16）
+且 起漂时速度 ≤ fEndVecFist （50，即"低速漂"）
+退漂类型：Abnormal
+玩家体验：低速起漂后速度跌破 16 → 异常退漂（系统认为这次漂移不合法）。
+3.6 漂移角过大（行 560）
+触发条件：漂移角 > 135°
+退漂类型：Normal
+关键参数：135°（硬编码）
+玩家体验：车几乎要反转了，系统强制退漂防止失控。
+3.7 漂移角过小持续（行 576）
+触发条件（必须同时满足）：
+漂移角 < 4° 持续 0.8 秒
+退漂类型：Abnormal
+关键参数：
+角度阈值：4°（硬编码）
+持续时间：0.8 秒（硬编码）
+玩家体验：几乎不甩（车头一直朝前）的"假漂移"会被判定为无效自动退漂。
+3.8 定时器到期（行 635/637）★重要兜底
+触发条件（必须同时满足）：
+定时器启动后 0.8 秒到期
+漂移角 ≤ BANNERANGLE （45°）
+非 Banner 状态（!GetBanner() ）
+非腾空（ContactStatus != ECS_INAIR ）
+退漂类型：
+GetShoot() == true  → Normal
+GetShoot() == false  → Abnormal
+定时器启动时机（PreLoop 行 465）：
+关键参数：
+参数
+值
+定时器时长
+0.8 秒（硬编码）
+当漂移角从 ≥50° 下降穿过 50° 的那一帧 → ActiveTimer(0.8秒) + SetShoot(true)
+1
+参数
+值
+角度阈值 BANNERANGLE
+45°（= fBannerAngle ）
+Banner 触发阈值 BANNERANGLE_ADD
+50°
+Banner 状态说明：
+m_bBanner  是"玩家是否刚甩过 50° 大角度"的标志位
+角度穿过 50° 上升沿 → Banner = true
+角度穿过 50° 下降沿 → Banner = false（同时发放小喷 + 启动定时器）
+玩家体验：
+大甩（> 50°）→ 回落到 50° 以下 → 启动 0.8 秒倒计时
+0.8 秒后如果角度已 ≤ 45° 且不在 Banner 状态 → 退漂
+这是"3.2 角度回落判定"错过后的兜底机制
+3.9 小刮漂定时器到期（行 648）★ 重要短时漂兜底
+触发条件（必须同时满足）：
+起漂后 0.6 秒绝对时间到期（不是松键后 0.6 秒，是从起漂瞬间开始算）
+漂移角 ≤ BANNERANGLE （45°）
+非 Banner 状态（!GetBanner() ，即从未甩过 50° 大角度）
+非腾空（ContactStatus != ECS_INAIR ）
+退漂类型：Normal（带 bIsXiaogua=true  标志）
+关键参数：
+参数
+值
+说明
+计时器时长
+0.6 秒（硬编码）
+DriftCenter.cpp:115
+m_fFuncTime_Xiaogua = 当前
+时间 + 0.6
+角度阈值
+45°
+BANNERANGLE = fBannerAngle
+Banner 触发阈值
+50°
+BANNERANGLE_ADD =
+fBannerAngle + 5°
+触发链路：
+1. 起漂瞬间（DriftStart 行 115）
+1
+   m_fFuncTime_Xiaogua = 当前时间 + 0.6f
+2
+   ↑ 设置一个 0.6 秒后到期的绝对时间戳
+3
+4
+2. 每帧 PreLoop（行 497）检查
+5
+   if (m_fFuncTime_Xiaogua > 0 && m_fFuncTime_Xiaogua < 当前时间)
+6
+       _OnTimerCallBack_Xiaogua();      ← 触发回调
+7
+       m_fFuncTime_Xiaogua = -1;        ← 标记已用过
+8
+9
+3. 回调里检查并退漂（行 642）
+10
+设计意图：
+起漂后 0.6 秒是一个分水岭
+玩家如果在这 0.6 秒内没甩到 50° 以上触发 Banner 状态 → 系统认为是"无效的小角度漂移"，自动结束
+玩家如果甩到了 50° 以上 → Banner=true，下次回落时启动条件 3.8 的另一个 0.8 秒定时器，逻辑切换到"大漂结
+束流程"
+⚠️ 易混淆点：
+误解
+真相
+"0.6 秒从松键开始算"
+错。从起漂瞬间算，松不松键无关
+"会触发小刮喷"
+错。bIsXiaogua=true  分支不发小喷（看
+DriftCenter.cpp:215 的逻辑）
+"短按 Shift 才会触发"
+错。只要起漂 0.6 秒内没甩到 50° 以上都会触发，不管
+有没有松 Shift
+典型玩家场景：
+码表 66 km/h 起漂 → 快速松开方向键和 Shift → 漂移角最大 8°（远未到 50°）→ 起漂 0.6 秒后退漂，退漂时码
+表 56 km/h
+这就是条件 3.9 的标准触发：起漂时机一开始 → 0.6 秒计时启动 → 期间没甩到 50° → 0.6 秒到期时退漂，与玩家何
+时松键无关。
+与条件 3.8 的关系：
+条件 3.9 的 0.6 秒定时器所有漂移都会启动（在 DriftStart 时）
+条件 3.8 的 0.8 秒定时器仅在角度甩过 50° 后回落时才启动
+两者互斥：如果玩家甩到 50° 以上，3.9 计时器仍在跑但被条件 3.8 的逻辑覆盖
+四、游戏工程外部的 12 种强制打断
+这些都是 DriftEnd(false)  调用，全部是 Abnormal 退漂。
+#
+触发场景
+代码位置
+4.1
+车车硬碰撞：相对速度²×15.3² ≥ 500
+PhysKart/TencentCar.cpp:54
+97
+4.2
+撞墙（间接）：通过
+SetCollision(true)  打标 → 进
+入 3.1 累积判定
+PhysKart/CarFenceCollision
+.cpp:142
+4.3
+进入/退出 OB 观战模式
+NxPlayer/PlayerOBCompo.cpp
+:125, 177
+4.4
+Shuttle 过场传送
+SmallSingleModule/LevelMan
+ager/levelmanager_map.cpp:4
+66
+   if (角度 ≤ 45° && 非 Banner && 非腾空)
+11
+       DriftEnd(true, false, true);     ← Normal 退漂
+12
+#
+触发场景
+代码位置
+4.5
+多段地图切换加载
+SmallSingleModule/MultiSeg
+mentMapMgr/MultiSegmentMapM
+gr.cpp:1647
+4.6
+计时赛阶段切换（进入倒计时等）
+CompeteSystem/TimerChallen
+geMgr.cpp:2269
+4.7
+任务网络复位（清 Affect）
+Task/TaskNet.cpp:1295
+4.8
+腾空后踩加速带（仅当
+FallDriftFlag=true ，防卡漂作
+弊）
+Terrain/BaseTerrainEffect.
+cpp:755, 986, 1256, 1429
+4.9
+疯狂追逐模式打断
+CrazyChaseMode/CrazyChaseM
+odePlayerStatusMgr.cpp:847,
+920
+4.10
+生死逃亡模式打断
+DesperateEscapeMode/Desper
+ateEscapeModeMgr.cpp:240
+4.11
+免责模式打断
+EscapeClauseMode/EscapeCla
+useModeMgr.cpp:251
+4.12
+怪兽年模式打断
+MonsterNianRace/MonsterNia
+nRaceMgr.cpp:720
+4.13
+影子模式打断
+ShadowMode/ShadowModeMgr.c
+pp:709
+4.8 防作弊机制说明
+加速带退漂是飞车重要的反作弊机制：
+腾空时 SetFallDriftFlag(true)
+落地踩加速带时，如果 FallDriftFlag=true  → 强制退漂
+目的：防止玩家利用"腾空中漂移 + 踩加速带"刷速度
+五、撞墙处理的附加效果（不是退漂条件，但密切相关）
+漂移中撞墙除了触发 3.1 累积退漂判定，还有一次性速度惩罚：
+代码位置：PhysKart/CarFenceCollision.cpp:1095-1114
+效果：
+关键参数：
+fDriftRebound ：0.5（硬编码，CarFenceCollision.cpp:70, 1340 ）
+注意：撞墙会同时：
+1. 打 SetCollision(true)  标志 → 如果持续 0.3 秒触发 3.1 退漂
+2. 速度 ×0.5 惩罚（不直接退漂）
+漂移速度向量 *= 0.5 （打对折）
+1
+短暂刮墙 → 只有速度惩罚，不退漂。
+六、退漂条件优先级总览
+下图展示漂移中各退漂条件的触发优先级（按检查顺序）：
+七、常见退漂场景解读
+场景 A：标准漂移松键退漂
+每帧 DriftLoop 开始
+1
+    ├─ 条件 3.1：撞墙累积 > 0.3s ─→ Abnormal 退漂
+2
+    │
+3
+    ├─ PreLoop 内：
+4
+    │   ├─ 角度穿过 50° ─→ 触发 Banner 状态变化 + 定时器
+5
+    │   └─ 条件 3.2：角度穿过 40° 下降沿 + 松键 ─→ Normal 退漂
+6
+    │
+7
+    ├─ DriftVecControl 内：
+8
+    │   ├─ 条件 3.3：速度 < 50 + 松键 + 高速起漂 ─→ Normal 退漂
+9
+    │   ├─ 条件 3.4：速度 < 16 + 高速起漂 ─→ Normal 退漂
+10
+    │   ├─ 条件 3.5：速度 < 16 + 低速起漂 ─→ Abnormal 退漂
+11
+    │   ├─ 条件 3.6：角度 > 135° ─→ Normal 退漂
+12
+    │   └─ 条件 3.7：角度 < 4° 持续 0.8s ─→ Abnormal 退漂
+13
+    │
+14
+    └─ 定时器回调（异步）：
+15
+        ├─ 条件 3.8：定时器到期 + 角度 ≤ 45° + 非 Banner ─→ Normal/Abnormal
+16
+        └─ 条件 3.9：小刮漂定时器 ─→ Normal + 触发小喷
+17
+18
+外部强制（任何时候都可能插入）：
+19
+    └─ 条件 4.x：模式切换/碰撞/复位等 ─→ Abnormal 退漂
+20
+起漂（速度 50+，Shift 按下）
+1
+    ↓
+2
+漂移角甩到 60° → 进入 Banner 状态
+3
+    ↓
+4
+玩家松 Shift 键 + 车头回正到 50° 以下
+5
+    ↓
+6
+发放小喷 + 启动 0.8 秒定时器
+7
+    ↓
+8
+(A1) 角度继续回落到 40° 以下的那一帧 + Shift 已松
+9
+    ↓ 条件 3.2 触发
+10
+    Normal 退漂 ✓
+11
+12
+(A2) 如果 A1 错过（玩家又按下 Shift 了等）
+13
+    ↓
+14
+0.8 秒后定时器到期，角度 ≤ 45° + 非 Banner
+15
+场景 B：漂移中撞墙
+场景 C：速度不足自动退漂
+场景 D：玩家死按 Shift 的极限漂移
+这就是高手能把漂移拖很长的原因——只要速度不掉，可以一直漂。
+场景 E：短时小角度漂移（最易触发条件 3.9）★
+    ↓ 条件 3.8 触发
+16
+    Normal 退漂（有 Shoot 标志）✓
+17
+起漂 → 漂移中 → 撞墙
+1
+    ↓
+2
+SetCollision(true) + 速度 ×0.5
+3
+    ↓
+4
+(B1) 0.3 秒内离开墙
+5
+    ↓ 不进入条件 3.1
+6
+    继续漂移（但速度被削半）
+7
+8
+(B2) 0.3 秒内持续撞墙
+9
+    ↓ 条件 3.1 触发
+10
+    Abnormal 退漂 ✗
+11
+起漂（速度 45，低速漂）→ 漂移
+1
+    ↓
+2
+漂移过程中持续减速
+3
+    ↓
+4
+速度掉到 16 以下（低速起漂，不会先触发 3.3）
+5
+    ↓ 条件 3.5 触发
+6
+    Abnormal 退漂 ✗
+7
+起漂（速度 100+，高速漂）→ 玩家死按 Shift 不松
+1
+    ↓
+2
+漂移角在 40°~50° 之间震荡（玩家小幅打方向维持）
+3
+    ↓
+4
+条件 3.2 多次进入但因 !bShift=false 不触发
+5
+    ↓
+6
+条件 3.8 定时器每次在 Banner 切换时重启（甩过 50° → 重启）
+7
+    ↓
+8
+如果持续维持，速度会逐渐下降
+9
+    ↓
+10
+最终速度 < 50 或 < 16 → 条件 3.3/3.4 触发
+11
+    Normal 退漂 ✓
+12
+关键洞察：
+退漂时机是固定的 起漂 + 0.6 秒，不是"松键后多久"
+玩家无论何时松键，结果都一样
+这是策划设计的短时漂移自动收尾机制——避免"按一下就退"这种无意义操作
+如何避免被条件 3.9 提前结束漂移：
+在 0.6 秒内把漂移角甩到 50° 以上（触发 Banner=true）
+这样系统会切换到"大漂结束流程"（条件 3.8 或 3.2），可以维持更长时间
+八、调试方法
+8.1 游戏内实时观察
+按 Shift + F3  打开漂移调试 HUD（非 Shipping 版本），重点关注：
+HUD 字段
+观察什么
+Drifting
+是否在漂移（绿色=漂移中）
+Keys
+Shift 键是否按下（S 字母 + 绿色高亮）
+Elapsed
+本次漂移已持续时间
+Head Angle
+漂移角（跨 40°/50°/135° 边界时注意事件）
+UI Speed
+实时速度（跨 50 和 16 时触发速度退漂条件）
+Drift Wec (LDW)
+漂移逻辑角速度
+8.2 日志对比
+退漂发生时可查询：
+GetLastDriftEndType()  → Normal / Abnormal
+GetLastDriftEndKeyType()  → 结束时方向键状态
+GetLastDriftEndTime()  → 退漂时间戳
+起漂（码表 66 km/h，按 Shift）
+1
+    ↓
+2
+m_fFuncTime_Xiaogua 计时器启动（设置为当前时间 + 0.6s）
+3
+    ↓
+4
+玩家很快松开方向键和 Shift（比如 0.2 秒后）
+5
+    ↓
+6
+漂移角最大甩到 8°，然后回落到 4° 左右
+7
+    ↓ 期间没有甩到 50° 以上 → Banner 始终为 false
+8
+    ↓
+9
+起漂后 0.6 秒，PreLoop 检查计时器到期 → 调用 _OnTimerCallBack_Xiaogua
+10
+    ↓ 角度 4° ≤ 45° + 非 Banner + 落地 → 条件全部满足
+11
+    ↓ 条件 3.9 触发
+12
+    Normal 退漂 ✓（无小喷）
+13
+退漂时码表速度约 56 km/h
+14
+九、相关文档
+漂移减速机制：
+DriftCfg.lua 配置表：bin/Data/Config/DriftCfg.lua
+物理库源码：H:/QQSpeed_CoreKart/trunk/CoreKart/source/DriftCenter.cpp
+十、版本信息
+项目
+值
+文档版本
+v1.0
+编写日期
+2026-05-09
+数据源
+DriftCenter.cpp 源码 + DriftCfg.lua
+适用版本
+Beta101
+https://iwiki.woa.com/p/4020327426
