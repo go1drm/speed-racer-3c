@@ -39,10 +39,21 @@ func _ready() -> void:
 	_load_track(res)
 
 
-# ESC 返回编辑器 (从测试模式返回); 方便玩家快速迭代
+# ESC 返回编辑器 (进入该地图的编辑器界面)
+# 用户需求 (2026-06-03): "进入自定义地图后按 ESC 应该进入该地图的编辑器界面"
+# 实现: 把当前加载的赛道路径写入 TrackRunnerState.last_editor_track_path,
+#       TrackEditor._ready 会检测到这个路径并自动 _load_track_data 加载进编辑器
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_ESCAPE:
+			# 闯关模式下 ESC = 退出闯关
+			var challenge_runner: Node = get_node_or_null("/root/ChallengeRunner")
+			if challenge_runner and challenge_runner.get("is_running"):
+				challenge_runner.call("stop_challenge")
+			var st: Node = get_node_or_null("/root/TrackRunnerState")
+			if st:
+				var track_path: String = _resolve_track_path()
+				st.set("last_editor_track_path", track_path)
 			get_tree().change_scene_to_file("res://track_editor/TrackEditor.tscn")
 			get_viewport().set_input_as_handled()
 
@@ -142,6 +153,16 @@ func _load_track(data: Resource) -> void:
 		st.set("track_display_name", String(data.get("track_name")))
 
 
+func _reset_all_mechanisms() -> void:
+	## 按 B 复位时重置所有机关状态 (节奏归零/门恢复/滑块归位等)
+	var blocks_root: Node = get_node_or_null("Blocks")
+	if blocks_root == null:
+		return
+	for child in blocks_root.get_children():
+		if child.has_method("reset_state"):
+			child.call("reset_state")
+
+
 func _spawn_default_car_and_camera(spawn_pos: Vector3, spawn_yaw: float) -> void:
 	# Car
 	var car_scene: PackedScene = load("res://core/car.tscn") as PackedScene
@@ -172,3 +193,9 @@ func _spawn_default_car_and_camera(spawn_pos: Vector3, spawn_yaw: float) -> void
 	cam.call_deferred("set", "target", car.get_node_or_null("CarMesh"))
 	# 加一点初始 transform (跟随相机会立刻 lerp 过去)
 	cam.global_transform = Transform3D(Basis(), spawn_pos + Vector3(0, 6.5, 10))
+	# 显式记录出生点 (确保按 B 能回到正确位置)
+	# 必须 deferred: 等 car._ready() 完成, car_mesh 引用已初始化
+	car.call_deferred("_record_initial_position")
+	# 连接复位信号: 按 B 复位时重置所有机关状态
+	if car.has_signal("reset_to_origin_triggered"):
+		car.connect("reset_to_origin_triggered", _reset_all_mechanisms)

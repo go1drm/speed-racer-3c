@@ -1,4 +1,4 @@
-@tool
+﻿@tool
 extends Node3D
 ## ============================================================
 ## 终点 (Finish Line) — 编辑器机关
@@ -28,7 +28,7 @@ extends Node3D
 # ============================================================
 @export var radius: float = 5.0:
 	set(v):
-		radius = clampf(v, 2.0, 30.0)
+		radius = clampf(v, 0.001, 100000.0)
 		if is_inside_tree() and not _loading:
 			_rebuild()
 @export var ring_thickness: float = 0.3:
@@ -38,7 +38,7 @@ extends Node3D
 			_rebuild()
 @export var height: float = 3.0:
 	set(v):
-		height = clampf(v, 1.0, 15.0)
+		height = clampf(v, 0.001, 100000.0)
 		if is_inside_tree() and not _loading:
 			_rebuild()
 
@@ -244,7 +244,14 @@ func _on_car_entered(body: Node) -> void:
 	# 先立即通知 HUD 停止计时 (拿到最终时间)
 	if body.has_signal("finish_line_reached"):
 		body.emit_signal("finish_line_reached")
-	# 创建延迟计时器 (延迟只是传送前的视觉缓冲, 不影响判定)
+	# 闯关模式: ChallengeRunner 会处理切换, 不传送回出生点
+	var challenge_runner: Node = Engine.get_singleton("ChallengeRunner") if Engine.has_singleton("ChallengeRunner") else null
+	if challenge_runner == null:
+		challenge_runner = body.get_node_or_null("/root/ChallengeRunner")
+	if challenge_runner != null and challenge_runner.get("is_running"):
+		print("[Block_FinishLine] 闯关模式: 终点判定成功, 由 ChallengeRunner 接管")
+		return
+	# 普通模式: 延迟传送回出生点
 	var timer := get_tree().create_timer(teleport_delay)
 	_pending_teleports[key] = timer
 	timer.timeout.connect(func() -> void:

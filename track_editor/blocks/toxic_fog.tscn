@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://track_editor/blocks/Block_ToxicFog.gd" id="1_toxicfog"]
+
+[node name="toxic_fog" type="Node3D"]
+script = ExtResource("1_toxicfog")

@@ -41,6 +41,38 @@ const BLOCK_LIBRARY: Dictionary = {
 	"speed_pad":      "res://track_editor/blocks/speed_pad.tscn",
 	"finish_line":    "res://track_editor/blocks/finish_line.tscn",
 	"wall":           "res://track_editor/blocks/wall.tscn",
+	# === 毒图机关 ===
+	# pitfall   : 毒坑 (触发即复位)
+	# laser_gate: 激光闸门 (周期扫动 + 命中冲击)
+	# toxic_fog : 毒雾区 (持续减速)
+	"pitfall":        "res://track_editor/blocks/pitfall.tscn",
+	"laser_gate":     "res://track_editor/blocks/laser_gate.tscn",
+	"toxic_fog":      "res://track_editor/blocks/toxic_fog.tscn",
+	# === 物理趣味机关 ===
+	# flip_board       : 固定跳板 (踩上翻起 + 固定方向冲量)
+	# spring_mushroom  : 弹簧蘑菇 (向上弹力, 保留水平速度)
+	# gravity_cylinder : 反重力圆柱 (吸附到表面可倒挂)
+	# gravity_wall     : 反重力墙面 (吸附到墙面行驶)
+	# gravity_arc      : 反重力弧面 (沿弧面吸附行驶, 像扬起跳台)
+	"flip_board":       "res://track_editor/blocks/flip_board.tscn",
+	"spring_mushroom":  "res://track_editor/blocks/spring_mushroom.tscn",
+	"gravity_cylinder": "res://track_editor/blocks/gravity_cylinder.tscn",
+	"gravity_wall":     "res://track_editor/blocks/gravity_wall.tscn",
+	"gravity_arc":      "res://track_editor/blocks/gravity_arc.tscn",
+	"spike":            "res://track_editor/blocks/spike.tscn",
+	"windmill":         "res://track_editor/blocks/windmill.tscn",
+	"fragile_narrow":   "res://track_editor/blocks/fragile_narrow.tscn",
+	"pithole":          "res://track_editor/blocks/pithole.tscn",
+	"hard_wall":        "res://track_editor/blocks/hard_wall.tscn",
+	"face_wall":        "res://track_editor/blocks/face_wall.tscn",
+	"seesaw":           "res://track_editor/blocks/seesaw.tscn",
+	"slider":           "res://track_editor/blocks/slider.tscn",
+	"pendulum":         "res://track_editor/blocks/pendulum.tscn",
+	"color_gate":       "res://track_editor/blocks/color_gate.tscn",
+	"narrow_path":      "res://track_editor/blocks/narrow_path.tscn",
+	"spring":           "res://track_editor/blocks/spring.tscn",
+	"trigger_spring":   "res://track_editor/blocks/trigger_spring.tscn",
+	"star_trail":       "res://track_editor/blocks/star_trail.tscn",
 }
 
 # 路段积木显示信息 (UI 列表用)
@@ -66,6 +98,31 @@ const MECHANISM_INFO: Array = [
 	{"id": "wall",        "label": "🧱 墙",      "hotkey": KEY_0, "kind": "block"},
 	{"id": "anchor",      "label": "🪝 钩索锚点", "hotkey": KEY_7, "kind": "anchor"},
 	{"id": "spawn_point", "label": "🟢 出生点",  "hotkey": KEY_8, "kind": "spawn"},
+	# === 毒图机关 (无热键, 用鼠标点击放置) ===
+	{"id": "pitfall",     "label": "🕳️ 毒坑",    "hotkey": 0,     "kind": "block"},
+	{"id": "laser_gate",  "label": "⚡ 激光闸门", "hotkey": 0,     "kind": "block"},
+	{"id": "toxic_fog",   "label": "🌪️ 毒雾区",  "hotkey": 0,     "kind": "block"},
+	# === 物理趣味机关 ===
+	{"id": "flip_board",       "label": "🪂 固定跳板",   "hotkey": 0, "kind": "block"},
+	{"id": "spring_mushroom",  "label": "🍄 弹簧蘑菇",   "hotkey": 0, "kind": "block"},
+	{"id": "gravity_cylinder", "label": "🌀 反重力圆柱", "hotkey": 0, "kind": "block"},
+	{"id": "gravity_wall",     "label": "🧱 反重力墙面", "hotkey": 0, "kind": "block"},
+	{"id": "gravity_arc",      "label": "🌈 反重力弧面", "hotkey": 0, "kind": "block"},
+	{"id": "spike",            "label": "🔺 地刺",       "hotkey": 0, "kind": "block"},
+	{"id": "windmill",         "label": "🌀 大风车",     "hotkey": 0, "kind": "block"},
+	{"id": "fragile_narrow",   "label": "💔 易碎窄道",   "hotkey": 0, "kind": "block"},
+	{"id": "pithole",          "label": "🕳️ 凹坑",       "hotkey": 0, "kind": "block"},
+	{"id": "hard_wall",        "label": "🧱 硬墙",       "hotkey": 0, "kind": "block"},
+	{"id": "face_wall",        "label": "😊 笑脸墙来了", "hotkey": 0, "kind": "block"},
+	{"id": "seesaw",           "label": "⚖️ 跷跷板",     "hotkey": 0, "kind": "block"},
+	{"id": "slider",           "label": "🛗 往复滑块",   "hotkey": 0, "kind": "block"},
+	{"id": "pendulum",         "label": "🕰️ 钟摆平台",   "hotkey": 0, "kind": "block"},
+	{"id": "color_gate",       "label": "🚦 红蓝门",     "hotkey": 0, "kind": "block"},
+	{"id": "narrow_path",      "label": "🛤️ 窄道",      "hotkey": 0, "kind": "block"},
+	{"id": "fragile_narrow",   "label": "💔 易碎窄道",   "hotkey": 0, "kind": "block"},
+	{"id": "spring",           "label": "🔵 弹簧",      "hotkey": 0, "kind": "block"},
+	{"id": "trigger_spring",   "label": "🟠 触发弹簧",  "hotkey": 0, "kind": "block"},
+	{"id": "star_trail",       "label": "⭐ 绳星轨迹",  "hotkey": 0, "kind": "block"},
 ]
 
 # 工具枚举: 当前鼠标点击会做什么
@@ -93,6 +150,8 @@ var _hover_highlight_orig_mats: Dictionary = {}   # MeshInstance3D -> 原 materi
 # 编辑器场景里也即时构造一个对应的 PlaneMesh + 颜色 (走 _rebuild_editor_ground)
 var _ground_enabled: bool = true
 var _ground_color: Color = Color(0.45, 0.5, 0.55, 1.0)
+# 当前打开的赛道文件路径 (用于"保存"覆盖写入). 空 = 新建赛道, "保存"行为等同"另存为"
+var _current_track_path: String = ""
 var _ground_mesh_inst: MeshInstance3D = null   # 编辑器内可见的地面 mesh, _rebuild_editor_ground 创建
 @onready var _ui: CanvasLayer = $UI
 # 预览节点 (跟随鼠标显示半透明积木/锚点)
@@ -166,10 +225,18 @@ var _selected_anchor_index: int = -1  # _placed_anchors 索引
 #   _is_dragging_selected: 是否在拖动中
 #   _drag_start_mouse_world: 拖动开始时鼠标的世界点 (XZ 平面 = first node 的 Y 高度)
 #   _drag_start_positions: Array[Vector3] 各选中节点拖动开始时的 global_position 备份
+#   _drag_vertical_mode: 是否处于"纵向 Y 拖拽"模式 (按住 Shift 进入)
+#                        在此模式下鼠标移动只改变选中物的 Y 高度, XZ 不变
 var _is_dragging_selected: bool = false
 var _drag_start_mouse_world: Vector3 = Vector3.ZERO
 var _drag_start_positions: Array = []   # Array[Vector3]
 var _drag_plane_y: float = 0.0           # 拖动用的水平面 Y (取第一个选中积木的 Y)
+var _drag_vertical_mode: bool = false    # true = Shift 按下进入 Y 拖拽模式
+# ---- 窄道手柄拖拽 ----
+var _is_dragging_handle: bool = false
+var _dragging_handle_name: String = ""   # "start"/"mid"/"end"
+var _dragging_handle_block: Node3D = null
+var _drag_handle_plane_y: float = 0.0
 # 选中编辑面板的 SpinBox 引用 (在 _build_ui 创建, _on_selection_changed 时更新)
 var _sel_panel: VBoxContainer = null
 var _sel_x_spin: SpinBox = null
@@ -213,9 +280,29 @@ var _roll_spin: SpinBox = null
 # ---- 编辑器持久化设置 ----
 # 存放在 user://editor_settings.cfg, 启动时加载, 改了立即写回. 内容:
 #   [spin_steps] 各 SpinBox 的步长 (key = "pos"/"rot"/"param:length" 等, value = 0.01~10.0)
+#   [param_ranges] 机关参数的 min/max/step 覆盖 (key = "<block_id>:<param_key>", value = {min,max,step})
 #   _spin_step_overrides 是内存里的字典, key 用约定: "pos"(三个坐标共用)/"rot"(三个角度共用)/"param:<参数key>"
 const EDITOR_SETTINGS_PATH := "user://editor_settings.cfg"
 var _spin_step_overrides: Dictionary = {}   # key -> step (float)
+# 用户在弹窗里改的"参数范围"覆盖, 重建参数面板时优先用这个
+# key 格式: "<block_id>:<param_key>" 例 "gravity_cylinder:gravity_strength"
+# value 格式: {"min": float, "max": float, "step": float}  (任意字段缺失走 get_editable_params 默认)
+var _param_range_overrides: Dictionary = {}
+
+# ---- 连续修改合并 (防止爆 undo 栈) ----
+# 用户需求 (2026-06-02): "参数填写应该可以 ctrl+z 回溯"
+# 原 bug: SpinBox value_changed 在拖拽/连续输入时每帧触发, 每次都 _undo_push,
+#         拖一下要按几十次 Ctrl+Z 才回到原值
+# 修复: 用 "idle merge" 模式
+#   每次 value_changed 不立刻 push, 而是更新 _pending_undo (内存缓存最新的 new_value)
+#   连续 PARAM_UNDO_FLUSH_DELAY 秒没新修改 → 自动 flush 一条 undo 入栈
+#   Ctrl+Z 之前也要先 flush (避免丢失最后一段未入栈的修改)
+#
+# _pending_undo 结构 (空 = 没有待 flush):
+#   {"op": "param"/"color"/"range", "index", "key", "old_value", "new_value", "timer"}
+#   timer 倒计时, 在 _process 里 -=delta, ≤0 就 flush
+const PARAM_UNDO_FLUSH_DELAY: float = 0.4
+var _pending_undo: Dictionary = {}
 
 # ---- 视觉参数 (用户可调, 持久化到 editor_settings.cfg [visual]) ----
 # 默认值与 TrackEditor.tscn 里 sub_resource Env1 / DirectionalLight3D 一致
@@ -243,6 +330,9 @@ var _vis_exp_label: Label = null
 const BLOCK_PRESETS_PATH := "user://block_presets.cfg"
 var _block_presets: Array = []          # Array of preset dicts
 var _bottom_blocks_hbox: HBoxContainer = null   # 底部积木 HBox 引用 (动态加预设按钮)
+# 机关栏宽度同步: 让机关栏的 ScrollContainer 自动 match 积木栏 panel 宽度 (用户要求"一样宽")
+var _bottom_blocks_panel: PanelContainer = null  # 积木栏 panel 引用 (用于读宽度)
+var _mech_scroll: ScrollContainer = null         # 机关栏 ScrollContainer 引用 (用于设宽度)
 
 # ---- 当前正在放置的预设 (Tool.PRESET 模式时用) ----
 # 选了某个预设后, 进入 PRESET 模式: 鼠标移动 = 整组预览跟随, 点击 = 整组放下
@@ -278,6 +368,11 @@ func _ready() -> void:
 		var p: String = String(st.get("last_editor_track_path"))
 		if p != "" and (FileAccess.file_exists(ProjectSettings.globalize_path(p)) or ResourceLoader.exists(p)):
 			_load_track_data(p)
+		# 恢复 F5 测试前的正式赛道路径 (避免 _test.tres 覆盖导致"保存"变"另存为")
+		if "original_track_path" in st:
+			var orig: String = String(st.get("original_track_path"))
+			if orig != "":
+				_current_track_path = orig
 
 
 # ============================================================
@@ -331,7 +426,7 @@ func _build_ui() -> void:
 	hint.bbcode_enabled = true
 	hint.fit_content = true
 	hint.scroll_active = false
-	hint.text = "[color=#aaa]默认=选择模式 (hover 高亮, 点选, Ctrl+点击多选) | 选积木后变放置模式 (ESC 退出) | 右键=旋转视角 | 滚轮=缩放 | WASD=平移 | 1-5 选积木 | 6-8 机关 | Alt 关吸附 | Del 删除 | R 旋转 | Ctrl+Z 撤销 | Ctrl+Y 重做 | F5 测试[/color]"
+	hint.text = "[color=#aaa]默认=选择模式 (hover 高亮, 点选, Ctrl+点击多选) | 选积木后变放置模式 (ESC 退出) | 右键=旋转视角 | 滚轮=缩放 | WASD=平移 | 1-5 选积木 | 6-8 机关 | Alt 开吸附 | Del 删除 | R 旋转 | Ctrl+Z 撤销 | Ctrl+Y 重做 | F5 测试[/color]"
 	hint.add_theme_font_size_override("normal_font_size", 11)
 	vb.add_child(hint)
 
@@ -385,7 +480,7 @@ func _build_ui() -> void:
 	vb.add_child(grid_label)
 
 	var grid_cb := CheckBox.new()
-	grid_cb.text = " 启用网格吸附 (按 Alt 临时关闭)"
+	grid_cb.text = " 启用网格吸附 (按 Alt 临时开启)"
 	grid_cb.button_pressed = _grid_snap_enabled
 	grid_cb.add_theme_font_size_override("font_size", 11)
 	grid_cb.toggled.connect(func(on: bool) -> void: _grid_snap_enabled = on)
@@ -439,6 +534,14 @@ func _build_ui() -> void:
 	btn_y_zero.pressed.connect(func() -> void: _set_place_y_offset(0.0))
 	vb.add_child(btn_y_zero)
 
+	# 拖拽快捷键提示 (用户需求 2026-06-02: 按住 Shift 纵向拖拽)
+	var drag_hint := Label.new()
+	drag_hint.text = "💡 拖拽机关时按住 Shift = 改 Y 高度"
+	drag_hint.add_theme_font_size_override("font_size", 11)
+	drag_hint.add_theme_color_override("font_color", Color(1.0, 0.85, 0.4))
+	drag_hint.tooltip_text = "选中机关后用鼠标拖动:\n· 默认 = XZ 平面横向移动 (无吸附)\n· 按住 Shift = 改 Y 高度 (纵向)\n· 按住 Alt = 启用网格吸附"
+	vb.add_child(drag_hint)
+
 	vb.add_child(HSeparator.new())
 
 	# 操作按钮
@@ -449,10 +552,18 @@ func _build_ui() -> void:
 	vb.add_child(actions_label)
 
 	var btn_save := Button.new()
-	btn_save.text = "💾 保存赛道..."
+	btn_save.text = "💾 保存"
 	btn_save.custom_minimum_size = Vector2(220, 32)
-	btn_save.pressed.connect(_on_save_pressed)
+	btn_save.tooltip_text = "覆盖保存到当前打开的赛道文件 (如果是新赛道则弹出另存为)"
+	btn_save.pressed.connect(_on_save_overwrite_pressed)
 	vb.add_child(btn_save)
+
+	var btn_save_as := Button.new()
+	btn_save_as.text = "💾 另存为..."
+	btn_save_as.custom_minimum_size = Vector2(220, 32)
+	btn_save_as.tooltip_text = "输入新名字保存为一个新的赛道文件"
+	btn_save_as.pressed.connect(_on_save_pressed)
+	vb.add_child(btn_save_as)
 
 	var btn_load := Button.new()
 	btn_load.text = "📂 加载赛道..."
@@ -684,6 +795,7 @@ func _build_ui() -> void:
 	bb_sb.border_width_top = 1; bb_sb.border_width_bottom = 1
 	blocks_panel.add_theme_stylebox_override("panel", bb_sb)
 	blocks_center.add_child(blocks_panel)
+	_bottom_blocks_panel = blocks_panel   # 保存引用, 让机关栏宽度自动同步 (见 _process)
 	var bb_h := HBoxContainer.new()
 	bb_h.add_theme_constant_override("separation", 4)
 	blocks_panel.add_child(bb_h)
@@ -742,9 +854,27 @@ func _build_ui() -> void:
 	mech_sb.border_width_top = 1; mech_sb.border_width_bottom = 1
 	mech_panel.add_theme_stylebox_override("panel", mech_sb)
 	mech_center.add_child(mech_panel)
+	# === 机关栏内部: HScrollContainer 让按钮多了能横向滚动 ===
+	# 用户需求 (2026-06-02): 机关栏宽度跟积木栏一致 (用户先要求"加滚动条", 后又要"一样宽")
+	# 设计:
+	#   PanelContainer (mech_panel)
+	#     └─ ScrollContainer (mech_scroll, 宽度自动跟随 _bottom_blocks_panel.size.x)
+	#         └─ HBoxContainer (mech_h, 装所有按钮)
+	# 关键参数:
+	#   mech_scroll.custom_minimum_size.x = 在 _process 里每帧根据 blocks_panel 宽度同步
+	#   horizontal_scroll_mode = AUTO            ← 内容超过宽度时自动出滚动条
+	#   vertical_scroll_mode = SCROLL_MODE_DISABLED ← 不允许竖滚 (按钮只一排)
+	var mech_scroll := ScrollContainer.new()
+	mech_scroll.name = "MechScroll"
+	mech_scroll.custom_minimum_size = Vector2(400, 56)   # 初始宽度兜底, 之后由 _process 同步
+	mech_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	mech_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	mech_scroll.mouse_filter = Control.MOUSE_FILTER_PASS
+	mech_panel.add_child(mech_scroll)
+	_mech_scroll = mech_scroll   # 保存引用, 让 _process 能同步宽度
 	var mech_h := HBoxContainer.new()
 	mech_h.add_theme_constant_override("separation", 4)
-	mech_panel.add_child(mech_h)
+	mech_scroll.add_child(mech_h)
 	# 机关栏小标题 (左侧)
 	var mech_title := Label.new()
 	mech_title.text = "⚙️ 机关"
@@ -1093,6 +1223,14 @@ func _load_editor_settings() -> void:
 	if cf.has_section("spin_steps"):
 		for k in cf.get_section_keys("spin_steps"):
 			_spin_step_overrides[String(k)] = float(cf.get_value("spin_steps", k, 0.01))
+	# 机关参数 min/max/step 覆盖
+	# 存储格式: cf.get_value("param_ranges", "<block_id>:<param_key>") = Dictionary{min,max,step}
+	# ConfigFile 直接支持 Dictionary 序列化
+	if cf.has_section("param_ranges"):
+		for k in cf.get_section_keys("param_ranges"):
+			var v = cf.get_value("param_ranges", k, {})
+			if v is Dictionary:
+				_param_range_overrides[String(k)] = v
 	# 视觉参数 (亮度 / 曝光). 如果文件里没存就保持默认值
 	if cf.has_section("visual"):
 		_visual_sun_energy = float(cf.get_value("visual", "sun_energy", _visual_sun_energy))
@@ -1106,6 +1244,9 @@ func _save_editor_settings() -> void:
 	var cf := ConfigFile.new()
 	for k in _spin_step_overrides.keys():
 		cf.set_value("spin_steps", k, _spin_step_overrides[k])
+	# 机关参数 min/max 覆盖
+	for k in _param_range_overrides.keys():
+		cf.set_value("param_ranges", k, _param_range_overrides[k])
 	cf.set_value("visual", "sun_energy", _visual_sun_energy)
 	cf.set_value("visual", "ambient_energy", _visual_ambient_energy)
 	cf.set_value("visual", "sky_contribution", _visual_sky_contribution)
@@ -1438,7 +1579,7 @@ func _set_place_roll_deg(v: float) -> void:
 #   1) 同步 UI label 显示
 #   2) 重建网格层指示 (在新 Y 高度画一个青色框, 让玩家看到自己当前在哪一层)
 func _set_place_y_offset(v: float) -> void:
-	_place_y_offset = clampf(v, -50.0, 50.0)
+	_place_y_offset = clampf(v, -200.0, 200.0)
 	if _y_offset_label:
 		_y_offset_label.text = "Y 高度层: %.1f m  (Shift+滚轮)" % _place_y_offset
 	_rebuild_grid_lines()
@@ -1575,6 +1716,15 @@ func _make_place_drag_label(text: String, axis_kind: String, step_per_pixel: flo
 # 单选: _selected_block_index = idx, _selected_block_indices = [idx]
 # 多选请用 _toggle_select_block (Ctrl+点击)
 func _select_block(idx: int) -> void:
+	# 选中切换 = flush 未提交的参数 undo (防止改完一个机关没等 0.4s 就切到另一个, 丢失最后一段修改)
+	_flush_pending_undo()
+	# 隐藏旧选中窄道的控制点手柄
+	for old_idx in _selected_block_indices:
+		var oi: int = int(old_idx)
+		if oi >= 0 and oi < _placed_blocks.size():
+			var onode: Node3D = _placed_blocks[oi].get("node")
+			if onode != null and onode.has_method("hide_handles"):
+				onode.call("hide_handles")
 	# 先清掉旧选中高亮 + hover 高亮 (避免两套叠加)
 	_clear_selection_highlight()
 	_clear_hover_highlight()
@@ -1583,6 +1733,11 @@ func _select_block(idx: int) -> void:
 		_selected_block_indices.clear()
 	else:
 		_selected_block_indices = [idx]
+	# 新选中的窄道: 显示控制点手柄
+	if idx >= 0 and idx < _placed_blocks.size():
+		var new_node: Node3D = _placed_blocks[idx].get("node")
+		if new_node != null and new_node.has_method("show_handles"):
+			new_node.call("show_handles")
 	_refresh_selection_ui()
 
 
@@ -1703,6 +1858,10 @@ func _rebuild_sel_param_rows(node: Node3D) -> void:
 	var params: Array = node.call("get_editable_params")
 	if params.is_empty():
 		return
+	# 拿 block_id 用作 param_range_overrides 的 key 前缀 (各机关共用同样的范围 override)
+	var block_id: String = ""
+	if _selected_block_index >= 0 and _selected_block_index < _placed_blocks.size():
+		block_id = String(_placed_blocks[_selected_block_index].get("id", ""))
 	# 检测 color_r/g/b 三连参数, 后面循环渲染时跳过它们, 改用单独一行 ColorPickerButton
 	# 设计: 只要 params 同时包含 "color_r"+"color_g"+"color_b" 就合并; 不强制必须连续
 	var has_color: bool = false
@@ -1729,20 +1888,37 @@ func _rebuild_sel_param_rows(node: Node3D) -> void:
 	# 每个 param 一行: [可拖标签] [SpinBox]
 	for p in params:
 		var key: String = String(p.get("key", ""))
+		# 跳过隐藏参数 (仅用于序列化, 不在 UI 显示)
+		if p.get("hidden", false):
+			continue
 		# 跳过 color_r/g/b 三连 — 它们由下面的 ColorPickerButton 统一管理
 		if has_color and key in color_keys:
 			continue
 		var label: String = String(p.get("label", key))
-		var min_v: float = float(p.get("min", -1000.0))
-		var max_v: float = float(p.get("max", 1000.0))
-		# 用户要求: 参数步长也可以右键改 + 持久化保存. 用 _get_spin_step("param:<key>", default)
+		var def_min: float = float(p.get("min", -1000.0))
+		var def_max: float = float(p.get("max", 1000.0))
 		var default_step: float = float(p.get("step", 0.1))
-		var step: float = _get_spin_step("param:" + key, default_step)
+		# 用户可在弹窗里覆盖 min/max/step (持久化到 [param_ranges])
+		# 优先级: override > get_editable_params 默认
+		var range_override: Dictionary = {}
+		var range_key: String = block_id + ":" + key
+		if _param_range_overrides.has(range_key):
+			range_override = _param_range_overrides[range_key]
+		var min_v: float = float(range_override.get("min", def_min))
+		var max_v: float = float(range_override.get("max", def_max))
+		# step 仍然走 _spin_step_overrides 的体系 (右键菜单调步长), 但 range 弹窗里也能改
+		# 若 range_override 里有 step, 用它作为 default; 否则用 get_editable_params 的 step
+		var step_default: float = float(range_override.get("step", default_step))
+		var step: float = _get_spin_step("param:" + key, step_default)
 		var value: float = float(p.get("value", 0.0))
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 4)
 		_sel_params_container.add_child(row)
 		# 可拖拽标签 (拖一像素 = step × 5 让玩家好操作)
+		# 用户需求 (2026-06-02): 标签右键点击弹窗调 min/max/step (像 Tuner 一样)
+		# 仍用 Label 而不是 Button: 因为 Button 的 pressed 信号和左键拖动会打架,
+		#   Button 还会消费点击 → 拖拽过程中误触发 pressed → 弹窗反复跳出
+		# 方案: Label + 左键拖动 (原行为) + 右键点击 (新, 打开范围弹窗)
 		var step_pp: float = step * 5.0
 		var lb := Label.new()
 		lb.text = "  " + label
@@ -1750,19 +1926,23 @@ func _rebuild_sel_param_rows(node: Node3D) -> void:
 		lb.add_theme_color_override("font_color", Color(1.0, 0.85, 0.3))
 		lb.mouse_filter = Control.MOUSE_FILTER_STOP
 		lb.mouse_default_cursor_shape = Control.CURSOR_HSIZE
-		lb.tooltip_text = "左右拖动改值 (每像素 = %.2f) | 右键 SpinBox 设步长" % step_pp
+		lb.tooltip_text = "左键点击改 min/max/step | 左键拖动改值 (每像素 = %.2f) | 右键也能开 min/max 弹窗" % step_pp
 		lb.custom_minimum_size = Vector2(110, 24)
 		row.add_child(lb)
+		# 右键点击打开范围编辑弹窗 (绑在 gui_input 同时, 同一个 lambda 既处理拖拽也处理右键)
+		var p_capture: Dictionary = p.duplicate()
+		var bid_capture: String = block_id
+		var label_capture: String = label
 		# SpinBox
 		var sp := _make_coord_spin(min_v, max_v, step)
 		sp.set_value_no_signal(value)
 		sp.custom_minimum_size = Vector2(80, 24)
 		_attach_spin_step_menu(sp, "param:" + key)
 		row.add_child(sp)
-		# 改值时调 set_editable_param + 同步刷新坐标 SpinBox (因为弯道改 angle/radius 后基本朝向不变,
-		# 但内部 mesh 变了, 入口/出口的 transform 也变了 — 所以重新读 node.global_transform 同步 X/Y/Z 显示)
-		# Undo: 改参数也进栈, 用 old_value 闭包变量记录上一次值, 每次 changed 都 push 一项
-		# 注意闭包捕获时机: key_capture 是常量, old_value_holder 用单元素数组让 lambda 能改它
+		# 改值时调 set_editable_param + 同步刷新坐标 SpinBox
+		# 用户需求 (2026-06-02): "参数填写应该可以 ctrl+z 回溯"
+		# 旧 bug: 每次 value_changed 都 _undo_push, 拖一下要按几十次 Ctrl+Z 才回到原值
+		# 修复: 用 _queue_pending_undo (合并 0.4s 内连续修改成一条 undo)
 		var key_capture: String = key
 		var old_value_holder: Array = [value]   # 单元素数组让闭包能改它 (类似 ref)
 		sp.value_changed.connect(func(v: float) -> void:
@@ -1771,24 +1951,52 @@ func _rebuild_sel_param_rows(node: Node3D) -> void:
 			var n: Node3D = _placed_blocks[_selected_block_index].get("node")
 			if n == null or not n.has_method("set_editable_param"):
 				return
-			# 拿改前的值入 undo 栈
-			_undo_push({
-				"op": "param",
-				"index": _selected_block_index,
-				"key": key_capture,
-				"old_value": old_value_holder[0],
-				"new_value": v,
-			})
-			old_value_holder[0] = v   # 更新, 下次再改时这个就是 old
+			# 合并连续修改: old_value_holder[0] 永远是"这一段连续编辑的起点"
+			# _queue_pending_undo 内部会判断: 同一 idx+key 持续修改 → 只更新 new_value
+			#                                  不同目标或超时 → flush 旧的入栈, 开新的
+			_queue_pending_undo("param", _selected_block_index, key_capture, old_value_holder[0], v)
 			n.call("set_editable_param", key_capture, v)
+			# 注: 不更新 old_value_holder[0], 让连续修改的 old 保持不变 (拖完后整段算一次 undo)
 			# 重新应用选中高亮 (rebuild 后 mesh 是新的, 旧的 _selection_highlight_orig_mats 引用失效)
 			_clear_selection_highlight()
 			_apply_selection_highlight(n)
 		)
-		# 给标签加拖拽功能 (闭包捕获 sp + step_pp)
+		# 给标签加交互: 左键点击=打开范围弹窗 / 左键拖动=改值 / 右键=打开范围弹窗
+		# 用户反馈 (2026-06-02): "点击机关参数标签没法调整 min/max"
+		# 真凶: 旧版只有右键打开弹窗, 用户左键点击不响应 → 直觉是左键点击就该弹窗
+		# 修复: 在 mb.released 时判断: 鼠标位移 < 4px → 算"点击"开弹窗, ≥ 4px → 算"拖动结束"什么都不做
+		# press_state 用 Array 单元素 holder 让闭包能跨调用持久化状态
+		# [active(bool), start_global_x(float), start_global_y(float)]
 		var sp_ref: SpinBox = sp
 		var step_pp_capture: float = step_pp
+		var press_state: Array = [false, 0.0, 0.0]   # 闭包共享状态: 这次按下是否还在持续 + 起始位置
 		lb.gui_input.connect(func(event: InputEvent) -> void:
+			if event is InputEventMouseButton:
+				var mbtn: InputEventMouseButton = event
+				# 右键: 任何时候都直接打开弹窗 (兼容旧操作习惯 + 桌面右键弹窗范式)
+				if mbtn.button_index == MOUSE_BUTTON_RIGHT and mbtn.pressed:
+					_open_param_range_editor(bid_capture, p_capture, label_capture, sp_ref)
+					return
+				# 左键: 区分"点击"和"拖动"
+				if mbtn.button_index == MOUSE_BUTTON_LEFT:
+					if mbtn.pressed:
+						# 按下: 记录起点, 让原拖拽逻辑也能正常进行
+						press_state[0] = true
+						press_state[1] = mbtn.global_position.x
+						press_state[2] = mbtn.global_position.y
+					else:
+						# 松开: 判断鼠标位移
+						if bool(press_state[0]):
+							var dx_total: float = absf(mbtn.global_position.x - float(press_state[1]))
+							var dy_total: float = absf(mbtn.global_position.y - float(press_state[2]))
+							press_state[0] = false
+							# 位移 < 4px 视为"点击"而非拖动 → 打开范围弹窗
+							if dx_total < 4.0 and dy_total < 4.0:
+								# 先把原拖拽状态清掉 (避免 _drag_label_state 残留 = 这个 lb)
+								_drag_label_state.clear()
+								_open_param_range_editor(bid_capture, p_capture, label_capture, sp_ref)
+								return
+			# 其他情况 (左键拖动 motion / 左键 release 但是真拖动) 走原拖拽逻辑
 			_on_param_drag_label_input(lb, sp_ref, step_pp_capture, event)
 		)
 	# ============================================================
@@ -1853,6 +2061,53 @@ func _rebuild_sel_param_rows(node: Node3D) -> void:
 			color_old_holder[0] = new_c
 		)
 
+	# === [设为默认] 按钮 (用户需求 2026-06-03) ===
+	# 一键把当前机关的所有参数传递到 Tuner 的 🎯 机关默认值 Tab 并保存
+	var set_default_btn := Button.new()
+	set_default_btn.text = "📌 设为默认"
+	set_default_btn.tooltip_text = "把当前机关的所有参数设为该类型机关的默认值\n(影响新放置的同类机关 + 未手调过的已放置同类机关)"
+	set_default_btn.add_theme_font_size_override("font_size", 11)
+	set_default_btn.add_theme_color_override("font_color", Color(0.5, 1.0, 0.7))
+	set_default_btn.custom_minimum_size = Vector2(120, 26)
+	set_default_btn.focus_mode = Control.FOCUS_NONE
+	set_default_btn.pressed.connect(func() -> void:
+		_set_current_block_as_default()
+	)
+	_sel_params_container.add_child(set_default_btn)
+
+
+# 把当前选中机关的所有参数设为该类型的默认值 (传递到 Tuner 🎯 机关默认值 Tab)
+func _set_current_block_as_default() -> void:
+	if _selected_block_index < 0 or _selected_block_index >= _placed_blocks.size():
+		return
+	var entry: Dictionary = _placed_blocks[_selected_block_index]
+	var block_id: String = String(entry.get("id", ""))
+	var node: Node3D = entry.get("node")
+	if node == null or not node.has_method("get_editable_params") or block_id.is_empty():
+		return
+	# 收集当前所有参数
+	var params: Array = node.call("get_editable_params")
+	if params.is_empty():
+		return
+	# 找 Tuner 节点, 调用 _set_mechanism_default 逐个设置
+	var tuner_node: Node = get_tree().current_scene.find_child("Tuner", true, false)
+	if tuner_node == null:
+		push_warning("[TrackEditor] 找不到 Tuner 节点, 无法设为默认")
+		return
+	var count: int = 0
+	for p in params:
+		var key: String = String(p.get("key", ""))
+		var value: float = float(p.get("value", 0.0))
+		if key.is_empty():
+			continue
+		if tuner_node.has_method("_set_mechanism_default"):
+			tuner_node.call("_set_mechanism_default", block_id, key, value)
+			count += 1
+	# 手动触发保存 (Tuner 的 _request_autosave 可能被禁用了, 直接调 _on_save)
+	if tuner_node.has_method("_on_save"):
+		tuner_node.call("_on_save")
+	print("[TrackEditor] 📌 已把 %s 的 %d 个参数设为默认值" % [block_id, count])
+
 
 # 参数 SpinBox 行的拖拽 (与坐标拖拽逻辑一致, 但闭包捕获不一样, 单独写一个)
 func _on_param_drag_label_input(lb: Label, spin: SpinBox, step_per_pixel: float, event: InputEvent) -> void:
@@ -1878,6 +2133,141 @@ func _on_param_drag_label_input(lb: Label, spin: SpinBox, step_per_pixel: float,
 		var dx: float = mm.global_position.x - float(_drag_label_state["start_x"])
 		var new_value: float = float(_drag_label_state["start_value"]) + dx * step_per_pixel
 		spin.value = clampf(new_value, spin.min_value, spin.max_value)
+
+
+# 机关参数 min/max/step 范围编辑弹窗 (用户右键参数标签触发)
+# 用户需求 (2026-06-02): "所有机关的参数的最大值和最小值 都要可以调整 就跟tab里的参数一样"
+#
+# 参数:
+#   block_id: 机关 ID (如 "gravity_cylinder"), 用作持久化 key 前缀
+#   param_dict: 完整 get_editable_params() 返回的某一项 ({key,label,min,max,step,value})
+#   label: 显示名 (用于弹窗标题)
+#   target_spin: 当前 SpinBox 引用, 改 min/max 后立刻应用到 UI
+#
+# 持久化:
+#   保存到 _param_range_overrides["<block_id>:<key>"] = {min, max, step}
+#   下次打开同样的机关 + 同样的参数时, _rebuild_sel_param_rows 会优先读这个值
+func _open_param_range_editor(block_id: String, param_dict: Dictionary, label: String, target_spin: SpinBox) -> void:
+	var key: String = String(param_dict.get("key", ""))
+	if key.is_empty():
+		return
+	var range_key: String = block_id + ":" + key
+	# 当前显示值: 优先 override, fallback 默认
+	var def_min: float = float(param_dict.get("min", -1000.0))
+	var def_max: float = float(param_dict.get("max", 1000.0))
+	var def_step: float = float(param_dict.get("step", 0.1))
+	var cur_min: float = def_min
+	var cur_max: float = def_max
+	var cur_step: float = def_step
+	if _param_range_overrides.has(range_key):
+		var ov: Dictionary = _param_range_overrides[range_key]
+		cur_min = float(ov.get("min", def_min))
+		cur_max = float(ov.get("max", def_max))
+		cur_step = float(ov.get("step", def_step))
+
+	var dlg := AcceptDialog.new()
+	dlg.title = "编辑参数范围: " + label
+	dlg.dialog_hide_on_ok = true
+	dlg.min_size = Vector2(360, 220)
+	# 添加 "重置默认" 按钮 (左下)
+	dlg.add_button("重置默认", true, "reset_default")
+
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 8)
+	dlg.add_child(vb)
+
+	var tip := Label.new()
+	tip.text = "机关 [%s] 的参数 [%s]\n默认范围 %.2f ~ %.2f, 步长 %.3f" % [block_id, label, def_min, def_max, def_step]
+	tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	tip.add_theme_color_override("font_color", Color(0.85, 0.85, 0.9))
+	tip.add_theme_font_size_override("font_size", 11)
+	tip.custom_minimum_size = Vector2(340, 0)
+	vb.add_child(tip)
+
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 10)
+	grid.add_theme_constant_override("v_separation", 6)
+	vb.add_child(grid)
+
+	var lbl_min := Label.new(); lbl_min.text = "最小值"; grid.add_child(lbl_min)
+	var sp_min := SpinBox.new()
+	sp_min.allow_lesser = true
+	sp_min.allow_greater = true
+	sp_min.step = cur_step
+	sp_min.min_value = -1e9
+	sp_min.max_value = 1e9
+	sp_min.value = cur_min
+	grid.add_child(sp_min)
+
+	var lbl_max := Label.new(); lbl_max.text = "最大值"; grid.add_child(lbl_max)
+	var sp_max := SpinBox.new()
+	sp_max.allow_lesser = true
+	sp_max.allow_greater = true
+	sp_max.step = cur_step
+	sp_max.min_value = -1e9
+	sp_max.max_value = 1e9
+	sp_max.value = cur_max
+	grid.add_child(sp_max)
+
+	var lbl_step := Label.new(); lbl_step.text = "步长"; grid.add_child(lbl_step)
+	var sp_step := SpinBox.new()
+	sp_step.allow_lesser = true
+	sp_step.allow_greater = true
+	sp_step.step = 0.001
+	sp_step.min_value = 0.0001
+	sp_step.max_value = 1000.0
+	sp_step.value = cur_step
+	grid.add_child(sp_step)
+
+	# 确认: 写入 _param_range_overrides + 应用到当前 SpinBox + 持久化 + push undo
+	dlg.confirmed.connect(func() -> void:
+		var nmin: float = sp_min.value
+		var nmax: float = sp_max.value
+		var nstep: float = sp_step.value
+		# 防呆: max 必须严格大于 min, 否则 SpinBox 会卡死
+		if nmax <= nmin:
+			nmax = nmin + maxf(nstep, 0.001)
+		# Undo: range op 一次性 push (弹窗确认是离散动作, 不需要合并)
+		# had_override 记录 "之前是否有 override", undo 时决定是删 override 还是改回旧值
+		if _selected_block_index >= 0 and _selected_block_index < _placed_blocks.size():
+			_undo_push({
+				"op": "range",
+				"index": _selected_block_index,
+				"key": key,
+				"old_min": cur_min,
+				"old_max": cur_max,
+				"old_step": cur_step,
+				"new_min": nmin,
+				"new_max": nmax,
+				"new_step": nstep,
+				"had_override": _param_range_overrides.has(range_key),
+			})
+		_param_range_overrides[range_key] = {"min": nmin, "max": nmax, "step": nstep}
+		_save_editor_settings()
+		# 立刻应用到当前选中的 SpinBox (重建参数面板太重, 只改一个 SpinBox 即可)
+		if target_spin and is_instance_valid(target_spin):
+			target_spin.min_value = nmin
+			target_spin.max_value = nmax
+			target_spin.step = nstep
+			# 当前值若超出新范围 → clamp 到新边界
+			var clamped_v: float = clampf(target_spin.value, nmin, nmax)
+			target_spin.value = clamped_v
+	)
+	# "重置默认" 按钮: 删除 override + 应用默认值到 SpinBox + 持久化
+	dlg.custom_action.connect(func(action: StringName) -> void:
+		if action == "reset_default":
+			_param_range_overrides.erase(range_key)
+			_save_editor_settings()
+			if target_spin and is_instance_valid(target_spin):
+				target_spin.min_value = def_min
+				target_spin.max_value = def_max
+				target_spin.step = def_step
+				target_spin.value = clampf(target_spin.value, def_min, def_max)
+			dlg.hide()
+	)
+	add_child(dlg)
+	dlg.popup_centered()
 
 
 # SpinBox 改值: 同步到选中节点的 transform
@@ -2025,7 +2415,13 @@ func _begin_drag_selected() -> void:
 		return
 	# 拖动平面 Y = 第一个选中积木的 Y (这样积木不会被拖到地下/天上)
 	_drag_plane_y = first_node.global_position.y
-	var mp_world: Vector3 = _project_mouse_to_y(_drag_plane_y)
+	# 默认进入横向模式 (Shift 按下时 _update_drag_selected 会自动切换到纵向)
+	_drag_vertical_mode = Input.is_key_pressed(KEY_SHIFT)
+	var mp_world: Vector3
+	if _drag_vertical_mode:
+		mp_world = _project_mouse_to_vertical_plane(first_node.global_position)
+	else:
+		mp_world = _project_mouse_to_y(_drag_plane_y)
 	if mp_world == Vector3.INF:
 		return
 	_drag_start_mouse_world = mp_world
@@ -2047,19 +2443,74 @@ func _begin_drag_selected() -> void:
 func _update_drag_selected() -> void:
 	if not _is_dragging_selected or _selected_block_indices.is_empty():
 		return
-	var mp_world: Vector3 = _project_mouse_to_y(_drag_plane_y)
+	# === 模式切换检测 (按住 Shift = 纵向 Y 拖拽) ===
+	# 用户需求 (2026-06-02): "横向拖拽很方便, 希望按住快捷键纵向拖拽"
+	# 选 Shift 因为它和 Alt(临时关网格) / Ctrl(多选) 都不冲突, 也跟 Shift+滚轮调放置高度
+	# 在不同上下文 (拖拽 vs 滚轮) 也不冲突
+	#
+	# 模式切换数学:
+	#   切换瞬间不能直接切, 否则会跳变 — 鼠标在原模式投影到 plane A, 切到新模式投影到
+	#   plane B, delta 的"起点"变了, 物体会瞬移. 解决: 切换时重置 _drag_start_positions
+	#   为各物体的"当前位置", 同时重置 _drag_start_mouse_world 为新模式当前鼠标投影
+	#   → 切换后这一帧 delta = 0, 不会跳变, 之后按新模式累积 delta
+	var want_vertical: bool = Input.is_key_pressed(KEY_SHIFT)
+	if want_vertical != _drag_vertical_mode:
+		_drag_vertical_mode = want_vertical
+		# 重置起始位置 = 所有选中物体的当前位置
+		_drag_start_positions.clear()
+		for idx in _selected_block_indices:
+			var i: int = int(idx)
+			if i >= 0 and i < _placed_blocks.size():
+				var n: Node3D = _placed_blocks[i]["node"]
+				if n != null:
+					_drag_start_positions.append(n.global_position)
+				else:
+					_drag_start_positions.append(Vector3.ZERO)
+			else:
+				_drag_start_positions.append(Vector3.ZERO)
+		# 重置起始鼠标世界点为新模式下的投影
+		var first_pos: Vector3 = _drag_start_positions[0]
+		if _drag_vertical_mode:
+			var mp_v: Vector3 = _project_mouse_to_vertical_plane(first_pos)
+			if mp_v != Vector3.INF:
+				_drag_start_mouse_world = mp_v
+		else:
+			_drag_plane_y = first_pos.y
+			var mp_h: Vector3 = _project_mouse_to_y(_drag_plane_y)
+			if mp_h != Vector3.INF:
+				_drag_start_mouse_world = mp_h
+		# 切换帧不应用 delta, 等下一帧自然累积
+		return
+
+	# === 应用 delta (按当前模式) ===
+	var mp_world: Vector3
+	if _drag_vertical_mode:
+		# 纵向模式: 投影到"过第一个物体, 法线 = 相机 forward 在 XZ 的水平投影"的垂直平面
+		mp_world = _project_mouse_to_vertical_plane(_drag_start_positions[0] if not _drag_start_positions.is_empty() else Vector3.ZERO)
+	else:
+		mp_world = _project_mouse_to_y(_drag_plane_y)
 	if mp_world == Vector3.INF:
 		return
-	# delta = 当前鼠标点 - 起始鼠标点 (Y 不动)
+	# delta = 当前鼠标点 - 起始鼠标点
 	var delta: Vector3 = mp_world - _drag_start_mouse_world
-	delta.y = 0.0
-	# 网格吸附: 把"第一个积木的目标新位置"吸附到网格, 再反推 delta
-	# (这样多选整组平移时, 第一个积木齐, 其他保持相对偏移)
-	if _grid_snap_enabled and not Input.is_key_pressed(KEY_ALT) and not _drag_start_positions.is_empty():
-		var first_target: Vector3 = _drag_start_positions[0] + delta
-		var snapped: Vector3 = _snap_to_grid(first_target)
-		delta = snapped - _drag_start_positions[0]
+	if _drag_vertical_mode:
+		# 纵向模式: 只保留 Y 分量, XZ 全部清零 (鼠标的 X/Z 分量来自垂直平面投影, 不该影响物体)
+		delta = Vector3(0.0, delta.y, 0.0)
+		# Y 网格吸附 (用 _grid_step_y 步长, 按 Alt 启用)
+		if _grid_snap_enabled and Input.is_key_pressed(KEY_ALT) and not _drag_start_positions.is_empty() and _grid_step_y > 0.001:
+			var first_target_y: float = _drag_start_positions[0].y + delta.y
+			var snapped_y: float = roundf(first_target_y / _grid_step_y) * _grid_step_y
+			delta.y = snapped_y - _drag_start_positions[0].y
+	else:
+		# 横向模式: Y 不动, 只用 XZ
 		delta.y = 0.0
+		# 网格吸附: 把"第一个积木的目标新位置"吸附到网格, 再反推 delta
+		# (这样多选整组平移时, 第一个积木齐, 其他保持相对偏移)
+		if _grid_snap_enabled and Input.is_key_pressed(KEY_ALT) and not _drag_start_positions.is_empty():
+			var first_target: Vector3 = _drag_start_positions[0] + delta
+			var snapped: Vector3 = _snap_to_grid(first_target)
+			delta = snapped - _drag_start_positions[0]
+			delta.y = 0.0
 	for j in range(_selected_block_indices.size()):
 		var idx: int = int(_selected_block_indices[j])
 		if idx < 0 or idx >= _placed_blocks.size() or j >= _drag_start_positions.size():
@@ -2115,6 +2566,46 @@ func _project_mouse_to_y(plane_y: float) -> Vector3:
 	if absf(dir.y) < 0.001:
 		return Vector3.INF
 	var t: float = (plane_y - from.y) / dir.y
+	if t < 0.0:
+		return Vector3.INF
+	return from + dir * t
+
+
+# 鼠标射线与"过 plane_origin 的垂直平面"求交 — 用于 Shift+拖拽的纵向 Y 拖动
+# 平面定义:
+#   平面经过 plane_origin (通常是物体当前位置)
+#   平面法线 = 相机 forward 在 XZ 平面的水平投影 (反向, 让平面正对相机)
+#   即: 一个垂直于地面、迎面对着相机的平面
+# 数学:
+#   cam_fwd_xz = (cam.forward.x, 0, cam.forward.z).normalized()
+#   平面法线 n = -cam_fwd_xz   (指向相机)
+#   平面方程: (P - plane_origin) · n = 0
+#   求 ray: from + t*dir 与平面交
+#     t = (plane_origin - from) · n / (dir · n)
+# 这样设计的好处:
+#   · 鼠标向上移 → 交点 Y 上升 → 物体上升 (符合直觉)
+#   · 平面始终迎面对着相机, 鼠标灵敏度最高
+#   · 物体 X/Z 不会因为投影到平面而漂移 (因为我们最终只取 delta.y)
+func _project_mouse_to_vertical_plane(plane_origin: Vector3) -> Vector3:
+	var mp: Vector2 = get_viewport().get_mouse_position()
+	var from: Vector3 = _cam.project_ray_origin(mp)
+	var dir: Vector3 = _cam.project_ray_normal(mp)
+	# 相机 forward = -basis.z
+	var cam_fwd: Vector3 = -_cam.global_transform.basis.z
+	var n: Vector3 = Vector3(cam_fwd.x, 0.0, cam_fwd.z)
+	var n_len: float = n.length()
+	if n_len < 0.001:
+		# 相机几乎垂直俯视 (cam forward ≈ ±Y), 没有有效水平方向
+		# 退化: 用 Vector3(0,0,-1) 兜底, 让纵向拖拽至少能用 (虽然手感没这么好)
+		n = Vector3(0.0, 0.0, -1.0)
+	else:
+		n = n / n_len   # 归一化
+	# 法线翻反, 让平面"迎面对着相机"
+	n = -n
+	var denom: float = dir.dot(n)
+	if absf(denom) < 0.0001:
+		return Vector3.INF
+	var t: float = (plane_origin - from).dot(n) / denom
 	if t < 0.0:
 		return Vector3.INF
 	return from + dir * t
@@ -2579,6 +3070,38 @@ func _get_mouse_world_point() -> Vector3:
 	return from + dir * t
 
 
+## C 键表面吸附: 从鼠标射线 raycast 到场景中的碰撞体 (道路/窄道表面)
+## 返回 {"position": Vector3, "normal": Vector3} 或空字典
+func _raycast_surface_at_mouse() -> Dictionary:
+	var mouse_pos: Vector2 = get_viewport().get_mouse_position()
+	var from: Vector3 = _cam.project_ray_origin(mouse_pos)
+	var dir: Vector3 = _cam.project_ray_normal(mouse_pos)
+	var space_state: PhysicsDirectSpaceState3D = get_viewport().world_3d.direct_space_state
+	if space_state == null:
+		return {}
+	var query := PhysicsRayQueryParameters3D.create(from, from + dir * 2000.0)
+	query.collision_mask = 1  # 只检测 layer 1 (道路/积木的碰撞层)
+	query.collide_with_areas = false
+	query.collide_with_bodies = true
+	# 排除预览节点自身的碰撞体, 防止 raycast 打到自己导致机关越吸越近
+	if _preview_node != null:
+		var exclude_rids: Array[RID] = []
+		_collect_body_rids(_preview_node, exclude_rids)
+		query.exclude = exclude_rids
+	var result: Dictionary = space_state.intersect_ray(query)
+	if result.is_empty():
+		return {}
+	return {"position": result["position"], "normal": result["normal"]}
+
+
+## 递归收集节点树下所有 CollisionObject3D 的 RID (用于 raycast 排除)
+func _collect_body_rids(node: Node, out: Array[RID]) -> void:
+	if node is CollisionObject3D:
+		out.append(node.get_rid())
+	for child in node.get_children():
+		_collect_body_rids(child, out)
+
+
 # ============================================================
 #  预览节点 (鼠标 hover 显示半透明积木/锚点)
 # ============================================================
@@ -2674,11 +3197,34 @@ func _make_node_transparent(node: Node, alpha: float) -> void:
 #  鼠标位置更新预览
 # ============================================================
 func _process(delta: float) -> void:
+	# 机关栏宽度同步: 让机关栏 ScrollContainer 的可视宽度等于积木栏 panel 宽度
+	# 用户需求 (2026-06-02): "机关栏太长了 现在有进度条 可以改成跟积木栏一样宽"
+	# 实现: 每帧读 blocks_panel.size.x (由 CenterContainer 自适应内容算出)
+	#       减 16 = 减去 mech_panel 的 content_margin (左右各 8) 让 scroll 内容区跟 blocks 视觉对齐
+	#       超过 16px 差异才同步, 避免微小浮动反复触发 layout
+	if _bottom_blocks_panel != null and _mech_scroll != null:
+		var target_w: float = maxf(_bottom_blocks_panel.size.x - 16.0, 200.0)
+		if absf(_mech_scroll.custom_minimum_size.x - target_w) > 0.5:
+			_mech_scroll.custom_minimum_size.x = target_w
+	# 粘贴预览跟随鼠标
+	_update_paste_preview()
 	# 选中积木呼吸闪烁动画 (用 sin 让 emission 强度上下变化)
 	# 即使 _preview_node 为 null 也要跑, 否则 SELECT 模式下闪烁停了
 	_update_selection_breathe(delta)
+	# 待 flush 的 undo (参数/颜色/范围连续修改) 倒计时
+	# 用户拖完 SpinBox 或色盘后停手 PARAM_UNDO_FLUSH_DELAY 秒, 自动 push 一条 undo
+	if not _pending_undo.is_empty():
+		var t: float = float(_pending_undo.get("timer", 0.0)) - delta
+		if t <= 0.0:
+			_flush_pending_undo()
+		else:
+			_pending_undo["timer"] = t
 	# SELECT 模式: 处理鼠标 hover 高亮 + 选中拖动
 	if _current_tool == Tool.SELECT:
+		# 手柄拖拽优先
+		if _is_dragging_handle:
+			_update_drag_handle()
+			return
 		# 拖动优先, 拖动时不更新 hover (避免 hover 蓝色闪烁覆盖选中黄色)
 		if _is_dragging_selected:
 			_update_drag_selected()
@@ -2692,7 +3238,7 @@ func _process(delta: float) -> void:
 		var pp: Vector3 = _get_mouse_world_point()
 		if pp == Vector3.ZERO:
 			return
-		if _grid_snap_enabled and not Input.is_key_pressed(KEY_ALT):
+		if _grid_snap_enabled and Input.is_key_pressed(KEY_ALT):
 			pp = _snap_to_grid(pp)
 		# 第一项放在鼠标位置 + 应用 UI 角度; 其它项按 rel_xform 跟着第一项走
 		# rel_xform 已在 _rebuild_preview 写到 n.transform, 所以只要把每个 n 的 global =
@@ -2708,26 +3254,62 @@ func _process(delta: float) -> void:
 			var rel: Transform3D = items[i].get("rel_xform", Transform3D.IDENTITY)
 			n.global_transform = (base_xform * rel).orthonormalized()
 		return
-	# BLOCK / ANCHOR 模式: 跟随鼠标的预览节点
+	# BLOCK / ANCHOR / SPAWN 模式: 跟随鼠标的预览节点
 	if _preview_node == null:
 		return
-	var p: Vector3 = _get_mouse_world_point()
-	if p == Vector3.ZERO:
-		return
+	# C 键吸附: 机关/出生点/锚点吸附到道路/窄道表面 (raycast 到物理碰撞体表面)
+	# 优先尝试 C 键吸附 (即使平面交点失败也能靠 raycast 找到道路)
+	var _surface_snapped: bool = false
+	var p: Vector3 = Vector3.ZERO
+	if Input.is_key_pressed(KEY_C) and _current_tool in [Tool.BLOCK, Tool.SPAWN, Tool.ANCHOR]:
+		var snap_result: Dictionary = _raycast_surface_at_mouse()
+		if not snap_result.is_empty():
+			p = snap_result["position"] + Vector3.UP * 0.05  # 微抬防 z-fighting
+			_surface_snapped = true
+	if not _surface_snapped:
+		p = _get_mouse_world_point()
+		if p == Vector3.ZERO:
+			return
 	# 网格吸附 (按住 Alt 可临时关闭, 让玩家精细微调)
-	if _grid_snap_enabled and not Input.is_key_pressed(KEY_ALT):
+	if not _surface_snapped and _grid_snap_enabled and Input.is_key_pressed(KEY_ALT):
 		p = _snap_to_grid(p)
 	if _current_tool == Tool.BLOCK:
-		# 鼠标位置直接放, 应用用户 UI 调整的 yaw/pitch/roll
-		# 不再"磁吸到最后一块出口" — 玩家自己决定位置, 网格吸附保证对齐
-		var basis: Basis = _get_place_extra_basis()
+		# 窄道吸附预览: 如果正在放窄道且选中了已有窄道, 预览位置+朝向吸附到端点
+		var narrow_snap_basis: Basis = Basis.IDENTITY
+		var narrow_snapped: bool = false
+		if (_selected_block_id == "narrow_path" or _selected_block_id == "fragile_narrow") and not _selected_block_indices.is_empty():
+			var sel_idx: int = int(_selected_block_indices[0])
+			if sel_idx >= 0 and sel_idx < _placed_blocks.size():
+				var sel_node: Node3D = _placed_blocks[sel_idx].get("node")
+				if sel_node != null and sel_node.has_method("get_end_world_pos"):
+					var nearest: String = sel_node.call("get_nearest_endpoint", p)
+					var snap_pos: Vector3
+					var tangent: Vector3
+					if nearest == "end":
+						snap_pos = sel_node.call("get_end_world_pos")
+						tangent = sel_node.call("get_end_tangent_world")
+					else:
+						snap_pos = sel_node.call("get_start_world_pos")
+						tangent = -sel_node.call("get_start_tangent_world")  # 反向: 新窄道从这里出发
+					# 只在鼠标距端点 < 15m 时吸附
+					if p.distance_to(snap_pos) < 15.0:
+						p = snap_pos
+						# 对齐朝向: 让新窄道的 -Z (前进方向) 对齐切线方向
+						if tangent.length() > 0.01:
+							var fwd: Vector3 = tangent.normalized()
+							var up := Vector3.UP
+							var right: Vector3 = up.cross(fwd).normalized()
+							if right.length() < 0.01:
+								right = Vector3.RIGHT
+							up = fwd.cross(right).normalized()
+							narrow_snap_basis = Basis(right, up, -fwd)
+							narrow_snapped = true
+		var basis: Basis = narrow_snap_basis if narrow_snapped else _get_place_extra_basis()
 		_preview_node.global_transform = Transform3D(basis, p).orthonormalized()
 	elif _current_tool == Tool.SPAWN:
 		# 出生点预览: 跟随鼠标 + 应用 yaw 滑块 (让玩家可以调整出生朝向)
 		var basis2: Basis = Basis(Vector3.UP, deg_to_rad(_place_yaw_deg))
-		var p2: Vector3 = p
-		p2.y = maxf(p2.y, 1.0)   # 与放置时一致, 不让出生点埋地下
-		_preview_node.global_transform = Transform3D(basis2, p2).orthonormalized()
+		_preview_node.global_transform = Transform3D(basis2, p).orthonormalized()
 	else:
 		# 锚点: 鼠标地面位置 + 默认 8m 高度
 		_preview_node.global_position = p + Vector3(0.0, 8.0, 0.0)
@@ -2821,6 +3403,10 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mb: InputEventMouseButton = event
 		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
+			# 粘贴模式: 点击 = 确认放下 (优先级最高)
+			if _paste_mode:
+				_confirm_paste()
+				return
 			# 左键行为按工具模式分流:
 			#   SELECT 模式: 点击 = 选中已放置积木; 点空白 = 取消选中 (不会放新积木!)
 			#   BLOCK 模式 : 点击 = 放新积木 (玩家选了具体积木后才进 BLOCK 模式)
@@ -2857,6 +3443,12 @@ func _unhandled_input(event: InputEvent) -> void:
 								# 同步参数面板的 4 个 0/1 SpinBox 显示
 								_refresh_selection_ui()
 								return
+				# 窄道手柄检测: 已选中窄道时, 点击手柄球体 → 进入手柄拖拽模式
+				if not _selected_block_indices.is_empty():
+					var handle_hit: String = _pick_narrow_path_handle_at_mouse()
+					if handle_hit != "":
+						_begin_drag_handle(handle_hit)
+						return
 				var picked: int = _pick_placed_block_at_mouse()
 				# Ctrl+点击 = 多选切换 (加入/移出)
 				if mb.ctrl_pressed and picked >= 0:
@@ -2878,7 +3470,9 @@ func _unhandled_input(event: InputEvent) -> void:
 				_place_at_mouse()
 		elif mb.button_index == MOUSE_BUTTON_LEFT and not mb.pressed:
 			# 鼠标左键松开 → 结束拖动 (无论之前是否在拖)
-			if _is_dragging_selected:
+			if _is_dragging_handle:
+				_end_drag_handle()
+			elif _is_dragging_selected:
 				_end_drag_selected()
 		elif mb.button_index == MOUSE_BUTTON_RIGHT:
 			_is_rotating_cam = mb.pressed
@@ -2888,20 +3482,20 @@ func _unhandled_input(event: InputEvent) -> void:
 			if mb.shift_pressed:
 				_set_place_y_offset(_place_y_offset + _grid_step_y)
 			else:
-				_cam_distance = maxf(_cam_distance - CAM_ZOOM_SPEED, 5.0)
+				_cam_distance = maxf(_cam_distance - CAM_ZOOM_SPEED, 2.0)
 				_update_camera_transform()
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
 			if mb.shift_pressed:
 				_set_place_y_offset(_place_y_offset - _grid_step_y)
 			else:
-				_cam_distance = minf(_cam_distance + CAM_ZOOM_SPEED, 200.0)
+				_cam_distance = minf(_cam_distance + CAM_ZOOM_SPEED, 300.0)
 				_update_camera_transform()
 
 	# === 鼠标移动 (旋转视角) ===
 	elif event is InputEventMouseMotion and _is_rotating_cam:
 		var mm: InputEventMouseMotion = event
 		_cam_yaw -= mm.relative.x * CAM_ROTATE_SENSITIVITY
-		_cam_pitch = clampf(_cam_pitch - mm.relative.y * CAM_ROTATE_SENSITIVITY, -1.4, 0.1)
+		_cam_pitch = clampf(_cam_pitch - mm.relative.y * CAM_ROTATE_SENSITIVITY, -1.55, 1.2)
 		_update_camera_transform()
 
 	# === 键盘 ===
@@ -2923,6 +3517,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_F5:
 				_on_test_pressed()
 			KEY_ESCAPE:
+				# 粘贴模式下 ESC = 取消粘贴 (优先级最高)
+				if _paste_mode:
+					_cancel_paste()
+					return
 				# ESC 行为 (用户要求: 编辑器场景下 ESC 绝不返回主场景):
 				#   · 当前在 BLOCK / ANCHOR 工具 → 切回 SELECT 模式 (退出当前工具)
 				#   · 当前在 SELECT 但有选中 → 取消选中
@@ -2943,6 +3541,30 @@ func _unhandled_input(event: InputEvent) -> void:
 				# Ctrl+Y = 重做
 				if event.ctrl_pressed:
 					_redo_last()
+			KEY_C:
+				# Ctrl+C = 复制选中
+				if event.ctrl_pressed and not _selected_block_indices.is_empty():
+					_copy_selected()
+			KEY_V:
+				# Ctrl+V = 粘贴 (进入预览模式跟随鼠标)
+				if event.ctrl_pressed and not _clipboard.is_empty():
+					_start_paste_preview()
+			KEY_D:
+				# Ctrl+D = 原地复制 (偏移 +2m 在相机右方向, 立即放下)
+				if event.ctrl_pressed and not _selected_block_indices.is_empty():
+					_duplicate_in_place()
+			KEY_J:
+				# J 键 = 连接两段窄道 (在选中的两段之间生成普通窄道连接)
+				if _selected_block_indices.size() == 2:
+					_join_narrow_paths("narrow_path")
+			KEY_K:
+				# K 键 = 连接两段窄道 (在选中的两段之间生成易碎窄道连接)
+				if _selected_block_indices.size() == 2:
+					_join_narrow_paths("fragile_narrow")
+			KEY_L:
+				# L 键 = 在选中的道路/窄道中线上生成绳星轨迹 (每3颗一组)
+				if not _selected_block_indices.is_empty():
+					_generate_star_trails_on_selected()
 			KEY_R:
 				# R 键 = 顺时针旋转 yaw +90°, 行为按当前模式区分:
 				#   · SELECT 模式 + 已选中积木 → 旋转选中的积木 (单选/多选都支持, 多选时整组绕第一个旋转)
@@ -2999,6 +3621,11 @@ func _physics_process(delta: float) -> void:
 		if focus_owner != null and not (focus_owner is LineEdit):
 			focus_owner.release_focus()
 		move.x += 1.0
+	# Q/E 键: 相机焦点上下移动 (深入底部/升高)
+	if Input.is_key_pressed(KEY_Q):
+		move.y -= 1.0
+	if Input.is_key_pressed(KEY_E):
+		move.y += 1.0
 	if move.length_squared() > 0.0:
 		# 长按加速: 累计按住时间, 超过延迟后逐渐提速
 		_cam_move_hold_time += delta
@@ -3006,10 +3633,15 @@ func _physics_process(delta: float) -> void:
 		if _cam_move_hold_time > CAM_ACCEL_DELAY:
 			var accel_time: float = _cam_move_hold_time - CAM_ACCEL_DELAY
 			speed = minf(CAM_MOVE_SPEED + accel_time * CAM_ACCEL_RAMP * CAM_MOVE_SPEED, CAM_MOVE_SPEED_MAX)
-		move = move.normalized() * speed * delta
-		# 移动方向相对相机水平朝向
+		var speed_scaled: float = speed * delta
+		# 分离水平和垂直移动: 水平 (XZ) 相对相机朝向, 垂直 (Y) 用世界坐标
+		var vert: float = move.y
+		var horiz := Vector3(move.x, 0.0, move.z)
+		if horiz.length_squared() > 0.0:
+			horiz = horiz.normalized()
 		var yaw_basis := Basis(Vector3.UP, _cam_yaw)
-		_cam_focus += yaw_basis * move
+		_cam_focus += yaw_basis * horiz * speed_scaled
+		_cam_focus.y += vert * speed_scaled
 		_update_camera_transform()
 	else:
 		# 松开按键, 重置累计时间
@@ -3066,10 +3698,15 @@ func _place_at_mouse() -> void:
 		var sp: Vector3 = _get_mouse_world_point()
 		if sp == Vector3.ZERO:
 			return
-		if _grid_snap_enabled and not Input.is_key_pressed(KEY_ALT):
+		# C 键吸附: 出生点也能吸附到道路表面
+		if Input.is_key_pressed(KEY_C):
+			var snap_result: Dictionary = _raycast_surface_at_mouse()
+			if not snap_result.is_empty():
+				sp = snap_result["position"] + Vector3.UP * 0.05
+		elif _grid_snap_enabled and Input.is_key_pressed(KEY_ALT):
 			sp = _snap_to_grid(sp)
-		# 抬高 1m 让车不会卡在地下
-		sp.y = maxf(sp.y, 1.0)
+		# 微抬 0.5m 让车不会嵌入路面
+		sp.y += 0.5
 		var old_pos: Vector3 = _spawn_position
 		var old_yaw: float = _spawn_yaw
 		_spawn_position = sp
@@ -3094,6 +3731,15 @@ func _place_at_mouse() -> void:
 		_placed_root.add_child(node)
 		# 用 preview 的当前 transform 作为放置位置
 		node.global_transform = _preview_node.global_transform
+		# 窄道吸附: preview 已在正确位置+朝向 (在 _process 的预览跟随中计算好了)
+		# node.global_transform = _preview_node.global_transform 已经包含了吸附位置和朝向
+		# 应用 Tuner 机关默认值 (用户需求 2026-06-03: 机关 Tab 配置所有默认参数)
+		# 优先找 Tuner 节点 (如果存在); 否则直接从 cfg 文件读
+		var tuner_node: Node = get_tree().current_scene.find_child("Tuner", true, false)
+		if tuner_node and tuner_node.has_method("apply_mechanism_defaults"):
+			tuner_node.call("apply_mechanism_defaults", node, _selected_block_id)
+		else:
+			_apply_mechanism_defaults_from_cfg(node, _selected_block_id)
 		# kind: speed_pad 是机关, 其他都是路段积木 (速度带也能选中拖拽参数, 但序列化时按 kind 区分)
 		var kind: String = "speed_pad" if _selected_block_id == "speed_pad" else "block"
 		_placed_blocks.append({"id": _selected_block_id, "node": node, "kind": kind})
@@ -3217,6 +3863,20 @@ func _create_anchor_visual(pos: Vector3, anchor_r: float, _detect_r: float, col:
 const UNDO_STACK_LIMIT: int = 200
 var _undo_stack: Array = []
 var _redo_stack: Array = []
+# undo 时是否保持选中: param / range 等"原地修改"型操作设 true,
+# add / delete / move 等会改变 _placed_blocks 数组结构的设 false
+var _undo_keep_selection: bool = false
+
+# ---- 复制粘贴 (2026-06-03) ----
+# 剪贴板: 保存选中积木的 id + 参数 + 相对位置 (相对第一个积木)
+# 结构: Array[Dictionary] 每项 {"id", "rel_xform": Transform3D, "params": {key: value}}
+# _clipboard_base_basis: 第一个积木的旋转 (粘贴时用它恢复整组的绝对朝向)
+# 粘贴时进入预览模式 (跟预设放置一样, 跟随鼠标, 点击放下)
+var _clipboard: Array = []
+var _clipboard_base_basis: Basis = Basis()
+# 粘贴预览节点列表 (跟鼠标走, 点击确认放置, ESC/右键取消)
+var _paste_preview_nodes: Array = []
+var _paste_mode: bool = false
 
 
 func _undo_push(op_data: Dictionary) -> void:
@@ -3224,6 +3884,71 @@ func _undo_push(op_data: Dictionary) -> void:
 	if _undo_stack.size() > UNDO_STACK_LIMIT:
 		_undo_stack.pop_front()
 	_redo_stack.clear()   # 新操作砍断重做分支
+
+
+# 加入"连续修改"的 pending undo (合并模式, 防止爆栈)
+# kind: "param" / "color" / "range" — 不同 kind 之间不合并 (即使 idx/key 相同)
+# old_v_if_new: 只有第一次 (创建 pending) 时使用; 后续合并修改时忽略 (保持原始 old_value)
+# new_v: 每次合并都更新成最新值
+# extra: 可选额外 dict (例: range op 携带 old_min/max/step + new_min/max/step)
+func _queue_pending_undo(kind: String, idx: int, key: String, old_v: float, new_v: float, extra: Dictionary = {}) -> void:
+	# 如果 pending 已经存在, 但 kind/idx/key 不同 → 先 flush 旧的, 再开新的
+	if not _pending_undo.is_empty():
+		var same_target: bool = (
+			String(_pending_undo.get("op", "")) == kind
+			and int(_pending_undo.get("index", -2)) == idx
+			and String(_pending_undo.get("key", "")) == key
+		)
+		if not same_target:
+			_flush_pending_undo()
+		else:
+			# 同一个目标的连续修改 → 只更新 new_value + 重置 timer
+			_pending_undo["new_value"] = new_v
+			_pending_undo["timer"] = PARAM_UNDO_FLUSH_DELAY
+			# 范围修改的话 extra 里也合并最新 new_min/max/step
+			for k in extra.keys():
+				if String(k).begins_with("new_"):
+					_pending_undo[k] = extra[k]
+			return
+	# 新 pending: 记录 old_v 作为"这一段连续修改的起点"
+	var entry: Dictionary = {
+		"op": kind,
+		"index": idx,
+		"key": key,
+		"old_value": old_v,
+		"new_value": new_v,
+		"timer": PARAM_UNDO_FLUSH_DELAY,
+	}
+	for k in extra.keys():
+		entry[k] = extra[k]
+	_pending_undo = entry
+
+
+# 立刻把 pending undo push 到 _undo_stack (在 Ctrl+Z / 切换选中 / 切换工具前调用)
+# 用户没改完就按 Ctrl+Z 也能撤销最近的修改, 不会"丢失最后 0.4s 内的改动"
+func _flush_pending_undo() -> void:
+	if _pending_undo.is_empty():
+		return
+	var entry: Dictionary = _pending_undo
+	_pending_undo = {}
+	# 只在 old_value != new_value 时才入栈 (单纯点击 SpinBox 不算编辑)
+	# range op 单独判断 (extra 字段)
+	var op_kind: String = String(entry.get("op", ""))
+	var changed: bool = false
+	if op_kind == "range":
+		# 范围编辑: old_min/max/step 任一变 = 算改了
+		changed = (
+			float(entry.get("old_min", 0.0)) != float(entry.get("new_min", 0.0))
+			or float(entry.get("old_max", 0.0)) != float(entry.get("new_max", 0.0))
+			or float(entry.get("old_step", 0.0)) != float(entry.get("new_step", 0.0))
+		)
+	else:
+		changed = absf(float(entry.get("old_value", 0.0)) - float(entry.get("new_value", 0.0))) > 0.000001
+	if changed:
+		_undo_stack.append(entry)
+		if _undo_stack.size() > UNDO_STACK_LIMIT:
+			_undo_stack.pop_front()
+		_redo_stack.clear()
 
 
 # 从 _placed_blocks 索引数组拿"快照" (用于 delete 操作的 undo, 删除前先存)
@@ -3309,6 +4034,9 @@ func _restore_from_snapshots(snapshots: Array) -> Array:
 
 
 func _undo_last() -> void:
+	# 先把还没入栈的连续修改 (拖拽 SpinBox 等) flush 掉
+	# 这样用户拖完立刻按 Ctrl+Z 也能撤销最近的改动
+	_flush_pending_undo()
 	if _undo_stack.is_empty():
 		print("[TrackEditor] Undo: 栈空")
 		return
@@ -3322,6 +4050,7 @@ func _undo_last() -> void:
 
 
 func _redo_last() -> void:
+	_flush_pending_undo()   # 同样防止丢失最近修改
 	if _redo_stack.is_empty():
 		print("[TrackEditor] Redo: 栈空")
 		return
@@ -3335,7 +4064,10 @@ func _redo_last() -> void:
 
 
 # 撤销一个操作 (反方向应用)
+# 一些 op (param/range) 不希望清掉选中, 让 SpinBox 即时刷新成新值
+# 通过 _undo_keep_selection 标记: 子分支里设 true, 末尾的清选就跳过
 func _apply_undo(op: Dictionary) -> void:
+	_undo_keep_selection = false
 	var op_name: String = String(op.get("op", ""))
 	match op_name:
 		"add":
@@ -3386,17 +4118,45 @@ func _apply_undo(op: Dictionary) -> void:
 				var n: Node3D = _placed_blocks[idx].get("node")
 				if n != null and n.has_method("set_editable_param"):
 					n.call("set_editable_param", key, old_v)
+			# 保持原选中, 刷新参数 UI 让 SpinBox 显示新值 (撤销后的值)
+			# (默认末尾会 _select_block(-1) 清掉, 我们标记不清)
+			_undo_keep_selection = true
+		"range":
+			# 范围编辑 undo: 还原 _param_range_overrides + 重建参数面板让 SpinBox 范围回到旧值
+			var idx: int = int(op.get("index", -1))
+			var key: String = String(op.get("key", ""))
+			var range_key: String = ""
+			if idx >= 0 and idx < _placed_blocks.size():
+				range_key = String(_placed_blocks[idx].get("id", "")) + ":" + key
+			var old_min: float = float(op.get("old_min", 0.0))
+			var old_max: float = float(op.get("old_max", 1.0))
+			var old_step: float = float(op.get("old_step", 0.1))
+			var had_override: bool = bool(op.get("had_override", false))
+			if had_override:
+				_param_range_overrides[range_key] = {"min": old_min, "max": old_max, "step": old_step}
+			else:
+				# 之前没有 override (即用默认), 撤销 = 删掉这条 override
+				_param_range_overrides.erase(range_key)
+			_save_editor_settings()
+			_undo_keep_selection = true
 		"spawn_move":
 			_spawn_position = op.get("old_pos", Vector3.ZERO)
 			_spawn_yaw = float(op.get("old_yaw", 0.0))
 			_sync_spawn_to_placed()
-	# 撤销可能影响选中, 简单粗暴清掉
-	_select_block(-1)
-	_refresh_selection_ui()
+	# 撤销可能影响选中, 默认清掉. 但 param / range op 例外: 保持选中并刷新参数面板
+	# 让 SpinBox 立刻显示撤销后的值 (用户视觉反馈"我的撤销生效了")
+	if _undo_keep_selection and _selected_block_index >= 0 and _selected_block_index < _placed_blocks.size():
+		var sel_n: Node3D = _placed_blocks[_selected_block_index].get("node")
+		_rebuild_sel_param_rows(sel_n)
+		_sync_sel_spinbox_from_node()
+	else:
+		_select_block(-1)
+		_refresh_selection_ui()
 
 
 # 重做一个操作 (正方向再次应用)
 func _apply_redo(op: Dictionary) -> void:
+	_undo_keep_selection = false
 	var op_name: String = String(op.get("op", ""))
 	match op_name:
 		"add":
@@ -3447,12 +4207,31 @@ func _apply_redo(op: Dictionary) -> void:
 				var n: Node3D = _placed_blocks[idx].get("node")
 				if n != null and n.has_method("set_editable_param"):
 					n.call("set_editable_param", key, new_v)
+			_undo_keep_selection = true
+		"range":
+			# 重做范围编辑: 应用 new_min/max/step
+			var idx: int = int(op.get("index", -1))
+			var key: String = String(op.get("key", ""))
+			var range_key: String = ""
+			if idx >= 0 and idx < _placed_blocks.size():
+				range_key = String(_placed_blocks[idx].get("id", "")) + ":" + key
+			var new_min: float = float(op.get("new_min", 0.0))
+			var new_max: float = float(op.get("new_max", 1.0))
+			var new_step: float = float(op.get("new_step", 0.1))
+			_param_range_overrides[range_key] = {"min": new_min, "max": new_max, "step": new_step}
+			_save_editor_settings()
+			_undo_keep_selection = true
 		"spawn_move":
 			_spawn_position = op.get("new_pos", Vector3.ZERO)
 			_spawn_yaw = float(op.get("new_yaw", 0.0))
 			_sync_spawn_to_placed()
-	_select_block(-1)
-	_refresh_selection_ui()
+	if _undo_keep_selection and _selected_block_index >= 0 and _selected_block_index < _placed_blocks.size():
+		var sel_n: Node3D = _placed_blocks[_selected_block_index].get("node")
+		_rebuild_sel_param_rows(sel_n)
+		_sync_sel_spinbox_from_node()
+	else:
+		_select_block(-1)
+		_refresh_selection_ui()
 
 
 # 移动 / 旋转操作影响到 spawn marker 时, 把 marker.transform 同步回 _spawn_position/_yaw
@@ -3536,8 +4315,23 @@ func _delete_under_cursor() -> void:
 # ============================================================
 #  保存 / 加载 / 测试
 # ============================================================
+func _on_save_overwrite_pressed() -> void:
+	# "保存" 按钮: 覆盖当前打开的赛道文件
+	# 如果没有当前文件 (新建赛道) → 等同"另存为" (弹出名字对话框)
+	if _current_track_path.is_empty() or _current_track_path.ends_with("_test.tres"):
+		_on_save_pressed()
+		return
+	# 从路径提取名字 (去掉目录 + 扩展名)
+	var track_name: String = _current_track_path.get_file().get_basename()
+	var data: Resource = _build_track_data(track_name)
+	var saved_path: String = RaceTrackDataScript.save_to_user(data, track_name)
+	if saved_path != "":
+		_current_track_path = saved_path
+		print("[TrackEditor] 已覆盖保存: ", saved_path)
+
+
 func _on_save_pressed() -> void:
-	# 弹出输入名字对话框
+	# "另存为" 按钮: 弹出输入名字对话框
 	var dlg := AcceptDialog.new()
 	dlg.title = "保存赛道"
 	dlg.dialog_hide_on_ok = true
@@ -3553,7 +4347,8 @@ func _on_save_pressed() -> void:
 		var data: Resource = _build_track_data(le.text)
 		var saved_path: String = RaceTrackDataScript.save_to_user(data, le.text)
 		if saved_path != "":
-			print("[TrackEditor] 已保存赛道: ", saved_path)
+			_current_track_path = saved_path
+			print("[TrackEditor] 已另存为: ", saved_path)
 	)
 	add_child(dlg)
 	dlg.popup_centered()
@@ -3653,6 +4448,8 @@ func _on_test_pressed() -> void:
 		if st:
 			st.set("last_editor_track_path", saved_path)
 			st.set("track_to_load", saved_path)
+			# 保存当前正式赛道路径, 回来后恢复 (避免 _test.tres 覆盖正式路径导致"保存"变"另存为")
+			st.set("original_track_path", _current_track_path)
 	# 切换到 runner 场景
 	get_tree().change_scene_to_file("res://track_editor/TrackRunner.tscn")
 
@@ -3723,6 +4520,204 @@ func _build_track_data(track_display_name: String) -> Resource:
 	return data
 
 
+# ============================================================
+#  复制 / 粘贴 / 原地复制 (2026-06-03)
+# ============================================================
+
+## Ctrl+C: 复制选中积木到剪贴板 (多选保持相对位置 + 完整参数)
+func _copy_selected() -> void:
+	_clipboard.clear()
+	if _selected_block_indices.is_empty():
+		return
+	# 第一个选中积木作为 base (rel_xform 的基准)
+	var first_idx: int = int(_selected_block_indices[0])
+	if first_idx < 0 or first_idx >= _placed_blocks.size():
+		return
+	var first_node: Node3D = _placed_blocks[first_idx]["node"]
+	if first_node == null:
+		return
+	var base_inv: Transform3D = first_node.global_transform.inverse()
+	_clipboard_base_basis = first_node.global_transform.basis   # 保存第一个积木的旋转
+	for idx in _selected_block_indices:
+		var i: int = int(idx)
+		if i < 0 or i >= _placed_blocks.size():
+			continue
+		var entry: Dictionary = _placed_blocks[i]
+		var node: Node3D = entry["node"]
+		if node == null:
+			continue
+		var rel: Transform3D = base_inv * node.global_transform
+		var params: Dictionary = _collect_block_params(node)
+		_clipboard.append({
+			"id": String(entry["id"]),
+			"rel_xform": rel,
+			"params": params,
+		})
+	print("[TrackEditor] 复制 %d 个积木到剪贴板" % _clipboard.size())
+
+
+## Ctrl+V: 进入粘贴预览模式 (跟随鼠标, 点击放下, ESC 取消)
+func _start_paste_preview() -> void:
+	if _clipboard.is_empty():
+		return
+	# 如果已经在粘贴模式, 先取消旧的
+	if _paste_mode:
+		_cancel_paste()
+	_paste_mode = true
+	# 实例化预览节点 (半透明, 跟鼠标走)
+	for item in _clipboard:
+		var bid: String = item["id"]
+		var bpath: String = BLOCK_LIBRARY.get(bid, "")
+		if bpath == "":
+			continue
+		var packed: PackedScene = load(bpath)
+		if packed == null:
+			continue
+		var node: Node3D = packed.instantiate()
+		add_child(node)
+		# 应用复制的参数到预览节点 (让预览外形跟原机关一致, 不是默认外形)
+		var params: Dictionary = item.get("params", {})
+		if not params.is_empty() and node.has_method("set_editable_param"):
+			for k in params.keys():
+				node.call("set_editable_param", String(k), float(params[k]))
+		# 半透明化 (在参数应用后做, 因为 set_editable_param 可能 rebuild mesh)
+		_make_node_transparent(node, 0.45)
+		# 设初始 transform (相对第一个的 rel_xform, 实际位置 _process 每帧更新)
+		node.transform = item["rel_xform"]
+		_paste_preview_nodes.append(node)
+	print("[TrackEditor] 粘贴预览: %d 个积木跟随鼠标 (点击放下, ESC 取消)" % _paste_preview_nodes.size())
+
+
+## 粘贴预览每帧跟随鼠标 (在 _process 里调)
+func _update_paste_preview() -> void:
+	if not _paste_mode or _paste_preview_nodes.is_empty():
+		return
+	# 第一个节点跟鼠标 (投影到 place_y 高度水平面)
+	var mp_world: Vector3 = _project_mouse_to_y(_place_y_offset)
+	if mp_world == Vector3.INF:
+		return
+	# 网格吸附
+	if _grid_snap_enabled and Input.is_key_pressed(KEY_ALT):
+		mp_world = _snap_to_grid(mp_world)
+	# 第一个节点的位置 = 鼠标投影点, 旋转 = 复制时的旋转 (保持朝向)
+	var base_xform := Transform3D(_clipboard_base_basis, mp_world)
+	for i in range(_paste_preview_nodes.size()):
+		if i >= _clipboard.size():
+			break
+		var rel: Transform3D = _clipboard[i]["rel_xform"]
+		_paste_preview_nodes[i].global_transform = base_xform * rel
+
+
+## 点击确认粘贴
+func _confirm_paste() -> void:
+	if not _paste_mode or _paste_preview_nodes.is_empty():
+		return
+	# 把预览节点转为正式放置的积木
+	var new_indices: Array = []
+	for i in range(_paste_preview_nodes.size()):
+		var preview: Node3D = _paste_preview_nodes[i]
+		if i >= _clipboard.size():
+			break
+		var item: Dictionary = _clipboard[i]
+		var bid: String = item["id"]
+		var bpath: String = BLOCK_LIBRARY.get(bid, "")
+		if bpath == "":
+			continue
+		var packed: PackedScene = load(bpath)
+		if packed == null:
+			continue
+		var node: Node3D = packed.instantiate()
+		_placed_root.add_child(node)
+		node.global_transform = preview.global_transform
+		# 应用参数
+		var params: Dictionary = item["params"]
+		if not params.is_empty() and node.has_method("set_editable_param"):
+			for k in params.keys():
+				node.call("set_editable_param", String(k), float(params[k]))
+		var kind: String = "speed_pad" if bid == "speed_pad" else "block"
+		_placed_blocks.append({"id": bid, "node": node, "kind": kind})
+		new_indices.append(_placed_blocks.size() - 1)
+	# 清理预览
+	for pn in _paste_preview_nodes:
+		pn.queue_free()
+	_paste_preview_nodes.clear()
+	_paste_mode = false
+	# Undo: 当做 add 批量操作
+	if not new_indices.is_empty():
+		_undo_push({"op": "add_batch", "indices": new_indices})
+	# 选中新放置的
+	_selected_block_indices = new_indices
+	if not new_indices.is_empty():
+		_selected_block_index = new_indices[0]
+	_refresh_selection_ui()
+	_update_status()
+	print("[TrackEditor] 粘贴 %d 个积木" % new_indices.size())
+
+
+## ESC / 右键: 取消粘贴
+func _cancel_paste() -> void:
+	for pn in _paste_preview_nodes:
+		pn.queue_free()
+	_paste_preview_nodes.clear()
+	_paste_mode = false
+
+
+## Ctrl+D: 原地复制 (选中积木偏移 +2m 后立即放下)
+func _duplicate_in_place() -> void:
+	if _selected_block_indices.is_empty():
+		return
+	# 先复制到剪贴板
+	_copy_selected()
+	if _clipboard.is_empty():
+		return
+	# 计算偏移方向: 相机的右方向在水平面投影 (XZ)
+	var offset_dir: Vector3 = Vector3(1.0, 0.0, 0.0)
+	if _cam:
+		offset_dir = _cam.global_transform.basis.x
+		offset_dir.y = 0.0
+		if offset_dir.length() > 0.001:
+			offset_dir = offset_dir.normalized()
+		else:
+			offset_dir = Vector3(1.0, 0.0, 0.0)
+	var offset: Vector3 = offset_dir * 2.0
+	# 第一个选中积木的位置 + 偏移 = base 位置, 旋转保持跟原积木一致
+	var first_idx: int = int(_selected_block_indices[0])
+	var first_node: Node3D = _placed_blocks[first_idx]["node"]
+	var base_pos: Vector3 = first_node.global_position + offset
+	var base_xform := Transform3D(_clipboard_base_basis, base_pos)
+	# 直接放置 (不进入预览模式)
+	var new_indices: Array = []
+	for i in range(_clipboard.size()):
+		var item: Dictionary = _clipboard[i]
+		var bid: String = item["id"]
+		var bpath: String = BLOCK_LIBRARY.get(bid, "")
+		if bpath == "":
+			continue
+		var packed: PackedScene = load(bpath)
+		if packed == null:
+			continue
+		var node: Node3D = packed.instantiate()
+		_placed_root.add_child(node)
+		node.global_transform = base_xform * item["rel_xform"]
+		# 应用参数
+		var params: Dictionary = item["params"]
+		if not params.is_empty() and node.has_method("set_editable_param"):
+			for k in params.keys():
+				node.call("set_editable_param", String(k), float(params[k]))
+		var kind: String = "speed_pad" if bid == "speed_pad" else "block"
+		_placed_blocks.append({"id": bid, "node": node, "kind": kind})
+		new_indices.append(_placed_blocks.size() - 1)
+	if not new_indices.is_empty():
+		_undo_push({"op": "add_batch", "indices": new_indices})
+	# 选中新放置的副本
+	_selected_block_indices = new_indices
+	if not new_indices.is_empty():
+		_selected_block_index = new_indices[0]
+	_refresh_selection_ui()
+	_update_status()
+	print("[TrackEditor] 原地复制 %d 个积木 (偏移 +2m)" % new_indices.size())
+
+
 # 从积木节点收集所有 editable_params 当前值, 返回 {key: value} 字典
 # 给保存赛道用. 没有 get_editable_params 方法的积木返回空字典 (兼容)
 func _collect_block_params(node: Node3D) -> Dictionary:
@@ -3755,6 +4750,8 @@ func _load_track_data(path: String) -> void:
 	if res == null or not ("blocks" in res):
 		push_warning("[TrackEditor] %s 不是有效的 RaceTrackData" % path)
 		return
+	# 记录当前打开的赛道路径 (用于"保存"按钮覆盖写入)
+	_current_track_path = path
 	# 清空 (保留出生点)
 	_select_block(-1)
 	var keep_spawn: Dictionary = {}
@@ -3848,3 +4845,409 @@ func _update_status() -> void:
 			"anchor": n_anchor += 1
 	status.text = "[%s] | 积木 %d | 加速带 %d | 锚点 %d | Undo:%d Redo:%d" % [
 		tool_name, n_block, n_pad, n_anchor, _undo_stack.size(), _redo_stack.size()]
+
+
+# ============================================================
+#  窄道手柄拖拽
+# ============================================================
+## 检测鼠标是否命中了选中窄道的手柄, 返回手柄名 ("start"/"mid"/"end") 或 ""
+## 用屏幕空间距离判定 (把手柄世界坐标投影到屏幕, 比 3D 射线检测更可靠)
+func _pick_narrow_path_handle_at_mouse() -> String:
+	var mp: Vector2 = get_viewport().get_mouse_position()
+	var screen_hit_radius: float = 40.0  # 屏幕像素距离阈值 (40px 以内算命中)
+	var best: String = ""
+	var best_screen_dist: float = screen_hit_radius + 1.0
+	for sel_idx in _selected_block_indices:
+		var i: int = int(sel_idx)
+		if i < 0 or i >= _placed_blocks.size():
+			continue
+		var bid: String = String(_placed_blocks[i].get("id", ""))
+		if bid != "narrow_path" and bid != "fragile_narrow" and bid != "star_trail":
+			continue
+		var node: Node3D = _placed_blocks[i].get("node")
+		if node == null or not node.has_method("get_end_world_pos"):
+			continue
+		# 获取三个手柄的世界坐标 (手柄抬高了 2m, 要加上偏移)
+		var handle_lift := Vector3(0.0, 2.0, 0.0)
+		var positions: Dictionary = {
+			"start": node.global_position + handle_lift,
+			"end": node.call("get_end_world_pos") + handle_lift,
+			"mid": node.global_position + node.global_transform.basis * (node.get("end_offset") * 0.5 + node.get("curve_offset")) + handle_lift,
+		}
+		# 检查手柄是否可见
+		if node.has_method("pick_handle_at"):
+			if not node.get("_handles_visible"):
+				continue
+		# 投影到屏幕比较距离
+		for hname in positions.keys():
+			var world_pos: Vector3 = positions[hname]
+			if not _cam.is_position_behind(world_pos):
+				var screen_pos: Vector2 = _cam.unproject_position(world_pos)
+				var dist: float = mp.distance_to(screen_pos)
+				if dist < screen_hit_radius and dist < best_screen_dist:
+					best_screen_dist = dist
+					best = hname
+	return best
+
+
+## 开始拖拽手柄
+func _begin_drag_handle(handle_name: String) -> void:
+	if _selected_block_indices.is_empty():
+		return
+	var idx: int = int(_selected_block_indices[0])
+	if idx < 0 or idx >= _placed_blocks.size():
+		return
+	var node: Node3D = _placed_blocks[idx].get("node")
+	if node == null or not node.has_method("move_handle_to"):
+		return
+	_is_dragging_handle = true
+	_dragging_handle_name = handle_name
+	_dragging_handle_block = node
+	# 拖动平面 Y = 手柄当前位置的 Y
+	match handle_name:
+		"start":
+			_drag_handle_plane_y = node.global_position.y
+		"end":
+			_drag_handle_plane_y = node.call("get_end_world_pos").y
+		"mid":
+			var mid_pos: Vector3 = node.global_position + node.global_transform.basis * ((node.get("end_offset") as Vector3) * 0.5 + (node.get("curve_offset") as Vector3))
+			_drag_handle_plane_y = mid_pos.y
+
+
+## 每帧更新手柄拖拽 (鼠标跟随)
+func _update_drag_handle() -> void:
+	if not _is_dragging_handle or _dragging_handle_block == null:
+		return
+	var mp_world: Vector3
+	if Input.is_key_pressed(KEY_SHIFT):
+		# Shift = 纵向模式: 只改 Y, XZ 保持手柄当前位置不动
+		var handle_xz: Vector3 = _get_current_handle_pos()
+		var vert_pos: Vector3 = _project_mouse_to_vertical_plane(handle_xz)
+		if vert_pos == Vector3.INF:
+			return
+		mp_world = Vector3(handle_xz.x, vert_pos.y, handle_xz.z)
+	else:
+		# 默认 = 水平模式: XZ 跟随鼠标, Y 保持手柄平面高度
+		mp_world = _project_mouse_to_y(_drag_handle_plane_y)
+		if mp_world == Vector3.INF:
+			return
+	# 网格吸附
+	if _grid_snap_enabled and Input.is_key_pressed(KEY_ALT):
+		mp_world = _snap_to_grid(mp_world)
+	_dragging_handle_block.call("move_handle_to", _dragging_handle_name, mp_world)
+
+
+## 获取当前拖拽中手柄的世界位置 (用于 Shift 纵向模式保持 XZ)
+func _get_current_handle_pos() -> Vector3:
+	if _dragging_handle_block == null:
+		return Vector3.ZERO
+	# 注意: 手柄视觉位置有 +2m 抬高, 但 move_handle_to 接收的是路面级坐标
+	# 这里返回的是路面级坐标 (不含抬高), 用于 Shift 纵向拖拽时固定 XZ
+	match _dragging_handle_name:
+		"start":
+			return _dragging_handle_block.global_position
+		"end":
+			return _dragging_handle_block.call("get_end_world_pos")
+		"mid":
+			var eo: Vector3 = _dragging_handle_block.get("end_offset")
+			var co: Vector3 = _dragging_handle_block.get("curve_offset")
+			return _dragging_handle_block.global_position + _dragging_handle_block.global_transform.basis * (eo * 0.5 + co)
+	return Vector3.ZERO
+
+
+## 结束手柄拖拽
+func _end_drag_handle() -> void:
+	_is_dragging_handle = false
+	_dragging_handle_name = ""
+	_dragging_handle_block = null
+	# 刷新参数面板 (手柄拖拽改了 end_offset/curve_offset)
+	_refresh_selection_ui()
+
+
+# ============================================================
+#  窄道拟合连接 (J=普通窄道 / K=易碎窄道)
+#  在两段窄道之间生成一段拟合连接道:
+#  - 使用 Block_NarrowPath/Block_FragileNarrow .tscn (保证序列化/运行时正常)
+#  - 不旋转节点, 用世界坐标直接设 end_offset = to - from (起终点精确)
+#  - curve_offset 用 Hermite 插值的 t=0.5 中点推导 (弯曲自然)
+# ============================================================
+func _join_narrow_paths(join_type: String = "narrow_path") -> void:
+	if _selected_block_indices.size() != 2:
+		return
+	var idx_a: int = int(_selected_block_indices[0])
+	var idx_b: int = int(_selected_block_indices[1])
+	if idx_a < 0 or idx_a >= _placed_blocks.size() or idx_b < 0 or idx_b >= _placed_blocks.size():
+		return
+	var node_a: Node3D = _placed_blocks[idx_a].get("node")
+	var node_b: Node3D = _placed_blocks[idx_b].get("node")
+	if node_a == null or node_b == null:
+		return
+	var bid_a: String = String(_placed_blocks[idx_a].get("id", ""))
+	var bid_b: String = String(_placed_blocks[idx_b].get("id", ""))
+	if bid_a != "narrow_path" and bid_a != "fragile_narrow":
+		return
+	if bid_b != "narrow_path" and bid_b != "fragile_narrow":
+		return
+	if not node_a.has_method("get_end_world_pos") or not node_b.has_method("get_end_world_pos"):
+		return
+
+	# 获取 4 端点
+	var a_start: Vector3 = node_a.global_position
+	var a_end: Vector3 = node_a.call("get_end_world_pos")
+	var b_start: Vector3 = node_b.global_position
+	var b_end: Vector3 = node_b.call("get_end_world_pos")
+
+	# 宽度
+	var a_start_w: float = node_a.call("get_start_width") if node_a.has_method("get_start_width") else node_a.get("path_width")
+	var a_end_w: float = node_a.call("get_end_width") if node_a.has_method("get_end_width") else node_a.get("path_width")
+	var b_start_w: float = node_b.call("get_start_width") if node_b.has_method("get_start_width") else node_b.get("path_width")
+	var b_end_w: float = node_b.call("get_end_width") if node_b.has_method("get_end_width") else node_b.get("path_width")
+
+	# 找最近的端点对
+	var combos: Array = [
+		{"d": a_end.distance_to(b_start),
+		 "from_pos": a_end, "from_tan": node_a.call("get_end_tangent_world"), "from_w": a_end_w,
+		 "to_pos": b_start, "to_tan": node_b.call("get_start_tangent_world"), "to_w": b_start_w},
+		{"d": a_end.distance_to(b_end),
+		 "from_pos": a_end, "from_tan": node_a.call("get_end_tangent_world"), "from_w": a_end_w,
+		 "to_pos": b_end, "to_tan": -node_b.call("get_end_tangent_world"), "to_w": b_end_w},
+		{"d": b_end.distance_to(a_start),
+		 "from_pos": b_end, "from_tan": node_b.call("get_end_tangent_world"), "from_w": b_end_w,
+		 "to_pos": a_start, "to_tan": node_a.call("get_start_tangent_world"), "to_w": a_start_w},
+		{"d": a_start.distance_to(b_start),
+		 "from_pos": a_start, "from_tan": -node_a.call("get_start_tangent_world"), "from_w": a_start_w,
+		 "to_pos": b_start, "to_tan": node_b.call("get_start_tangent_world"), "to_w": b_start_w},
+	]
+	var best: Dictionary = combos[0]
+	for c in combos:
+		if c["d"] < best["d"]:
+			best = c
+
+	var from_pos: Vector3 = best["from_pos"]
+	var from_tan: Vector3 = best["from_tan"].normalized()
+	var from_w: float = best["from_w"]
+	var to_pos: Vector3 = best["to_pos"]
+	var to_tan: Vector3 = best["to_tan"].normalized()
+	var to_w: float = best["to_w"]
+
+	# 实例化 Block (走序列化系统, 运行时正常加载)
+	var tscn_path: String = BLOCK_LIBRARY.get(join_type, "")
+	var packed: PackedScene = load(tscn_path)
+	if packed == null:
+		return
+	var node: Node3D = packed.instantiate()
+	_placed_root.add_child(node)
+
+	# 不旋转, 起点精确 = from_pos
+	node.global_position = from_pos
+	node.rotation = Vector3.ZERO
+
+	# end_offset 精确 = to_pos - from_pos (无旋转时 local == world offset)
+	var end_off: Vector3 = to_pos - from_pos
+	var dist: float = end_off.length()
+	node.set("end_offset", end_off)
+
+	# 宽度
+	node.set("path_width", from_w)
+	node.set("end_width", to_w)
+
+	# Hermite 模式: 设置本地空间的切线方向 (Block 的 _rebuild 会用 Hermite 插值)
+	# from_tan/to_tan 是世界方向, 无旋转时 local == world
+	node.set("hermite_from_tan", from_tan)
+	node.set("hermite_to_tan", to_tan)
+
+	# 关闭发光避免异形
+	if node.get("edge_glow") != null:
+		node.set("edge_glow", 0.0)
+
+	# rebuild
+	if node.has_method("_rebuild"):
+		node.call("_rebuild")
+
+	# 注册
+	_placed_blocks.append({"id": join_type, "node": node, "kind": "block"})
+	_undo_push({"op": "add", "index": _placed_blocks.size() - 1})
+	var type_label: String = "窄道" if join_type == "narrow_path" else "易碎窄道"
+	print("[TrackEditor] 拟合连接: %s, 宽度 %.1f→%.1f m, 距离=%.1fm" % [type_label, from_w, to_w, dist])
+
+
+## 从 Tuner cfg 文件直接读取机关默认值并应用到节点 (当 Tuner 节点不存在时的 fallback)
+func _apply_mechanism_defaults_from_cfg(node: Node3D, block_id: String) -> void:
+	if not node.has_method("set_editable_param"):
+		return
+	# Tuner cfg 路径: 跟 Tuner.gd 的 _stable_cfg_path() 一致
+	# 开发时 = res://config/tune.cfg (globalize 后是绝对路径)
+	# 导出后 = exe旁/config/tune.cfg
+	var cfg_path: String
+	if OS.has_feature("editor") or OS.is_debug_build():
+		cfg_path = ProjectSettings.globalize_path("res://config/tune.cfg")
+	else:
+		cfg_path = OS.get_executable_path().get_base_dir().path_join("config").path_join("tune.cfg")
+	var cfg := ConfigFile.new()
+	if cfg.load(cfg_path) != OK:
+		return
+	if not cfg.has_section("mechanism_defaults"):
+		return
+	# 遍历 [mechanism_defaults] 段, 找 "block_id:key" 前缀匹配的条目
+	var prefix: String = block_id + ":"
+	for full_key in cfg.get_section_keys("mechanism_defaults"):
+		if not String(full_key).begins_with(prefix):
+			continue
+		var param_key: String = String(full_key).substr(prefix.length())
+		var value: float = float(cfg.get_value("mechanism_defaults", full_key, 0.0))
+		node.call("set_editable_param", param_key, value)
+
+
+# ============================================================
+#  L 键: 在选中道路/窄道中线上生成绳星轨迹 (每3颗一组)
+#  核心: 取道路的贝塞尔曲线中线世界坐标点, 按每3颗分段,
+#        每段用实际曲线上的起终点构建 star_trail 的 end_offset
+# ============================================================
+func _generate_star_trails_on_selected() -> void:
+	var star_trail_path: String = BLOCK_LIBRARY.get("star_trail", "")
+	if star_trail_path.is_empty():
+		return
+	var star_packed: PackedScene = load(star_trail_path) as PackedScene
+	if star_packed == null:
+		return
+
+	var added_indices: Array = []
+	for sel_idx in _selected_block_indices:
+		var idx: int = int(sel_idx)
+		if idx < 0 or idx >= _placed_blocks.size():
+			continue
+		var src_node: Node3D = _placed_blocks[idx].get("node")
+		if src_node == null:
+			continue
+
+		# 获取道路中线的世界坐标点序列
+		var world_points: Array[Vector3] = _get_road_center_world_points(src_node, _placed_blocks[idx])
+		if world_points.size() < 2:
+			continue
+
+		# 计算路径总长
+		var total_len: float = 0.0
+		for i in range(1, world_points.size()):
+			total_len += world_points[i].distance_to(world_points[i - 1])
+		if total_len < 1.0:
+			continue
+
+		# 每3颗一组, 按路径长度均分
+		var stars_per_group: int = 3
+		var group_len: float = minf(total_len, 30.0)
+		var num_groups: int = maxi(int(total_len / group_len), 1)
+		if total_len <= group_len * 1.2:
+			num_groups = 1
+
+		# 预计算累积长度便于按 t 采样
+		var cum_lengths: Array[float] = [0.0]
+		for i in range(1, world_points.size()):
+			cum_lengths.append(cum_lengths[i - 1] + world_points[i].distance_to(world_points[i - 1]))
+
+		for g in range(num_groups):
+			var t_start: float = float(g) / float(num_groups)
+			var t_end: float = float(g + 1) / float(num_groups)
+			var group_start_world: Vector3 = _sample_path_at_t(world_points, cum_lengths, total_len, t_start)
+			var group_end_world: Vector3 = _sample_path_at_t(world_points, cum_lengths, total_len, t_end)
+			var group_end_offset: Vector3 = group_end_world - group_start_world
+
+			# 计算起终点的切线方向 (用于 Hermite 精确拟合弯曲)
+			var tan_start: Vector3 = _sample_tangent_at_t(world_points, cum_lengths, total_len, t_start)
+			var tan_end: Vector3 = _sample_tangent_at_t(world_points, cum_lengths, total_len, t_end)
+			# Hermite 切线需归一化 (Block_StarTrail 内部会乘 dist)
+			tan_start = tan_start.normalized()
+			tan_end = tan_end.normalized()
+
+			var trail: Node3D = star_packed.instantiate()
+			_placed_root.add_child(trail)
+			trail.global_position = group_start_world
+
+			if trail.has_method("set_editable_param"):
+				trail.call("set_editable_param", "end_offset_x", group_end_offset.x)
+				trail.call("set_editable_param", "end_offset_y", group_end_offset.y)
+				trail.call("set_editable_param", "end_offset_z", group_end_offset.z)
+				trail.call("set_editable_param", "star_count", float(stars_per_group))
+				# 用 Hermite 切线精确拟合弯曲 (比 curve_offset 更准)
+				trail.call("set_editable_param", "hermite_from_tan_x", tan_start.x)
+				trail.call("set_editable_param", "hermite_from_tan_y", tan_start.y)
+				trail.call("set_editable_param", "hermite_from_tan_z", tan_start.z)
+				trail.call("set_editable_param", "hermite_to_tan_x", tan_end.x)
+				trail.call("set_editable_param", "hermite_to_tan_y", tan_end.y)
+				trail.call("set_editable_param", "hermite_to_tan_z", tan_end.z)
+
+			# 应用 Tuner 默认值
+			var tuner_node: Node = get_tree().current_scene.find_child("Tuner", true, false)
+			if tuner_node and tuner_node.has_method("apply_mechanism_defaults"):
+				tuner_node.call("apply_mechanism_defaults", trail, "star_trail")
+			else:
+				_apply_mechanism_defaults_from_cfg(trail, "star_trail")
+
+			_placed_blocks.append({"id": "star_trail", "node": trail, "kind": "block"})
+			added_indices.append(_placed_blocks.size() - 1)
+
+	if not added_indices.is_empty():
+		_undo_push({"op": "add_many", "indices": added_indices})
+		_update_status()
+		print("[TrackEditor] L键: 在选中道路上生成了 %d 组绳星轨迹" % added_indices.size())
+
+
+## 获取道路中线的世界坐标点序列
+func _get_road_center_world_points(node: Node3D, block_entry: Dictionary) -> Array[Vector3]:
+	var bid: String = String(block_entry.get("id", ""))
+	# NarrowPath: 有 _calc_bezier_points() 返回本地坐标 Array[Vector3]
+	if node.has_method("_calc_bezier_points"):
+		var local_pts: Array = node.call("_calc_bezier_points")
+		var world_pts: Array[Vector3] = []
+		for lp in local_pts:
+			world_pts.append(node.global_transform * (lp as Vector3))
+		return world_pts
+	# FragileNarrow: 有 _bezier_at(t) 按参数采样
+	if node.has_method("_bezier_at"):
+		var world_pts: Array[Vector3] = []
+		var sample_count: int = 48
+		for i in range(sample_count + 1):
+			var t: float = float(i) / float(sample_count)
+			var local_pt: Vector3 = node.call("_bezier_at", t)
+			world_pts.append(node.global_transform * local_pt)
+		return world_pts
+	# 路段积木: 有 get_end_world_pos
+	if node.has_method("get_end_world_pos"):
+		return [node.global_position, node.call("get_end_world_pos") as Vector3]
+	# fallback: 用 -Z × length
+	var length: float = 20.0
+	if "length" in node:
+		length = float(node.get("length"))
+	var start: Vector3 = node.global_position
+	var end_pos: Vector3 = start + node.global_transform.basis * Vector3(0.0, 0.0, -length)
+	return [start, end_pos]
+
+
+## 沿路径按归一化参数 t ∈ [0,1] 采样世界坐标
+func _sample_path_at_t(points: Array[Vector3], cum_lengths: Array[float], total_len: float, t: float) -> Vector3:
+	var target_len: float = t * total_len
+	for i in range(1, cum_lengths.size()):
+		if cum_lengths[i] >= target_len:
+			var seg_start_len: float = cum_lengths[i - 1]
+			var seg_len: float = cum_lengths[i] - seg_start_len
+			var local_t: float = (target_len - seg_start_len) / maxf(seg_len, 0.001)
+			return points[i - 1].lerp(points[i], local_t)
+	return points[points.size() - 1]
+
+
+## 沿路径按归一化参数 t ∈ [0,1] 采样切线方向 (非归一化)
+func _sample_tangent_at_t(points: Array[Vector3], cum_lengths: Array[float], total_len: float, t: float) -> Vector3:
+	var target_len: float = t * total_len
+	for i in range(1, cum_lengths.size()):
+		if cum_lengths[i] >= target_len:
+			# 切线 = 当前段方向, 用前后点插值更平滑
+			var seg_dir: Vector3 = points[i] - points[i - 1]
+			if seg_dir.length() < 0.001:
+				# 退化段, 向后看
+				if i + 1 < points.size():
+					return points[i + 1] - points[i]
+				return Vector3(0.0, 0.0, -1.0)
+			return seg_dir.normalized()
+	# 末尾
+	if points.size() >= 2:
+		return (points[points.size() - 1] - points[points.size() - 2]).normalized()
+	return Vector3(0.0, 0.0, -1.0)

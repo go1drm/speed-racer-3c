@@ -278,6 +278,9 @@ func _process(delta: float) -> void:
 	# 锚点指示器: 每帧更新位置和颜色
 	_update_anchor_indicator()
 
+	# 尾流灯脉冲更新
+	_update_slipstream_lamp(delta)
+
 	# 计时器更新
 	_update_timer(delta)
 
@@ -1091,3 +1094,297 @@ func _on_reset_to_origin() -> void:
 func _on_finish_line_reached() -> void:
 	if _timer_state == TimerState.RUNNING:
 		_enter_finished_state()
+
+
+# ============================================================
+#  尾流能量 UI (由 CoopMode 外部调用更新)
+# ============================================================
+# 设计:
+#   · 进度条: 显示尾流能量积累进度 (0~100%), 紫色→青色渐变
+#   · 指示灯: 能量满时脉冲闪烁, 提示玩家可以按键突进
+#   · 位置: 集气槽上方, 不遮挡其他 UI
+#   · 隐藏: 非模式2或绳子未连接时自动隐藏
+
+const SLIPSTREAM_COLOR_EMPTY := Color(0.2, 0.15, 0.35, 0.7)     # 空: 暗紫
+const SLIPSTREAM_COLOR_CHARGING := Color(0.4, 0.2, 0.8, 1.0)    # 积累中: 紫色
+const SLIPSTREAM_COLOR_FULL := Color(0.1, 0.9, 0.8, 1.0)        # 满: 青色
+const SLIPSTREAM_LAMP_OFF := Color(0.25, 0.2, 0.35, 0.8)        # 灯灭: 暗紫灰
+const SLIPSTREAM_LAMP_READY := Color(0.1, 1.0, 0.85, 1.0)       # 灯亮: 亮青
+
+var _slipstream_container: Control = null   # 尾流 UI 容器
+var _slipstream_bar: ProgressBar = null     # 尾流进度条
+var _slipstream_lamp: PanelContainer = null # 尾流指示灯
+var _slipstream_lamp_core: PanelContainer = null
+var _slipstream_lamp_label: Label = null
+var _slipstream_label: Label = null         # "尾流" 文字标签
+var _slipstream_visible: bool = false       # 当前是否显示
+var _slipstream_lamp_active: bool = false   # 灯是否在闪烁
+var _slipstream_lamp_pulse_t: float = 0.0   # 灯脉冲计时
+
+
+## 创建尾流 UI 元素 (由 CoopMode 在 HUD 创建后调用)
+func create_slipstream_ui() -> void:
+	if _slipstream_container != null:
+		return  # 已创建
+
+	var root: Control = get_node_or_null("Root")
+	if root == null:
+		return
+
+	# 容器: 放在集气槽上方
+	_slipstream_container = Control.new()
+	_slipstream_container.name = "SlipstreamBox"
+	_slipstream_container.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_slipstream_container.anchor_left = 0.5
+	_slipstream_container.anchor_right = 0.5
+	_slipstream_container.anchor_top = 1.0
+	_slipstream_container.anchor_bottom = 1.0
+	_slipstream_container.offset_left = -160.0
+	_slipstream_container.offset_right = 160.0
+	_slipstream_container.offset_top = -145.0
+	_slipstream_container.offset_bottom = -115.0
+	_slipstream_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(_slipstream_container)
+
+	# HBoxContainer 水平排列: [标签] [进度条] [指示灯]
+	var hbox := HBoxContainer.new()
+	hbox.name = "HBox"
+	hbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	hbox.offset_left = 0
+	hbox.offset_right = 0
+	hbox.offset_top = 0
+	hbox.offset_bottom = 0
+	hbox.add_theme_constant_override("separation", 8)
+	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_slipstream_container.add_child(hbox)
+
+	# "尾流" 文字标签
+	_slipstream_label = Label.new()
+	_slipstream_label.text = "尾流"
+	_slipstream_label.add_theme_font_size_override("font_size", 14)
+	_slipstream_label.add_theme_color_override("font_color", Color(0.7, 0.5, 1.0, 0.9))
+	_slipstream_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
+	_slipstream_label.add_theme_constant_override("outline_size", 3)
+	_slipstream_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_slipstream_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hbox.add_child(_slipstream_label)
+
+	# 进度条
+	_slipstream_bar = ProgressBar.new()
+	_slipstream_bar.custom_minimum_size = Vector2(180, 14)
+	_slipstream_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_slipstream_bar.max_value = 100.0
+	_slipstream_bar.value = 0.0
+	_slipstream_bar.show_percentage = false
+	_slipstream_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# 背景样式
+	var bg_style := StyleBoxFlat.new()
+	bg_style.bg_color = SLIPSTREAM_COLOR_EMPTY
+	bg_style.corner_radius_top_left = 4
+	bg_style.corner_radius_top_right = 4
+	bg_style.corner_radius_bottom_left = 4
+	bg_style.corner_radius_bottom_right = 4
+	_slipstream_bar.add_theme_stylebox_override("background", bg_style)
+	# 填充样式
+	var fill_style := StyleBoxFlat.new()
+	fill_style.bg_color = SLIPSTREAM_COLOR_CHARGING
+	fill_style.corner_radius_top_left = 4
+	fill_style.corner_radius_top_right = 4
+	fill_style.corner_radius_bottom_left = 4
+	fill_style.corner_radius_bottom_right = 4
+	_slipstream_bar.add_theme_stylebox_override("fill", fill_style)
+	hbox.add_child(_slipstream_bar)
+
+	# 指示灯 (圆形, 类似小喷灯)
+	_slipstream_lamp = PanelContainer.new()
+	_slipstream_lamp.custom_minimum_size = Vector2(28, 28)
+	_slipstream_lamp.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_slipstream_lamp.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var lamp_bg := StyleBoxFlat.new()
+	lamp_bg.bg_color = Color(0.05, 0.03, 0.08, 0.8)
+	lamp_bg.border_width_left = 1
+	lamp_bg.border_width_top = 1
+	lamp_bg.border_width_right = 1
+	lamp_bg.border_width_bottom = 1
+	lamp_bg.border_color = Color(0.4, 0.3, 0.6, 0.7)
+	lamp_bg.corner_radius_top_left = 14
+	lamp_bg.corner_radius_top_right = 14
+	lamp_bg.corner_radius_bottom_left = 14
+	lamp_bg.corner_radius_bottom_right = 14
+	_slipstream_lamp.add_theme_stylebox_override("panel", lamp_bg)
+	hbox.add_child(_slipstream_lamp)
+
+	# 灯芯
+	_slipstream_lamp_core = PanelContainer.new()
+	_slipstream_lamp_core.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_slipstream_lamp_core.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_slipstream_lamp_core.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var core_style := StyleBoxFlat.new()
+	core_style.bg_color = SLIPSTREAM_LAMP_OFF
+	core_style.corner_radius_top_left = 12
+	core_style.corner_radius_top_right = 12
+	core_style.corner_radius_bottom_left = 12
+	core_style.corner_radius_bottom_right = 12
+	_slipstream_lamp_core.add_theme_stylebox_override("panel", core_style)
+	_slipstream_lamp.add_child(_slipstream_lamp_core)
+
+	# 灯上文字
+	_slipstream_lamp_label = Label.new()
+	_slipstream_lamp_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_slipstream_lamp_label.text = "1"
+	_slipstream_lamp_label.add_theme_font_size_override("font_size", 12)
+	_slipstream_lamp_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.8))
+	_slipstream_lamp_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	_slipstream_lamp_label.add_theme_constant_override("outline_size", 2)
+	_slipstream_lamp_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_slipstream_lamp_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_slipstream_lamp_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_slipstream_lamp_core.add_child(_slipstream_lamp_label)
+
+	# 初始隐藏
+	_slipstream_container.visible = false
+
+
+## 更新尾流能量 UI (由 CoopMode 每帧调用)
+## energy: 当前能量值, max_energy: 能量上限, cooldown: 冷却剩余时间
+func update_slipstream_ui(energy: float, max_energy: float, cooldown: float) -> void:
+	if _slipstream_container == null:
+		return
+
+	# 显示/隐藏
+	if not _slipstream_visible:
+		_slipstream_container.visible = true
+		_slipstream_visible = true
+
+	# 更新进度条
+	_slipstream_bar.max_value = max_energy
+	_slipstream_bar.value = energy
+
+	# 更新进度条颜色 (根据能量比例从紫色渐变到青色)
+	var ratio: float = energy / maxf(max_energy, 1.0)
+	var fill_style: StyleBoxFlat = _slipstream_bar.get_theme_stylebox("fill") as StyleBoxFlat
+	if fill_style:
+		if cooldown > 0.0:
+			# 冷却中: 灰色
+			fill_style.bg_color = Color(0.4, 0.4, 0.5, 0.8)
+		else:
+			fill_style.bg_color = SLIPSTREAM_COLOR_CHARGING.lerp(SLIPSTREAM_COLOR_FULL, ratio)
+
+	# 更新指示灯
+	var is_full: bool = energy >= max_energy and cooldown <= 0.0
+	if is_full and not _slipstream_lamp_active:
+		# 刚满: 开始闪烁
+		_slipstream_lamp_active = true
+		_slipstream_lamp_pulse_t = 0.0
+		if _slipstream_lamp_label:
+			_slipstream_lamp_label.text = "1"
+	elif not is_full and _slipstream_lamp_active:
+		# 不满了: 停止闪烁
+		_slipstream_lamp_active = false
+		if _slipstream_lamp_core:
+			_slipstream_lamp_core.modulate = Color(1, 1, 1, 1)
+			_slipstream_lamp_core.scale = Vector2.ONE
+		if _slipstream_lamp_label:
+			_slipstream_lamp_label.text = "1"
+			_slipstream_lamp_label.modulate = Color(1, 1, 1, 0.5)
+
+	# 冷却中显示 CD 文字
+	if cooldown > 0.0 and _slipstream_lamp_label:
+		_slipstream_lamp_label.text = ""
+		_slipstream_lamp_label.modulate = Color(1, 1, 1, 0.5)
+
+
+## 隐藏尾流 UI
+func hide_slipstream_ui() -> void:
+	if _slipstream_container:
+		_slipstream_container.visible = false
+		_slipstream_visible = false
+		_slipstream_lamp_active = false
+
+
+## 尾流突进触发时的弹字反馈
+func show_slipstream_boost_popup() -> void:
+	_show_boost_popup("尾流突进!", SLIPSTREAM_COLOR_FULL, 1.0, 0.5)
+
+
+## 每帧更新尾流灯脉冲 (在 _process 中调用)
+func _update_slipstream_lamp(delta: float) -> void:
+	if not _slipstream_lamp_active:
+		return
+	_slipstream_lamp_pulse_t += delta * 8.0
+	var pulse: float = 0.5 + 0.5 * sin(_slipstream_lamp_pulse_t)
+	var col := SLIPSTREAM_LAMP_READY
+	var glow_k: float = 1.2 + 0.8 * pulse
+	if _slipstream_lamp_core:
+		_slipstream_lamp_core.modulate = Color(col.r * glow_k, col.g * glow_k, col.b * glow_k, 1.0)
+		var s: float = 0.9 + 0.2 * pulse
+		_slipstream_lamp_core.scale = Vector2(s, s)
+		_slipstream_lamp_core.pivot_offset = _slipstream_lamp_core.size * 0.5
+	if _slipstream_lamp_label:
+		_slipstream_lamp_label.text = "1"
+		_slipstream_lamp_label.modulate = Color(1, 1, 1, 0.7 + 0.3 * pulse)
+
+
+# ============================================================
+#  星星收集计数 UI (左下角)
+# ============================================================
+var _star_ui_container: HBoxContainer = null
+var _star_count_label: Label = null
+var _star_combo_label: Label = null
+var _star_combo_fade_left: float = 0.0
+
+func _build_star_ui() -> void:
+	var root: Control = get_node_or_null("Root")
+	if root == null:
+		return
+	_star_ui_container = HBoxContainer.new()
+	_star_ui_container.name = "StarUI"
+	_star_ui_container.layout_mode = 1
+	_star_ui_container.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	_star_ui_container.offset_left = 20.0
+	_star_ui_container.offset_top = -60.0
+	_star_ui_container.offset_right = 200.0
+	_star_ui_container.offset_bottom = -20.0
+	_star_ui_container.add_theme_constant_override("separation", 8)
+	_star_ui_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# 星星图标 (用文字 emoji)
+	var icon_label := Label.new()
+	icon_label.text = "⭐"
+	icon_label.add_theme_font_size_override("font_size", 28)
+	icon_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_star_ui_container.add_child(icon_label)
+	# 计数
+	_star_count_label = Label.new()
+	_star_count_label.text = "0"
+	_star_count_label.add_theme_font_size_override("font_size", 28)
+	_star_count_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.2, 1.0))
+	_star_count_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	_star_count_label.add_theme_constant_override("outline_size", 3)
+	_star_count_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_star_ui_container.add_child(_star_count_label)
+	# 连击
+	_star_combo_label = Label.new()
+	_star_combo_label.text = ""
+	_star_combo_label.add_theme_font_size_override("font_size", 22)
+	_star_combo_label.add_theme_color_override("font_color", Color(1.0, 0.5, 0.1, 1.0))
+	_star_combo_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	_star_combo_label.add_theme_constant_override("outline_size", 2)
+	_star_combo_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_star_ui_container.add_child(_star_combo_label)
+	root.add_child(_star_ui_container)
+
+
+## 由 CoopMode 调用: 更新星星计数显示
+func update_star_count(total: int, combo: int) -> void:
+	if _star_ui_container == null:
+		_build_star_ui()
+	if _star_count_label:
+		_star_count_label.text = str(total)
+	if _star_combo_label:
+		if combo > 1:
+			_star_combo_label.text = "x%d!" % combo
+			_star_combo_label.modulate.a = 1.0
+			_star_combo_fade_left = 1.0
+		else:
+			_star_combo_label.text = ""

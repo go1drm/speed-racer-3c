@@ -8,7 +8,7 @@
 ;  · 轮子 wheel_* 挂在 suv2 下 → car.gd 能用 suv2/wheel_frontXxx 路径找到
 ; ============================================================
 
-[ext_resource type="PackedScene" uid="uid://cyw3d43cine1x" path="res://assets/custom_cars/1_玉麒麟/00084_S至尊·瑞兽（麒麟）1-2/HNCar_10045_PBR.FBX" id="1_fbx"]
+[ext_resource type="PackedScene" uid="uid://c4qboy3iku8sg" path="res://assets/custom_cars/1_玉麒麟/00084_S至尊·瑞兽（麒麟）1-3/HNCar_10046_PBR.FBX" id="1_fbx"]
 [ext_resource type="Script" path="res://car_mesh/YuqilinPaint.gd" id="2_paint"]
 [ext_resource type="Script" path="res://car_mesh/YuqilinTuning.gd" id="3_tuning"]
 

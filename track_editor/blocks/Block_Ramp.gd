@@ -1,4 +1,4 @@
-@tool
+﻿@tool
 extends TrackBlock
 ## ============================================================
 ##  上坡道 — 真正的曲面版本 (v2: ArrayMesh + trimesh 碰撞)
@@ -30,12 +30,12 @@ extends TrackBlock
 
 @export var length: float = 15.0:
 	set(v):
-		length = clampf(v, 3.0, 60.0)
+		length = clampf(v, 0.001, 100000.0)
 		if is_inside_tree():
 			rebuild()
 @export var height: float = 4.0:
 	set(v):
-		height = clampf(v, 0.5, 20.0)
+		height = clampf(v, 0.001, 100000.0)
 		if is_inside_tree():
 			rebuild()
 

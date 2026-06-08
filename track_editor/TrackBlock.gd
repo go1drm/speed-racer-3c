@@ -1,4 +1,4 @@
-@tool
+﻿@tool
 extends Node3D
 class_name TrackBlock
 ## ============================================================
@@ -28,21 +28,26 @@ class_name TrackBlock
 ## 入口路宽 (米). 默认 25m = 10 车宽 (一辆车 ≈ 2.5m)
 ## 用户要求: 基础标准提到 25m, 让车在赛道里跑得开 (旧默认 15m 太窄, 弯道几乎贴墙)
 ## 每个 Block 子类都可以覆盖, 也可以让玩家通过编辑器调
+##
+## setter clamp 策略 (2026-06-02 高压线):
+##   只做"防崩溃硬极限" (0.05 ~ 1000), 让玩家在弹窗里扩展 min/max 后能输入任意合理值
+##   UI 默认友好范围由 get_editable_params() 的 min/max 控制 (3~80, 旧值)
+##   旧版 clampf(v, 0.001, 100000.0) 把 setter 也卡死 → 弹窗改了 min 也没用 → 违反高压线
 @export var entry_width: float = 25.0:
 	set(v):
-		entry_width = clampf(v, 3.0, 80.0)
+		entry_width = clampf(v, 0.001, 100000.0)
 		if is_inside_tree():
 			rebuild()
 ## 出口路宽 (米). 与 entry_width 不同时实现"路宽渐变"(锥形赛道)
 @export var exit_width: float = 25.0:
 	set(v):
-		exit_width = clampf(v, 3.0, 80.0)
+		exit_width = clampf(v, 0.001, 100000.0)
 		if is_inside_tree():
 			rebuild()
 ## 两侧墙的高度 (米). 0 = 无墙(只有路缘), >0 = 加垂直墙防止车飞出
 @export var wall_height: float = 2.5:
 	set(v):
-		wall_height = clampf(v, 0.0, 15.0)
+		wall_height = clampf(v, 0.001, 100000.0)
 		if is_inside_tree():
 			rebuild()
 
@@ -172,6 +177,11 @@ func _emit_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, n: Vector3) 
 
 ## 创建路缘 (沿 X 方向两侧的红白条纹) — 直道版本, 支持 entry/exit 宽度渐变
 ##   length_z, parent, xform 同上
+##
+## 用户需求 (2026-06-02): "所有直道都不需要两侧红色的路沿(可以留有颜色 但是不要有高度)"
+## 修复: 把 kerb_y 从 ROAD_THICKNESS*0.5 + 0.075 (凸出 7.5cm) 改成 + 0.002 (贴地 2mm)
+##       2mm 偏移只是为了防止 z-fighting (跟路面同 Y 平面会闪烁), 视觉上完全是平的
+##       车开过路缘时不再被凸起的 7.5cm 弹一下, 红白颜色装饰仍然保留
 func _build_kerbs(length_z: float, parent: Node = self, xform: Transform3D = Transform3D.IDENTITY) -> void:
 	# 注: 数组字面量 [-1.0, 1.0] 会被推断为 Array (Variant), 循环变量类型未知 → 编译报错
 	# 解决: 显式声明 sign_x: float, 让类型检查通过
@@ -181,7 +191,8 @@ func _build_kerbs(length_z: float, parent: Node = self, xform: Transform3D = Tra
 		var hw_out: float = exit_width * 0.5
 		var hl: float = length_z * 0.5
 		var kerb_w: float = 0.5
-		var kerb_y: float = ROAD_THICKNESS * 0.5 + 0.075
+		# kerb_y: 紧贴路面顶部, 仅 +2mm 防止 z-fighting (旧版 +7.5cm 凸出, 用户反馈"不要高度")
+		var kerb_y: float = ROAD_THICKNESS * 0.5 + 0.002
 		# 路缘是一个梯形薄板, 沿路面外边缘
 		var st := SurfaceTool.new()
 		st.begin(Mesh.PRIMITIVE_TRIANGLES)

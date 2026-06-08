@@ -1,4 +1,4 @@
-@tool
+﻿@tool
 extends Node3D
 ## ============================================================
 ## 可破碎墙 (Breakable Wall) — 编辑器机关
@@ -29,19 +29,19 @@ extends Node3D
 ## 墙体宽度 (X 方向, 米)
 @export var wall_width: float = 8.0:
 	set(v):
-		wall_width = clampf(v, 0.5, 100.0)
+		wall_width = clampf(v, 0.001, 100000.0)
 		if is_inside_tree():
 			_rebuild()
 ## 墙体高度 (Y 方向, 米)
 @export var wall_height: float = 4.0:
 	set(v):
-		wall_height = clampf(v, 0.5, 30.0)
+		wall_height = clampf(v, 0.001, 100000.0)
 		if is_inside_tree():
 			_rebuild()
 ## 墙体厚度 (Z 方向, 米)
 @export var wall_depth: float = 0.5:
 	set(v):
-		wall_depth = clampf(v, 0.1, 20.0)
+		wall_depth = clampf(v, 0.001, 100000.0)
 		if is_inside_tree():
 			_rebuild()
 ## 透明度 (0=完全透明, 1=完全不透明)
@@ -71,7 +71,7 @@ extends Node3D
 ## 碎裂触发速度阈值 (m/s). 赛车速度超过此值撞墙时墙会碎
 @export var break_speed_threshold: float = 25.0:
 	set(v):
-		break_speed_threshold = clampf(v, 5.0, 200.0)
+		break_speed_threshold = clampf(v, 0.001, 100000.0)
 ## 碎片数量 (粒子数)
 @export var shard_count: int = 24:
 	set(v):
@@ -79,11 +79,11 @@ extends Node3D
 ## 碎片飞散速度 (m/s)
 @export var shard_speed: float = 12.0:
 	set(v):
-		shard_speed = clampf(v, 2.0, 50.0)
+		shard_speed = clampf(v, 0.001, 100000.0)
 ## 碎片存活时间 (秒)
 @export var shard_lifetime: float = 1.5:
 	set(v):
-		shard_lifetime = clampf(v, 0.5, 5.0)
+		shard_lifetime = clampf(v, 0.001, 100000.0)
 
 # ============================================================
 # 内部节点引用

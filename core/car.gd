@@ -181,6 +181,8 @@ func _act(base_action: String) -> String:
 #   向心力 : 每帧施加 F_cp = mass × drift_centripetal_pull × drift_intensity × (forward - v_dir) × v_horizontal
 #            单位: m/s² × 速度大小(为了让高速弯更粘). 0 = 关闭; 10~30 推荐
 @export_range(0.0, 1.0, 0.02) var drift_inertia_boost: float = 0.0        ## 漂移惯性增强(削减漂移中沿惯性方向的摩擦)
+@export_range(5.0, 200.0, 1.0) var drift_inertia_speed_ref: float = 50.0 ## 惯性感曲线速度参考值(m/s): 曲线 X=1 对应此速度. 低于此速度惯性强, 高于减弱
+@export var drift_inertia_speed_curve: Curve                              ## 惯性感随速度的缩放曲线: X=speed/speed_ref(0~1), Y=惯性感倍率(0~1). 低速Y高=外移多, 高速Y低=不飞出
 @export_range(0.0, 50.0, 0.5) var drift_centripetal_pull: float = 0.0     ## 漂移向心拉力系数(车头把速度方向带过去)
 ## 向心拉力与速度的耦合曲线: X=0→低速弯, X=1→drift_head_yaw_duration_ref 秒时的速度参考
 @export var drift_centripetal_curve: Curve                                ## 可选, 留空则线性
@@ -828,6 +830,87 @@ func _act(base_action: String) -> String:
 ## FreeFly 模式下相机距离的额外乘数 (Camera3D.gd 读这个)
 @export_range(1.0, 4.0, 0.1) var freefly_camera_distance_mult: float = 1.6
 
+
+# ============================================================
+#  🦘 跳跃系统 (Jump)
+# ============================================================
+# 用户需求 (2026-06-02): "为赛车加跳跃功能, 是核心功能,
+#   当没有钩索可以勾的时候按空格使用 (空格优先发钩索, 找不到锚点 fallback 跳跃)"
+#
+# 输入路由 (在 _read_input 里):
+#   按空格 → _grapple_hook.try_fire()
+#     IDLE + 钩到锚点 → return true → 进入钩索, 不跳
+#     IDLE + 找不到锚点 → return false → fallback _try_jump()  ← 新增
+#     非 IDLE (已在钩索中) → return false → 钩索处理释放, 不跳
+#
+# 跳跃逻辑:
+#   一段跳: 在地面 (on_ground=true) 时按空格且找不到锚点 → 给 v.y 一个冲量
+#           调 apply_jump_pad_kick() 走防弹豁免 (跟蘑菇/反重力机关一样)
+#           保留水平速度, 可选额外车头方向推力 (jump_forward_kick)
+#   二段跳: 一段跳后未触地 + jump_double_enabled + 二段跳次数未用 → 再跳
+#           二段跳冲量较小 (jump_double_impulse), 视觉上可选车身翻转
+#
+# 视觉表现:
+#   起跳压扁 (squash): car_mesh.scale.y *= (1 - amount) 短时间, 然后回弹
+#   起跳震屏 + 落地震屏 (camera_shake_requested 信号)
+#   二段跳车身前空翻 (绕 X 轴转 360°, 持续 1/(speed/360) 秒)
+#
+# 数学:
+#   跳跃高度 h = v² / (2g), g=29 (项目重力)
+#     jump_impulse = 25 m/s → h ≈ 10.8 m
+#     jump_double_impulse = 18 m/s → 二段跳从顶点再爬 ≈ 5.6 m
+@export_group("Jump (跳跃)")
+## 跳跃总开关 (0=禁用整套跳跃, 1=启用. 空格找不到锚点时 fallback)
+@export var jump_enabled: bool = true
+## 二段跳开关 (0=只允许地面跳, 1=允许空中再跳一次)
+@export var jump_double_enabled: bool = true
+## 一段跳冲量 (m/s). 直接设为新的 v.y, 然后走 apply_jump_pad_kick 防弹豁免
+##   推荐 15~35: 15=轻跳过 1.2m 障碍, 25=能跳到 ~10m 高, 35=能跳到 ~21m 高
+##   公式: h = v² / (2g), g=29 (项目重力)
+@export_range(5.0, 60.0, 0.5) var jump_impulse: float = 25.0
+## 二段跳冲量 (m/s). 一般比一段跳小, 给爬坡/补救用
+##   推荐 12~25, 默认 18 = 从顶点再爬 ~5.6m
+@export_range(5.0, 60.0, 0.5) var jump_double_impulse: float = 18.0
+## 跳跃时保留水平速度的比例 (0~1)
+##   1.0 (默认) = 完全保留 (跳起来按惯性继续前飞, 不干扰玩家方向控制)
+##   0.0 = 跳起来水平速度归零
+##   推荐 1.0 (用户高压线: 跳跃不要碰水平方向)
+@export_range(0.0, 1.0, 0.05) var jump_horizontal_keep: float = 1.0
+## [废弃] 跳跃水平方向是否重定向到车头方向 — 用户反馈"重定向 = 强行设置车头朝向", 已禁用.
+## 当前跳跃逻辑完全保留水平速度向量, 不重定向. 此参数仅用于兼容旧 cfg, 改它无效.
+@export var jump_redirect_horizontal_to_forward: bool = false
+## 跳跃最低前飞速度 (m/s). 保证即使静止/低速按空格也朝车头方向飞.
+##   数学: horiz_speed = max(|v.xz| × keep, jump_forward_kick)
+##   0 = 静止跳只有 Y 分量 (会被角速度漂向一侧, 用户反馈"不朝车头")
+##   10 (默认) = 静止跳也沿车头飞 10 m/s, 感觉明确"朝前跳"
+##   推荐 5~15
+@export_range(0.0, 30.0, 0.5) var jump_forward_kick: float = 10.0
+## 跳跃冷却 (秒). 防止连按空格爆跳
+@export_range(0.0, 2.0, 0.05) var jump_cooldown: float = 0.15
+## 跳跃后防弹豁免窗口 (秒). 跟蘑菇/反重力一样跳过 _apply_ground_stick 的下压力
+##   太短 → 跳起来立刻被压回. 太长 → 落地了还在豁免会乱
+@export_range(0.05, 1.5, 0.05) var jump_skip_stick: float = 0.4
+## 漂移中是否允许跳 (0=禁止, 1=允许. 默认禁止防止漂移段被跳跃打断)
+@export var jump_allow_in_drift: bool = false
+## 起跳压扁视觉开关 (1=有压扁动画, 0=纯物理跳)
+@export var jump_squash_enabled: bool = true
+## 起跳压扁强度 (0~0.5). car_mesh.scale.y 在跳跃瞬间 = (1 - amount)
+##   0.25 = Y 方向压扁到 0.75 (压扁 25%), 看起来"蹲跳"
+@export_range(0.0, 0.5, 0.01) var jump_squash_amount: float = 0.2
+## 起跳压扁恢复时长 (秒). 压扁到恢复正常的总时间
+@export_range(0.05, 0.6, 0.01) var jump_squash_duration: float = 0.18
+## 起跳震屏强度 (0~3). 0 = 无震屏
+@export_range(0.0, 3.0, 0.05) var jump_takeoff_shake: float = 0.3
+## 落地震屏强度 (0~3). 跳跃后第一次触地触发
+@export_range(0.0, 3.0, 0.05) var jump_landing_shake: float = 0.6
+## 二段跳前空翻开关 (1=空中翻转视觉, 0=平跳)
+@export var jump_air_flip_enabled: bool = true
+## 二段跳前空翻速度 (度/秒). 360 = 1 秒翻一圈
+@export_range(0.0, 1080.0, 5.0) var jump_air_flip_speed: float = 540.0
+## 落地烟尘开关 (1=触发 DriftFX 落地烟雾, 0=无). 如果 DriftFX 节点存在
+@export var jump_landing_dust_enabled: bool = true
+
+
 # ---------------- 节点 ----------------
 @onready var car_mesh: Node3D = get_node_or_null("CarMesh")
 @onready var body_mesh: Node3D = get_node_or_null("CarMesh/suv2")
@@ -947,6 +1030,7 @@ var _auto_exit_t: float = 0.0             # 已满足"车头摆正"条件的累�
 # V2 漂移强度(0~1 平滑过渡, 驱动摩擦/视觉所有漂移表现)
 var drift_intensity: float = 0.0        # 0=纯直线, 1=完全漂移
 var _drift_intensity_vel: float = 0.0   # 用于平滑过渡的内部速率
+var _drift_inertia_active: bool = false  # 惯性感开关: 入漂 true, 退漂瞬间 false
 
 # 退漂窗口期: 窗口内按 W 才能放出本次漂移积累的小喷/双喷
 var boost_window_left: float = 0.0                # 窗口剩余秒数, 0 表示无窗口
@@ -1142,12 +1226,129 @@ var _pending_landing_q_left: float = 0.0   # 预输入 Q 剩余有效秒数 (倒
 var _grapple_active: bool = false
 # 绳子(CoopMode)摩擦削减倍率: 由 CoopMode 每帧设置, 1.0=正常, <1.0=削减摩擦(后车卡墙时被拉动更容易)
 var _rope_friction_mult: float = 1.0
+
+# ---- 跳跃台/弹簧冲击窗口 ----
+# 外部机关 (FlipBoard 跳板 / SpringMushroom 弹簧蘑菇 / GravityCylinder 反重力等) 给车一个
+# 大的瞬时速度时, 必须在短时间内绕过 _apply_ground_stick 的防弹机制(plain_vy_zero_threshold +
+# plain_downforce + slope_stick_force), 否则:
+#   · 22 m/s 的弹力被 plain_downforce=8 N/kg 持续往下压(总减速 g=29 + 8 = 37 m/s²) → 弹得不高
+#   · 即使初始 v.y > plain_vy_zero_threshold(5), 弹起到峰值后回落时若 ground_ray 又命中蘑菇盖
+#     会触发 v -= n*v_along_n 把残余 Y 速度吃掉 → 看起来"弹力不足"
+# 这个倒计时窗口在 _apply_ground_stick 顶部直接 return, 让弹力完整作用 (类似钩索期间).
+var _jump_pad_kick_left: float = 0.0
+
+# ---- 反重力定向窗口 ----
+# 用户反馈 (2026-06-02): "反重力时镜头不用跟随, 但输入要更合理.
+#                         在反重力墙面上一按前就会向上方冲出反重力墙壁"
+# 真凶: _apply_engine_and_brake 用 ground_ray 朝 -Y 打的法线做 slope_align_thrust 切平面投影.
+#       但反重力墙面是垂直的, ground_ray 朝 -Y 打不到墙 → ground_n 退化为 UP →
+#       forward 被投影到水平面 → 玩家按 W 推力沿水平方向 → 直接把车推离墙面 → "冲出"
+# 修复: 反重力机关每帧调 apply_anti_gravity_orientation(world_normal) 告诉 car 当前贴附面的法线
+#       _apply_engine_and_brake / _apply_friction 在窗口期内用 _anti_gravity_normal 替换 ground_n
+#       这样推力 / 摩擦都沿"反重力面切平面" → 玩家按前 = 沿墙面走, 不会冲出
+#
+# 镜头不变: 我们不旋转 car_mesh (镜头 look_at 用 Vector3.UP 始终保持地面视角)
+#           只改"输入响应方向", 用户视角不变, 输入合理化 — 完全符合用户需求
+#
+# 字段:
+#   _anti_gravity_normal: Vector3 — 反重力面的"外法线"(从车朝外的方向)
+#                                   = -吸附力方向 (吸附力是把车压向面, 法线是反过来)
+#   _anti_gravity_left: float — 倒计时秒数, > 0 表示窗口激活
+#                               反重力机关每帧调一次会把这个重置成 ANTI_GRAVITY_WINDOW
+var _anti_gravity_normal: Vector3 = Vector3.ZERO
+var _anti_gravity_left: float = 0.0
+const ANTI_GRAVITY_WINDOW: float = 0.1   # 100ms 窗口, 60Hz 物理也安全 (机关每帧调时持续保持激活)
+
+
+## 公开接口 — 反重力机关每帧调用, 告诉 car 当前贴附面的法线方向
+##
+## 参数:
+##   normal: 世界空间的反重力面"外法线" (从车朝外, 即贴附时车在 normal 方向那一侧)
+##           墙面: normal = wall_normal (墙的 +Z 朝外)
+##           圆柱: normal = radial_dir (从中心轴指向车的径向方向)
+##           弧面: 同圆柱
+##   duration: 窗口长度. 默认 0.1s, 机关每帧重置即可保持激活
+##
+## 内部行为:
+##   _anti_gravity_normal = normal
+##   _anti_gravity_left = max(_anti_gravity_left, duration)
+##   _apply_engine_and_brake / _apply_friction 检测到 _anti_gravity_left > 0 就用这个法线做切平面投影
+func apply_anti_gravity_orientation(normal: Vector3, duration: float = 0.1) -> void:
+	if normal.length() < 0.001:
+		return
+	_anti_gravity_normal = normal.normalized()
+	_anti_gravity_left = maxf(_anti_gravity_left, duration)
+
+
+## 公开接口 — 给玩家施加一个"跳跃台冲击" (弹簧蘑菇 / 跳板 / 反重力机关用)
+##
+## 作用:
+##   1) 把 linear_velocity 设为指定值 (覆盖, 不累加 — 调用方自己组装好向量再传)
+##   2) 在 skip_stick_seconds 秒内让 _apply_ground_stick 跳过 (绕开防弹/下压力/坡面贴附)
+##   3) 立刻把 _is_airborne 标记为 true (空中状态), 让车感觉"真的飞起来了"
+##
+## 参数:
+##   new_velocity: 弹后 car.linear_velocity 直接被设为这个值
+##   skip_stick_seconds: 防弹机制跳过窗口长度. 推荐 0.25~0.5
+##                       太短 → 弹起后立刻被压回. 太长 → 落地后还在跳过防弹会乱
+func apply_jump_pad_kick(new_velocity: Vector3, skip_stick_seconds: float = 0.35) -> void:
+	linear_velocity = new_velocity
+	_jump_pad_kick_left = maxf(_jump_pad_kick_left, skip_stick_seconds)
+	# 立刻进入空中状态, 让 _apply_engine_and_brake / 其他系统按"空中"处理
+	_is_airborne = true
+	_air_time = 0.0
+	# 不清角速度: 机关会在调用后自行设置随机小角速度 (视觉翻滚感)
+# ============================================================
+# 毒图玩法 - 外部干预通道
+# ============================================================
+# 毒雾减速倍率: 由 Block_ToxicFog 每帧设置 (车在毒雾区域内时), 1.0=正常, <1.0=减速
+# 数学:
+#   _toxic_slow_mult 直接乘到引擎力 + 反向给一个阻尼力
+#   实际生效在 _apply_engine_and_brake (引擎力 *= mult) 和 _apply_friction (额外加阻尼)
+# 0.3 = 引擎只剩 30% + 强阻尼  ;  0.6 = 较温和减速  ;  1.0 = 无影响
+# Block_ToxicFog 每帧调 car.set("_toxic_slow_mult", val), 离开毒雾时 set 回 1.0
+var _toxic_slow_mult: float = 1.0
+# 毒雾额外线性阻尼系数 (1/s). 与 _toxic_slow_mult 配合, _apply_friction 里加这个 damping
+# 数学: linear_velocity -= linear_velocity * _toxic_extra_damping * delta
+# 0.0 = 无阻尼, 1.0 = 1秒衰减到 1/e ≈ 37%, 2.0 = 0.5s衰减到 37%, 推荐 0.5~2.0
+var _toxic_extra_damping: float = 0.0
 # 钩索系统节点引用 (由 _spawn_grapple_hook 在 _ready 后填入, 给 _read_input 路由空格键用)
 var _grapple_hook: Node = null
 # 钩索释放后车头摆正倒计时 (秒). GrappleHook._release() 设置此值, 每帧递减
 # > 0 时在空中朝向对齐代码段中做车头→速度方向的平滑 slerp
 # 正常从跳台飞出不会触发 (因为 _grapple_active 从未为 true, GrappleHook 不会设此值)
 var _grapple_release_align_left: float = 0.0
+
+# ---- 🦘 跳跃运行时状态 ----
+# _jump_cooldown_left: 冷却倒计时, > 0 时按空格也无法跳 (防止连按)
+# _jump_double_left: 当前还能用几次"二段跳" (落地后重置成 1, 用一次扣到 0)
+# _jump_was_airborne_last_frame: 上一帧是否在空中, 用于检测"刚落地"瞬间触发落地震屏/烟尘
+# _jump_pending_landing: 跳跃后还没落地, 用于决定要不要触发落地反馈 (避免普通空中也触发)
+# _jump_squash_left: 起跳压扁动画倒计时 (秒). > 0 时 _update_jump_visuals 在 car_mesh 上设缩放
+# _jump_squash_total: 当次压扁动画总时长 (用来算插值进度 t = 1 - left/total)
+# _jump_flip_left: 二段跳前空翻倒计时 (秒). > 0 时每帧给 car_mesh 加 X 轴转动
+# _jump_flip_total: 当次空翻总时长
+var _jump_cooldown_left: float = 0.0
+var _jump_double_left: int = 0
+var _jump_was_airborne_last_frame: bool = false
+var _jump_pending_landing: bool = false
+var _jump_squash_left: float = 0.0
+var _jump_squash_total: float = 0.0
+var _jump_flip_left: float = 0.0
+var _jump_flip_total: float = 0.0
+# === 跳跃豁免窗口 (2026-06-02 用户反馈"跳跃后抽搐+强行改镜头"修复) ===
+# 真凶: 跳跃路径上有 5 个独立系统会"消费"跳跃事件造成视觉/物理跳变:
+#   1) _apply_landing_physics 落地清角动量 → flip 旋转中突变 = 抽搐
+#   2) _pending_landing_w_left / q_left 落地回放 → 自动触发落地喷/起漂 = 改镜头
+#   3) _air_boost_armed 跳跃中按 W → 自动空喷 → FOV 推升 = 改镜头
+#   4) _landing_stick_left 上次压地窗口残留 → 跳跃 Y 速度被 clamp = 跳不起来
+#   5) flip 期间被外部清角动量 → 视觉旋转和物理 transform 错位
+# 解决: 用一个"跳跃激活窗口" _jump_active_left, 期间下面这些系统全部豁免
+#   起跳时设: _jump_active_left = jump_skip_stick + JUMP_LAND_GRACE
+#   落地后再保留 JUMP_LAND_GRACE 让落地反馈 (震屏/烟尘) 自然完成
+#   每帧 _physics_process 倒计时, 0 后系统自动恢复正常行为
+const JUMP_LAND_GRACE: float = 0.25   # 落地后保留豁免的额外秒数
+var _jump_active_left: float = 0.0
 
 # 钩索弹射窗口: 释放钩索后一定时间内按 W 可触发独立的钩索弹射
 # _grapple_boost_window_left > 0 表示当前在窗口内
@@ -1231,10 +1432,15 @@ func _ready() -> void:
 
 
 func _deferred_record_initial_position() -> void:
-	# 帧末记录 CarMesh 的位置和朝向作为出生点
-	# 在 TrackRunner 场景中: 此时 CarMesh 已被 TrackRunner 设置到正确的 spawn 位置, 直接记录即可
-	# 在 TrackSetup 场景中: 此时记录的是初始高空位置(不正确), 但 TrackSetup._adjust_car_spawn
-	#   会在 2 帧物理后把车落到地面并调用 _record_initial_position() 覆盖为正确值
+	# 等 2 帧物理再记录出生点, 确保:
+	#   - TrackRunner 的 spawn_pos 设置已生效
+	#   - 物理引擎已稳定 (车已落地)
+	#   - TrackSetup._adjust_car_spawn 可能还需要额外覆盖 (它 await 2 帧后调 _record_initial_position)
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	# 如果 TrackSetup 已经覆盖了 (通过直接调 _record_initial_position), 不再重复
+	if _initial_recorded:
+		return
 	_record_initial_position()
 
 func _record_initial_position() -> void:
@@ -1419,6 +1625,13 @@ func _on_grapple_boost_window_opened(dist_ratio: float, pull_time: float = 0.0, 
 func _physics_process(delta: float) -> void:
 	if not car_mesh or not body_mesh:
 		return
+	# 反重力窗口倒计时 (机关每帧调 apply_anti_gravity_orientation 会重置, 所以这里只是清理过期窗口)
+	# 离开反重力机关时, 0.1s 内倒计时归零, _apply_engine_and_brake 自动回到正常 ground_n 切平面
+	if _anti_gravity_left > 0.0:
+		_anti_gravity_left -= delta
+		if _anti_gravity_left <= 0.0:
+			_anti_gravity_left = 0.0
+			_anti_gravity_normal = Vector3.ZERO
 	# === 时间回溯 / 自定义位置模式 优先级最高 ===
 	# 这两个模式下不跑正常 3C 逻辑, 完全接管 transform
 	if _rewind_active:
@@ -1501,6 +1714,9 @@ func _physics_process(delta: float) -> void:
 	_update_smoothed_ground_normal(delta, on_ground)
 	# 起飞/落地检测 + 空喷/落地喷处理
 	_update_air_state(delta, on_ground)
+	# 跳跃倒计时 + 落地反馈 (震屏/烟尘/重置二段跳)
+	# 必须在 _update_air_state 之后, 这样 _is_airborne 已经更新
+	_update_jump_state(delta, on_ground)
 	if on_ground:
 		# 注: 之前为修弯坡抖动加过 angular_velocity = Vector3.ZERO,
 		#     但配合 lock_rotation=true 一起会让 friction 失效, 已回滚.
@@ -1654,16 +1870,32 @@ func _read_input() -> void:
 	if Input.is_action_just_pressed(act_nitro):
 		_try_nitro()
 
-	# 空格 钩索 (GrappleHook 自己管状态机, car 这里只做路由)
-	# 按下 → 试射出钩索 (如果 IDLE 找锚点, 如果 ATTACHED 提前释放)
-	# 松开 → 如果开启了 release_on_button_release, 触发提前释放
-	if _grapple_hook != null:
-		if Input.is_action_just_pressed(act_grapple):
-			if _grapple_hook.has_method("try_fire"):
-				_grapple_hook.call("try_fire")
-		elif Input.is_action_just_released(act_grapple):
-			if _grapple_hook.has_method("try_release"):
-				_grapple_hook.call("try_release")
+	# 空格 钩索 + 跳跃 fallback (用户需求 2026-06-02)
+	#
+	# 优先级: 钩索 > 跳跃
+	#   钩索 IDLE + try_fire 钩到锚点 → 进入钩索流程, 不跳
+	#   钩索 IDLE + try_fire 失败 (找不到锚点) → fallback _try_jump()
+	#   钩索 非 IDLE (已在钩索流程中) → 钩索处理释放, 不跳 (避免空格在钩索中误触跳跃)
+	#   钩索系统不存在 (auto_spawn_grapple=false) → 直接跳
+	#
+	# 松开空格: 只给钩索处理 (release_on_button_release), 跳跃是按下瞬间触发不需要松开逻辑
+	if Input.is_action_just_pressed(act_grapple):
+		var hook_consumed: bool = false   # 这次按键有没有被钩索系统消费
+		if _grapple_hook != null and _grapple_hook.has_method("try_fire"):
+			# is_idle() 用来区分"钩索 IDLE 但没找到锚点" vs "钩索已 ATTACHED 中"
+			# 前者应该 fallback 跳跃, 后者钩索消费空格触发释放
+			var was_idle: bool = true
+			if _grapple_hook.has_method("is_idle"):
+				was_idle = bool(_grapple_hook.call("is_idle"))
+			var hooked: bool = bool(_grapple_hook.call("try_fire"))
+			# 钩到 = 消费; 非 IDLE 时 try_fire 也算消费 (释放/取消)
+			hook_consumed = hooked or not was_idle
+		# 钩索没消费 (没钩到锚点 + 不在钩索中) → fallback 跳跃
+		if not hook_consumed:
+			_try_jump()
+	elif Input.is_action_just_released(act_grapple):
+		if _grapple_hook != null and _grapple_hook.has_method("try_release"):
+			_grapple_hook.call("try_release")
 
 	# 2P 复位 (LT 扳机): 类似 B 键的快速回到出生点
 	if player_id == 1 and Input.is_action_just_pressed("p2_reset"):
@@ -1875,15 +2107,26 @@ func _init_default_curves() -> void:
 		c10.add_point(Vector2(0.25, 1.15))
 		c10.add_point(Vector2(1.0, 1.0))
 		drift_body_tilt_curve = c10
+	# 惯性感速度曲线: X=speed/top_speed, Y=惯性感倍率
+	#   低速(0~0.3): Y=1.0 → 满惯性, 外移多好过弯
+	#   中速(0.3~0.6): Y=0.7 → 逐渐收
+	#   高速(0.6~1.0): Y=0.3 → 惯性感很弱, 控制车不飞出去
+	if drift_inertia_speed_curve == null:
+		var c_inertia := Curve.new()
+		c_inertia.add_point(Vector2(0.0, 1.0))
+		c_inertia.add_point(Vector2(0.3, 1.0))
+		c_inertia.add_point(Vector2(0.6, 0.7))
+		c_inertia.add_point(Vector2(1.0, 0.3))
+		drift_inertia_speed_curve = c_inertia
 	# 漂移超速刹车强度随时间变化曲线:
-	#   前期(0~0.3): 0.15~0.4 → 刚入漂几乎不掉速, 保持冲劲
-	#   中期(0.3~0.7): 0.4~1.0 → 逐渐开始拖
-	#   后期(0.7~1.0): 1.0~1.4 → 长时间漂越拖越凶, 迫使玩家早点退漂
+	#   前期(0~0.4): 0.0~0.1 → 刚入漂几乎不掉速, 保持冲劲
+	#   中期(0.4~0.7): 0.1~0.6 → 逐渐开始拖
+	#   后期(0.7~1.0): 0.6~1.4 → 长时间漂越拖越凶, 迫使玩家早点退漂
 	if drift_speed_brake_curve == null:
 		var c11 := Curve.new()
-		c11.add_point(Vector2(0.0, 0.15))
-		c11.add_point(Vector2(0.3, 0.4))
-		c11.add_point(Vector2(0.7, 1.0))
+		c11.add_point(Vector2(0.0, 0.0))
+		c11.add_point(Vector2(0.4, 0.1))
+		c11.add_point(Vector2(0.7, 0.6))
 		c11.add_point(Vector2(1.0, 1.4))
 		drift_speed_brake_curve = c11
 	# 漂移低速推力曲线: 速度越低推力越大(X=0静止→最大推力, X=1阈值速度→推力消失)
@@ -2047,12 +2290,21 @@ func _apply_engine_and_brake(_delta: float) -> void:
 	#         going_uphill 判定失败 → 重力补偿/上坡助力全跳过 → 车开不上坡.
 	# 修复: 物理力相关的法线读 raw, 拿到当前帧的真实坡度. 只有视觉贴坡 (_update_visuals)
 	#       才用平滑法线避免视觉颤抖.
+	#
+	# 反重力优先级最高: 反重力窗口激活时, 用机关推过来的法线 (墙面/圆柱/弧面的外法线)
+	# 替代 ground_ray 法线. 这样玩家按前 = 沿反重力面切线方向, 不会冲出墙
 	var ground_n: Vector3 = Vector3.UP
-	if ground_ray and ground_ray.is_colliding():
+	if _anti_gravity_left > 0.0 and _anti_gravity_normal.length_squared() > 0.01:
+		# 反重力贴附面优先 (墙面/圆柱/弧面的外法线)
+		ground_n = _anti_gravity_normal
+	elif ground_ray and ground_ray.is_colliding():
 		var raw_gn: Vector3 = ground_ray.get_collision_normal().normalized()
 		if raw_gn.length_squared() >= 0.01:
 			ground_n = raw_gn
 	var thrust_dir: Vector3 = forward
+	# DEBUG: 每 60 帧打印一次引擎 forward 方向，跟跳跃对比
+	if Engine.get_physics_frames() % 60 == 0 and throttle_input > 0.5:
+		print("[ENGINE] forward=", forward, " basis.z=", car_mesh.global_transform.basis.z, " body.rot.y=", rad_to_deg(body_mesh.rotation.y) if body_mesh else 0)
 	if slope_align_thrust:
 		# 把 forward 投影到垂直于 ground_n 的平面上
 		thrust_dir = (forward - ground_n * forward.dot(ground_n))
@@ -2278,25 +2530,23 @@ func _apply_boost_thrust(_delta: float) -> void:
 		if raw_gn.length_squared() >= 0.01:
 			ground_n = raw_gn
 
-	# 喷射推力沿惯性方向(受 effective_top 限制)
+	# 喷射推力沿车头方向 (跟引擎力方向一致, 不沿速度方向)
+	# 退漂时速度方向偏离车头很大, 如果沿速度方向推会失控
+	# 只有空中喷射和机关关联(加速带)才沿速度方向
 	if is_boosting and current_speed < effective_top:
-		var vel_dir: Vector3 = v_horiz
-		if vel_dir.length() > 1.0:
-			vel_dir = vel_dir.normalized()
-		else:
-			vel_dir = forward
-		# 喷射推力投影到坡面切向(防止上坡时喷射向斜上, 导致飞车/脱地)
-		if slope_align_thrust:
-			var vel_on_slope: Vector3 = vel_dir - ground_n * vel_dir.dot(ground_n)
-			if vel_on_slope.length() > 0.001:
-				vel_dir = vel_on_slope.normalized()
-		# 【三喷特殊】songqian_back 的推力沿车头反方向 (-forward), 不沿 velocity
+		var thrust_dir: Vector3 = forward
+		# 【三喷特殊】songqian_back 的推力沿车头反方向 (-forward)
 		if boost_type == "songqian_back":
-			vel_dir = car_mesh.global_transform.basis.z   # +Z 是车尾方向 (= -forward)
-			vel_dir.y = 0.0
-			if vel_dir.length() > 0.001:
-				vel_dir = vel_dir.normalized()
-		apply_central_force(vel_dir * boost_power * mass)
+			thrust_dir = car_mesh.global_transform.basis.z   # +Z 是车尾方向
+			thrust_dir.y = 0.0
+			if thrust_dir.length() > 0.001:
+				thrust_dir = thrust_dir.normalized()
+		# 喷射推力投影到坡面切向(防止上坡时喷射向斜上, 导致飞车/脱地)
+		if slope_align_thrust and not _is_airborne:
+			var dir_on_slope: Vector3 = thrust_dir - ground_n * thrust_dir.dot(ground_n)
+			if dir_on_slope.length() > 0.001:
+				thrust_dir = dir_on_slope.normalized()
+		apply_central_force(thrust_dir * boost_power * mass)
 
 	# ============ 加速带 / 弹射器 持续推力 ============
 	if _speed_pad_boost_left > 0.0 and current_speed < effective_top:
@@ -2372,12 +2622,16 @@ func _apply_friction(delta: float) -> void:
 
 	# -------- 【惯性感增强】 --------
 	# 削减漂移中"按速度方向"的摩擦, 让车在漂移中被甩出去后能保持原速度方向更久
-	# 数学: inertia_mult = 1 - drift_inertia_boost × drift_intensity
-	#   · 值 = 1 时(默认): 不变
-	#   · 值 = 0 时: 漂移达到 intensity=1 时, long/lat 摩擦都归零 (纯惯性)
-	# 与打滑机制叠加: 两者乘在一起, 任意一个机制把摩擦压到 0 就是 0
-	if state == State.DRIFT and drift_inertia_boost > 0.0:
-		var inertia_mult: float = clampf(1.0 - drift_inertia_boost * drift_intensity, 0.0, 1.0)
+	# 数学: inertia_mult = 1 - drift_inertia_boost × drift_intensity × speed_curve_sample
+	#   speed_curve: X = 当前速度/巡航极速 (0~1), Y = 惯性感倍率 (0~1)
+	#     低速 Y 高 → 惯性感强 → 外移多好过弯
+	#     高速 Y 低 → 惯性感弱 → 控制车不飞出去
+	#   没配曲线时默认 Y=1 (全速域等效, 跟旧行为一致)
+	# 退漂时立即取消 (不跟 drift_intensity 渐退), 直到下一次入漂才重新生效
+	if _drift_inertia_active and drift_inertia_boost > 0.0:
+		var speed_t: float = clampf(v.length() / maxf(drift_inertia_speed_ref, 1.0), 0.0, 1.0)
+		var speed_k: float = _sample_curve_safe(drift_inertia_speed_curve, speed_t, 1.0)
+		var inertia_mult: float = clampf(1.0 - drift_inertia_boost * drift_intensity * speed_k, 0.0, 1.0)
 		long_k *= inertia_mult
 		lat_k *= inertia_mult
 
@@ -2409,10 +2663,33 @@ func _apply_friction(delta: float) -> void:
 		long_k *= _rope_friction_mult
 		lat_k  *= _rope_friction_mult
 
+	# === 毒图毒雾区减速 (Block_ToxicFog) ===
+	# 玩法: 进入毒雾区域 → 引擎力 + 摩擦双重削减, 强迫玩家用氮气/小喷顶过去
+	# 数学:
+	#   long_k *= _toxic_slow_mult  (摩擦反过来变小不削减反而抓地? 不, 这里是"被毒雾拖慢"的语义,
+	#                                 实际是给一个独立的"反向阻尼"在下面 long_impulse 后施加)
+	#   注意: 摩擦削减不能让车减速, 反而让车更滑. 真正的减速来自 _toxic_extra_damping
+	#         所以这里只是占位, 真正生效是下面的"额外阻尼"分支
+	# 由 Block_ToxicFog 每帧 set("_toxic_slow_mult", v) + set("_toxic_extra_damping", d)
+	# 不在毒雾区时这两个值=1.0/0.0, 此分支 no-op
+
 	# 沿各自速度分量反方向施加冲量
 	var long_impulse: Vector3 = -forward * v_long * long_k * delta
 	var lat_impulse: Vector3  = -right   * v_lat  * lat_k  * delta
 	apply_central_impulse((long_impulse + lat_impulse) * mass)
+
+	# === 毒雾额外阻尼 (Block_ToxicFog 设置) ===
+	# 数学: 给一个独立的速度衰减脉冲, 与已有摩擦/引擎独立
+	#   damp_imp = -linear_velocity * _toxic_extra_damping * delta * mass
+	# 推导: 一阶阻尼方程 dv/dt = -k*v 的离散化, k=_toxic_extra_damping
+	#       这样 v(t) = v0 * exp(-k*t), k=1.0 → 1秒后衰减到 1/e ≈ 36.8%
+	# 注意: 这是无方向偏向的纯衰减, 不影响转向, 只是"拖慢"
+	if _toxic_extra_damping > 0.001:
+		var v_now: Vector3 = linear_velocity
+		# 不衰减 Y 方向 (重力/跳跃保持原样, 只拖慢水平移动)
+		var v_horiz: Vector3 = Vector3(v_now.x, 0.0, v_now.z)
+		var damp_dv: Vector3 = -v_horiz * _toxic_extra_damping * delta
+		apply_central_impulse(damp_dv * mass)
 
 	# -------- 【向心力感】 --------
 	# 漂移中主动施加一个把 linear_velocity 向 forward(视觉车头)方向拉的加速度
@@ -2493,9 +2770,290 @@ func _fallback_ground_check() -> bool:
 
 
 # ============================================================
+#  🦘 跳跃系统
+# ============================================================
+# 用户需求 (2026-06-02): 当空格找不到钩索锚点时, fallback 到跳跃
+#
+# 调用方: _read_input 在 _grapple_hook.try_fire() 返回 false 且 was_idle=true 时调用
+#         (即"在 IDLE 状态尝试钩索但找不到锚点")
+#
+# 跳跃判定:
+#   1) jump_enabled = false → 不跳
+#   2) _jump_cooldown_left > 0 → 冷却中不跳 (防止连按)
+#   3) state==DRIFT 且 jump_allow_in_drift=false → 漂移中不跳
+#   4) 钩索 ATTACHED → 不跳 (其实 was_idle 检查已过滤, 这里冗余防御)
+#   5) on_ground → 一段跳 (jump_impulse), 重置 _jump_double_left = 1 (二段跳次数)
+#   6) 空中 + jump_double_enabled + _jump_double_left > 0 → 二段跳 (jump_double_impulse)
+#       - 视觉: 给 car_mesh 绕 X 轴前空翻 (jump_air_flip_speed × 1s)
+#   7) 其他 (空中 + 已用完二段跳) → 不跳
+func _try_jump() -> void:
+	if not jump_enabled:
+		return
+	if _jump_cooldown_left > 0.0:
+		return
+	# 漂移中拦截 (除非允许)
+	if state == State.DRIFT and not jump_allow_in_drift:
+		return
+	# 钩索中不跳 (was_idle 已过滤但防御一层)
+	if _grapple_active:
+		return
+
+	# 当前是否在地面 (优先 ground_ray, 兜底 fallback 短程探测)
+	var on_ground: bool = (ground_ray != null and ground_ray.is_colliding()) or _fallback_ground_check()
+
+	# 决定跳跃类型 + 冲量
+	var impulse_y: float = 0.0
+	var is_double: bool = false
+	if on_ground:
+		# 一段跳: 落地时重置二段跳次数 (即使没用过, 触地后重置成 1)
+		impulse_y = jump_impulse
+		_jump_double_left = 1   # 跳起来后还能再用 1 次二段跳
+	elif jump_double_enabled and _jump_double_left > 0:
+		# 二段跳
+		impulse_y = jump_double_impulse
+		_jump_double_left -= 1
+		is_double = true
+	else:
+		# 不允许跳
+		return
+
+	# === 应用跳跃冲量 (2026-06-02 v5: 重定向到车头方向 + 保留角速度) ===
+	#
+	# 用户反馈历程:
+	#   v1 (保留 v.xz × 0.95):       "不朝车头跳"   ← 转弯/侧滑时 v.xz ≠ 车头
+	#   v2 (重定向叠 body_mesh.y):   "每次往右跳"  ← steer 残留让 body_mesh.y ≠ 0
+	#   v3 (重定向到 -basis.z + 清角速度): "强行设置车头朝向" ← 角速度被清, 车头冻结
+	#   v4 (完全不动只改 Y):         "朝车身右侧跳"  ← v.xz 跟车头不一致 (转弯惯性)
+	#   v5 (重定向到 -basis.z + 保留角速度): ← 当前正确版
+	#
+	# 用户最终诉求 (2026-06-02): "按 W 加速度方向 = 车头方向 = 跳跃方向"
+	#   引擎力的 forward 就是 -car_mesh.basis.z, 玩家按 W 加速沿这个方向
+	#   跳跃也应该沿这个方向 → 用 -car_mesh.basis.z 重定向水平速度
+	#
+	# 但 v3 翻车的真凶是 apply_jump_pad_kick 内部 angular_velocity = ZERO
+	#   → 玩家在转弯中按空格, 车头瞬间停止旋转 → 感觉"被强行冻结"
+	#   → 修复: 跳跃 kick 不清 angular_velocity, 让转弯延续
+	#
+	# 数学:
+	#   horiz_speed = |v.xz| × jump_horizontal_keep   (保留水平速度大小)
+	#   v_new.xz = forward × horiz_speed              (方向 = 车头, 跟引擎力方向一致)
+	#   v_new.y  = impulse_y                           (覆盖 Y)
+	#   不动 angular_velocity                          (玩家转弯继续)
+	var v: Vector3 = linear_velocity
+	# 车头方向: 必须跟 _apply_engine_and_brake 的 forward 100% 一致！
+	# 用户定义 (2026-06-02): "前方 = 我按前进键加速度的方向"
+	# _apply_engine_and_brake line 2267-2270:
+	#   forward = -car_mesh.basis.z
+	#   if body_mesh and abs(body_mesh.rotation.y) > 0.001:
+	#       forward = -(basis.rotated(basis.y, body_mesh.rotation.y)).z
+	# 这里完全照抄 (包括 body_mesh 偏转). 之前 v2 往右偏的真凶是
+	# steer_input → body_mesh.rotation.y → fwd 偏. 但用户确认"按 W 加速度方向 = 车头",
+	# 这个方向就是引擎力方向, 必须包含 body_mesh.rotation.y, 否则跟引擎力方向不一致
+	var fwd: Vector3 = -car_mesh.global_transform.basis.z
+	if body_mesh and absf(body_mesh.rotation.y) > 0.001:
+		var b: Basis = car_mesh.global_transform.basis.rotated(car_mesh.global_transform.basis.y, body_mesh.rotation.y)
+		fwd = -b.z
+	fwd.y = 0.0
+	if fwd.length_squared() > 0.001:
+		fwd = fwd.normalized()
+	else:
+		fwd = Vector3.ZERO
+
+	# 水平速度: 大小保留, 方向重定向到车头 + 保证最低前飞速度
+	# 真凶 (2026-06-02 日志确认): 玩家几乎静止时按空格 → horiz_speed ≈ 0
+	# → fwd × 0 = 无水平分量 → 跳起来只有 Y → 被残余角速度漂向一侧 → "不朝车头"
+	# 修复: 保证跳跃水平速度至少 = jump_forward_kick (默认 10 m/s), 这样即使静止跳也朝车头飞
+	var horiz_speed: float = Vector2(v.x, v.z).length() * jump_horizontal_keep
+	# 保底: 静止/低速时用 jump_forward_kick 作为最低前飞速度
+	horiz_speed = maxf(horiz_speed, jump_forward_kick)
+	var v_horiz: Vector3 = fwd * horiz_speed
+	# 兜底: 如果 fwd 算错(车几乎垂直时 fwd≈0), 保留原向避免水平速度归零
+	if fwd.length_squared() < 0.001:
+		v_horiz = Vector3(v.x * jump_horizontal_keep, 0.0, v.z * jump_horizontal_keep)
+
+	var new_v: Vector3 = v_horiz + Vector3(0.0, impulse_y, 0.0)
+
+	# DEBUG: 打印所有方向 让我精确对比
+	print("[JUMP v6] fwd=", fwd, " body_mesh.rot.y=", rad_to_deg(body_mesh.rotation.y) if body_mesh else 0)
+	print("[JUMP v6] v_before=", v, " new_v=", new_v, " horiz_speed=", Vector2(v.x, v.z).length())
+	print("[JUMP v6] car_mesh.basis.z=", car_mesh.global_transform.basis.z)
+
+	# 跳跃专用 kick: 设 linear_velocity + 防弹豁免, **不清角速度** (高压线!)
+	linear_velocity = new_v
+	_jump_pad_kick_left = maxf(_jump_pad_kick_left, jump_skip_stick)
+	_is_airborne = true
+	_air_time = 0.0
+
+	# === 跳跃豁免窗口 (修 2026-06-02 抽搐+改镜头 bug) ===
+	# 起跳瞬间清掉所有可能"消费跳跃事件"的状态:
+	#   _pending_landing_w_left / q_left: 落地预输入缓冲 (回放会自动触发落地喷/起漂)
+	#   _landing_stick_left: 上次落地的压地窗口残留 (会把跳跃 Y 速度 clamp 到 0)
+	#   _air_boost_armed: 空喷资格标记 (避免跳跃中按 W 误触空喷)
+	#   _pending_landing: 上次落地的稳定等待 (会触发 _maybe_trigger_landing_boost)
+	# 然后开启豁免窗口, 期间 _update_air_state / _try_boost_w / _apply_landing_physics 跳过
+	_pending_landing_w_left = 0.0
+	_pending_landing_q_left = 0.0
+	_landing_stick_left = 0.0
+	_air_boost_armed = false
+	_air_boost_armed_left = 0.0
+	_pending_landing = false
+	_landing_stable_t = 0.0
+	# 豁免窗口 = 防弹时长 + 落地后再宽限 0.25s, 至少 1.0s 兜底
+	_jump_active_left = maxf(jump_skip_stick + JUMP_LAND_GRACE, 1.0)
+
+	# 冷却启动
+	_jump_cooldown_left = jump_cooldown
+	# 标记: 跳跃后还没落地 (用于决定要不要触发落地反馈)
+	_jump_pending_landing = true
+
+	# === 视觉表现 ===
+	# 起跳压扁 (squash)
+	if jump_squash_enabled and jump_squash_duration > 0.001:
+		_jump_squash_left = jump_squash_duration
+		_jump_squash_total = jump_squash_duration
+	# 二段跳前空翻 (绕 X 轴转一圈)
+	if is_double and jump_air_flip_enabled and jump_air_flip_speed > 0.001:
+		# 持续时间 = 360 / speed (转完一圈)
+		var flip_dur: float = 360.0 / jump_air_flip_speed
+		_jump_flip_left = flip_dur
+		_jump_flip_total = flip_dur
+
+	# 起跳震屏
+	if jump_takeoff_shake > 0.001 and has_signal("camera_shake_requested"):
+		emit_signal("camera_shake_requested", jump_takeoff_shake, 0.15)
+
+	# 标记空中 (apply_jump_pad_kick 内部已经设了, 这里冗余防御)
+	_is_airborne = true
+	print("[Car] 跳跃! type=%s impulse=%.1f m/s 高度~%.1fm 冷却=%.2fs"
+		% ["二段跳" if is_double else "一段跳", impulse_y, impulse_y * impulse_y / 58.0, jump_cooldown])
+
+
+## 跳跃倒计时 + 落地反馈 (在 _physics_process 里调用, 或集成到 _update_air_state)
+##
+## 落地反馈触发条件:
+##   _jump_pending_landing 为 true (跳跃过, 还没落地反馈过)
+##   + 上一帧在空中 (_jump_was_airborne_last_frame=true)
+##   + 这一帧落地 (on_ground=true)
+##
+## 落地反馈内容:
+##   1) 落地震屏 (jump_landing_shake)
+##   2) 落地烟尘 (jump_landing_dust_enabled + DriftFX 节点存在则触发)
+##   3) 重置 _jump_double_left = 1 (落地后又能二段跳一次)
+##   4) 清掉 squash/flip 残留视觉
+func _update_jump_state(delta: float, on_ground: bool) -> void:
+	# 倒计时
+	if _jump_cooldown_left > 0.0:
+		_jump_cooldown_left = maxf(0.0, _jump_cooldown_left - delta)
+	if _jump_squash_left > 0.0:
+		_jump_squash_left = maxf(0.0, _jump_squash_left - delta)
+	if _jump_flip_left > 0.0:
+		_jump_flip_left = maxf(0.0, _jump_flip_left - delta)
+		# flip 结束帧把 body_mesh.rotation.x 归零, 防止视觉残留 (-TAU 数值在内部)
+		if _jump_flip_left <= 0.0 and body_mesh != null:
+			body_mesh.rotation.x = 0.0
+	# 跳跃豁免窗口倒计时: 只在还在空中时持续, 落地后切到 JUMP_LAND_GRACE 缓刑
+	if _jump_active_left > 0.0:
+		# 落地瞬间把窗口压缩到 JUMP_LAND_GRACE (如果当前剩余更多, 也压缩到刚好够落地反馈)
+		# 这样跳跃在地面停留 0.25s 后系统自动恢复, 玩家立刻能用空喷/落地喷/漂移等
+		if on_ground and _jump_pending_landing == false and _jump_active_left > JUMP_LAND_GRACE:
+			# _jump_pending_landing 已被下面的落地反馈逻辑置 false (说明落地反馈已完成)
+			_jump_active_left = JUMP_LAND_GRACE
+		_jump_active_left = maxf(0.0, _jump_active_left - delta)
+
+	# 落地反馈检测: 上一帧空中 + 这一帧落地 + 跳跃过 (_jump_pending_landing)
+	if on_ground and _jump_was_airborne_last_frame and _jump_pending_landing:
+		_jump_pending_landing = false
+		_jump_double_left = 1   # 落地重置二段跳次数
+		# 落地震屏
+		if jump_landing_shake > 0.001 and has_signal("camera_shake_requested"):
+			# 震屏强度按 v.y 缩放, 但更温柔: clamp(|v.y|/20, 0.6, 1.0)
+			# 旧版 (|v.y|/15, 0.5, 1.5) 容易把 0.6 默认值放大到 0.9 → 镜头震得过头
+			# 新版上限 1.0 = 不放大, 只在落得很轻时缩小到 0.6
+			var vy_abs: float = absf(linear_velocity.y)
+			var shake_scale: float = clampf(vy_abs / 20.0, 0.6, 1.0)
+			emit_signal("camera_shake_requested", jump_landing_shake * shake_scale, 0.18)
+		# 落地烟尘 (复用 DriftFX 节点的 trigger; DriftFX 没暴露 play_landing 就跳过)
+		if jump_landing_dust_enabled and drift_fx_node != null and drift_fx_node.has_method("play_boost"):
+			# 借用 mini 喷射的烟雾视觉做"落地烟尘"(暂时复用, 避免新加大量 fx 资产)
+			# 后续可在 DriftFX 加专门 play_landing_dust 方法
+			drift_fx_node.call("play_boost", "mini", 0.15)
+		# 清掉视觉残留
+		_jump_squash_left = 0.0
+		_jump_flip_left = 0.0
+
+	# 更新 last_frame 状态 (供下一帧检测落地瞬间用)
+	_jump_was_airborne_last_frame = not on_ground
+
+
+## 跳跃视觉应用 — 在 _update_visuals 末尾调用 (车壳已有的 yaw/tilt 之后再叠加压扁/翻转)
+##
+## squash 数学 (起跳压扁→恢复):
+##   t = 1 - _jump_squash_left / _jump_squash_total   (0=起跳瞬间, 1=结束)
+##   插值曲线: 起跳时 (t<0.3) 压扁加深; 之后回弹 (t>0.3) 逐渐恢复到 1.0
+##   scale_y = 1 - amount * sin(π × clamp(t, 0, 1))
+##     t=0: scale_y = 1 - 0 = 1 (起跳瞬间还没压)... 不对, 应该 t=0 时已经压
+##   修正: t=0 起跳瞬间立刻压到底, 然后回弹到 1
+##         scale_y = lerp(1-amount, 1.0, sqrt(t))   √ 让回弹前段快后段慢
+##   X/Z 反向变化: 压扁时变粗 (体积大致守恒)
+##     scale_xz = 1 + amount * 0.5 × (1 - sqrt(t))
+##
+## flip 数学 (二段跳前空翻):
+##   t_flip = 1 - _jump_flip_left / _jump_flip_total
+##   附加旋转角度 = -2π × t_flip   (绕 car_mesh local X 轴, 负号 = 前空翻方向)
+func _apply_jump_visuals() -> void:
+	if car_mesh == null or body_mesh == null:
+		return
+	# squash — 在 body_mesh 上做缩放 (不能动 car_mesh.scale! car_mesh.basis 参与物理计算,
+	# scale ≠ 1 会让 basis 非 normalized → Godot 内部 get_quaternion/set_axis_angle 报错:
+	#   "Basis must be normalized in order to be casted to a Quaternion")
+	if _jump_squash_left > 0.0 and _jump_squash_total > 0.001:
+		var t: float = clampf(1.0 - _jump_squash_left / _jump_squash_total, 0.0, 1.0)
+		var t_smooth: float = sqrt(t)   # 起跳压到底 → 平滑回弹
+		var scale_y: float = lerpf(1.0 - jump_squash_amount, 1.0, t_smooth)
+		var scale_xz: float = lerpf(1.0 + jump_squash_amount * 0.5, 1.0, t_smooth)
+		body_mesh.scale = Vector3(scale_xz, scale_y, scale_xz)
+	elif body_mesh.scale != Vector3.ONE:
+		body_mesh.scale = Vector3.ONE
+
+	# flip (二段跳前空翻): 给 car_mesh 在 X 轴上叠加旋转
+	# 注意: car_mesh.rotation 是世界 yaw + body_mesh.rotation.x 是过弯侧倾,
+	#       这里我们直接改 body_mesh.rotation.x 的偏移 (避免和现有 tilt 冲突, 用 body_mesh)
+	# 先简化: 只在 flip_left>0 时 set, 结束时归零
+	if body_mesh != null:
+		if _jump_flip_left > 0.0 and _jump_flip_total > 0.001:
+			var t_flip: float = clampf(1.0 - _jump_flip_left / _jump_flip_total, 0.0, 1.0)
+			# 前空翻 = 绕 body_mesh local X 轴转 -360° (车头朝下→朝后→朝上→回正)
+			body_mesh.rotation.x = -TAU * t_flip
+
+
+# ============================================================
 #  空喷 / 落地喷
 # ============================================================
 func _update_air_state(delta: float, on_ground: bool) -> void:
+	# === 跳跃豁免 (修 2026-06-02 抽搐+改镜头 bug) ===
+	# 跳跃激活窗口期内, 整个空喷/落地喷状态机彻底跳过:
+	#   · 不调 _apply_landing_physics → 不会清角动量打断 flip 旋转
+	#   · 不调 _maybe_trigger_air_boost → 不会自动空喷 → 不改 FOV
+	#   · 不进入 _pending_landing 稳定等待 → 不触发落地喷自动消费
+	#   · 不回放落地预输入 W/Q → 不强制起漂/落地喷
+	# 仍然维护 _is_airborne 和 _air_time 基本字段 (其他系统读),
+	# 让玩家在空中正常受重力/能转向, 但所有"自动消费跳跃"的副作用全免
+	if _jump_active_left > 0.0:
+		# 维护基本状态, 避免其他系统读到陈旧值
+		# 关键 (2026-06-03): 如果 _jump_pad_kick_left > 0 (机关正在弹飞车), 强制 airborne
+		# 否则 ground_ray 命中地面会把 _is_airborne 设 false → 引擎/摩擦按地面算 → 弹力被吃
+		var was_air: bool = _is_airborne
+		if _jump_pad_kick_left > 0.0:
+			_is_airborne = true   # 机关弹飞途中: 强制空中
+		else:
+			_is_airborne = not on_ground
+		if _is_airborne:
+			_air_time += delta
+		else:
+			if was_air:
+				_air_time = 0.0
+		return
+
 	# ---- (已废弃) 压地窗口 ----
 	# 这套机制和原生 _apply_ground_stick (plain_vy_zero_threshold + plain_downforce) 打架,
 	# 在 _apply_ground_stick 把 v.y 已经管好的情况下, 又每帧 clamp 一次, 反而让 Y 速度
@@ -2513,6 +3071,17 @@ func _update_air_state(delta: float, on_ground: bool) -> void:
 		if _landing_boost_arm_left <= 0.0:
 			_landing_boost_arm_left = 0.0
 			print("[Car] 落地喷窗口关闭")
+
+	# === 机关弹飞保护 (2026-06-03, 更新 2026-06-05) ===
+	# _jump_pad_kick_left > 0 = 机关正在弹飞车 (地刺/弹簧/跳板/蘑菇等)
+	# 期间: 强制空中 + 不可操控(纯抛物线) + 保留机关给的随机角速度
+	# 不清 angular_velocity (让机关给的随机旋转自然衰减)
+	if _jump_pad_kick_left > 0.0:
+		if not _is_airborne:
+			_is_airborne = true
+			_air_time = 0.0
+		_air_time += delta
+		return
 
 	if not on_ground:
 		# 离地中: 累计空中时间; 若之前在等稳定落地, 取消等待
@@ -2726,6 +3295,14 @@ func _apply_ground_stick(_delta: float) -> void:
 	# 释放钩索后 _grapple_active 清 false, 防弹机制自动恢复, 落地正常走 _apply_landing_physics.
 	if _grapple_active:
 		return
+	# === 跳跃台/弹簧冲击窗口 ===
+	# 机关 (FlipBoard / SpringMushroom / GravityCylinder) 调 apply_jump_pad_kick() 设置的
+	# 短时窗口, 期间跳过整个 ground_stick 让弹力 / 冲量真正作用.
+	# 否则 plain_downforce=8 持续向下压, plain_vy_zero_threshold=5 反复吃 Y 速度
+	# → 22 m/s 的弹力实际只飞 1~2m 高 (用户感受"弹力不足")
+	if _jump_pad_kick_left > 0.0:
+		_jump_pad_kick_left -= _delta
+		return
 	if ground_ray == null or not ground_ray.is_colliding():
 		# 离开地面时重置滤波器, 下次贴地从新法线开始, 不带历史误差
 		_smoothed_normal_initialized = false
@@ -2819,9 +3396,9 @@ func _apply_ground_stick(_delta: float) -> void:
 func _update_visuals(delta: float) -> void:
 	if not car_mesh or not body_mesh:
 		return
-	# 低速时不转向 (避免 0 速时视觉 yaw 抖动), 但钩索期间即使速度很低也要能转
-	# 因为钩索悬停/接近锚点时速度可能很低, 但玩家依然需要用方向键调整车头
-	if linear_velocity.length() < turn_stop_limit and not _grapple_active:
+	# 低速/停车时依然允许摆动车头 (QQ飞车风格: 原地也能转向)
+	# 只在"零输入 + 极低速"时跳过转向 (避免无输入时的视觉 yaw 微抖)
+	if linear_velocity.length() < turn_stop_limit and not _grapple_active and absf(steer_input) < 0.05:
 		prev_yaw = car_mesh.rotation.y
 		return
 
@@ -3255,6 +3832,10 @@ func _update_visuals(delta: float) -> void:
 
 	prev_yaw = car_mesh.rotation.y
 
+	# 跳跃视觉 (起跳压扁 + 二段跳前空翻) — 在所有标准 yaw/tilt 处理后叠加
+	# 注意: 必须放在末尾, 否则 body_mesh 的 rotation.x 可能被后续 tilt 覆盖
+	_apply_jump_visuals()
+
 
 func _align_with_y(xform: Transform3D, new_y: Vector3) -> Transform3D:
 	xform.basis.y = new_y
@@ -3403,6 +3984,7 @@ func _try_start_drift() -> bool:
 		drift_yaw_offset = drift_yaw_offset_tuck
 
 	state = State.DRIFT
+	_drift_inertia_active = true
 	drift_accum_charge = 0.0
 	drift_accum_angle_deg = 0.0
 	drift_elapsed = 0.0
@@ -3467,6 +4049,7 @@ func _try_start_drift() -> bool:
 func _end_drift(_success_boost: bool = false, manual: bool = false, failed: bool = false) -> void:
 	if state != State.DRIFT:
 		return
+	_drift_inertia_active = false  # 退漂瞬间关闭惯性感
 	# QQ飞车漂移系统: 同步结束
 	if qqspeed_drift_enabled and _drift_system != null and _drift_system.is_drifting:
 		_drift_system.end_drift(not failed)
@@ -3615,11 +4198,11 @@ func _check_drift_timeout(delta: float) -> void:
 
 	# ============ 反打超时断漂 ============
 	# 连续反打时长 _counter_steer_hold_time 超过 drift_counter_steer_break_time 则立即断漂
-	# (不给小喷奖励, failed=true)
+	# 正常退漂 (给小喷窗口, 不标记 failed — 反打退漂不是惩罚)
 	if drift_counter_steer_break_time > 0.0 and _counter_steer_hold_time >= drift_counter_steer_break_time:
-		print("[Car] 反打超时断漂: 连续反打 %.2fs >= %.2fs" % [_counter_steer_hold_time, drift_counter_steer_break_time])
+		print("[Car] 反打超时断漂: 连续反打 %.2fs >= %.2fs (正常退漂, 给小喷)" % [_counter_steer_hold_time, drift_counter_steer_break_time])
 		_counter_steer_hold_time = 0.0
-		_end_drift(false, false, true)
+		_end_drift(false, true, false)
 		return
 
 
@@ -3686,6 +4269,12 @@ func angle_difference(a: float, b: float) -> float:
 #  喷射
 # ============================================================
 func _try_boost_w() -> void:
+	# === 跳跃豁免 (修 2026-06-02 改镜头 bug) ===
+	# 跳跃中按 W 不触发空喷/落地喷/钩索弹射, 让玩家纯粹享受跳跃过程
+	# 普通的引擎推力 (在 _apply_engine_and_brake) 不在这里, 所以 W 仍能加速车速
+	# 只是不会触发"自动空喷+FOV 推升"那种"被改镜头"的副作用
+	if _jump_active_left > 0.0:
+		return
 	# -1) 钩索弹射: 释放钩索后窗口内按 W, 触发独立的钩索弹射 (与空喷互不干扰)
 	#     优先级最高: 如果在弹射窗口内, 直接消耗窗口触发弹射, 不走后续逻辑
 	#     条件: 位移条件优先 (荡动位移 >= min_swing_distance), 否则退回时间条件
@@ -4288,6 +4877,54 @@ func _update_stack_chain_timeout() -> void:
 		_grapple_stack_chain_seq.clear()
 		_grapple_stack_chain_types.clear()
 		_grapple_stack_cww_done = false  # 链清零时解除 CWW 空喷禁止
+
+
+# ============================================================
+#  毒图玩法 - 公开接口 (供 Block_Pitfall / Block_LaserGate 调用)
+# ============================================================
+## 毒坑复位: 把车送回出生点 + 清状态. 包装 _reset_to_origin() 让它对外可用
+## 由 Block_Pitfall.gd 在赛车进入毒坑触发区时调用
+func respawn_to_spawn() -> void:
+	# 内部调 _reset_to_origin (它已经处理: 清速度、归位、震屏、信号通知)
+	# 这里包一层公开方法是为了:
+	#   1) 对外暴露 stable API, 不依赖私有方法名
+	#   2) 未来可以加"扣分/特殊提示"等毒图专用副作用而不污染 _reset_to_origin
+	_reset_to_origin()
+	# 额外: 给 HUD 一个明显的"中毒/坠落"震屏 (强度比手动 R 复位大)
+	emit_signal("camera_shake_requested", 1.5, 0.4)
+	print("[Car] 毒坑触发! P%d 已复位" % player_id)
+
+
+## 激光命中: 由 Block_LaserGate.gd 在激光面与赛车碰撞时调用
+##   impulse_back: 沿赛车前方向反向施加的冲量 (m/s × mass), 让车被弹回去
+##   slow_factor : 速度直接 ×= 此值 (0~1). 0.5 = 速度砍半. 1.0 = 不砍
+##   shake       : 摄像机震屏强度 (0~3 推荐). 0 = 不震
+## 数学:
+##   linear_velocity *= slow_factor
+##   apply_central_impulse(-forward * impulse_back * mass)
+##   设计意图: 激光像电网, 命中后车子被推后并掉速, 但不直接复位 (留给毒坑做)
+func apply_laser_hit(impulse_back: float = 8.0, slow_factor: float = 0.4, shake: float = 1.2) -> void:
+	# 1) 速度直接砍 (sqrt 风格也可以, 但线性 × 更直观, 玩家在 Tuner 调起来好理解)
+	if slow_factor < 1.0:
+		linear_velocity *= clampf(slow_factor, 0.0, 1.0)
+	# 2) 反向冲量 (沿当前车头反向). 用 car_mesh 的 -basis.z 是车头朝向更准
+	if impulse_back > 0.001:
+		var fwd: Vector3 = -car_mesh.global_transform.basis.z if car_mesh else -global_transform.basis.z
+		fwd.y = 0.0
+		if fwd.length() > 0.001:
+			fwd = fwd.normalized()
+			# 注意: 是 -fwd 让车被弹回去 (反向冲量 = 朝车尾方向推)
+			apply_central_impulse(-fwd * impulse_back * mass)
+	# 3) 震屏
+	if shake > 0.001 and has_signal("camera_shake_requested"):
+		emit_signal("camera_shake_requested", shake, 0.3)
+	# 4) 钩索/漂移中也要被打断 (激光命中 = 大事件, 比加速带还猛)
+	if state == State.DRIFT:
+		_end_drift(false, true, true)   # manual=true, failed=true (惩罚性退漂, 不开窗口)
+	# 钩索状态被打断 (沿用钩索系统的强制释放路径)
+	if _grapple_active and _grapple_hook != null and _grapple_hook.has_method("_release"):
+		_grapple_hook.call("_release", false)
+	print("[Car] P%d 激光命中! impulse=%.1f slow=%.2f" % [player_id, impulse_back, slow_factor])
 
 
 # ============================================================

@@ -9,7 +9,9 @@ extends TrackBlock
 
 @export var length: float = 25.0:
 	set(v):
-		length = maxf(v, 1.0)
+		# 高压线 (2026-06-02): setter 只防崩溃 (不能 ≤0 让 mesh 长度计算崩),
+		# 业务范围由 get_editable_params 控制, 让玩家弹窗扩展 min/max 后能输入任意合理值
+		length = clampf(v, 0.001, 100000.0)
 		if is_inside_tree():
 			rebuild()
 

@@ -1,4 +1,5 @@
 extends CanvasLayer
+const ChallengeDataScript = preload("res://system/ChallengeData.gd")
 ## ============================================================
 ##  场景选择 UI - 全局 AutoLoad 单例
 ##
@@ -255,6 +256,58 @@ func _rebuild_track_buttons() -> void:
 			)
 			row.add_child(ub)
 
+	# ================= 闯关玩法 =================
+	var sep3 := HSeparator.new()
+	_list_vbox.add_child(sep3)
+	var ch_label := Label.new()
+	ch_label.text = "🏁  闯关玩法"
+	ch_label.add_theme_font_size_override("font_size", 13)
+	ch_label.add_theme_color_override("font_color", Color(1.0, 0.5, 0.3))
+	_list_vbox.add_child(ch_label)
+
+	# 新建闯关按钮
+	var new_ch_btn := Button.new()
+	new_ch_btn.text = "  ＋ 新建闯关玩法"
+	new_ch_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	new_ch_btn.custom_minimum_size = Vector2(280, 32)
+	new_ch_btn.focus_mode = Control.FOCUS_NONE
+	new_ch_btn.add_theme_font_size_override("font_size", 12)
+	new_ch_btn.add_theme_color_override("font_color", Color(1.0, 0.7, 0.4))
+	new_ch_btn.pressed.connect(_show_challenge_editor.bind(null))
+	_list_vbox.add_child(new_ch_btn)
+
+	# 列出已有闯关
+	var challenges: Array = ChallengeDataScript.list_challenges()
+	for ch in challenges:
+		var ch_path: String = ch.get("path", "")
+		var ch_name: String = ch.get("name", "")
+		var ch_count: int = ch.get("count", 0)
+		var ch_row := HBoxContainer.new()
+		ch_row.add_theme_constant_override("separation", 4)
+		_list_vbox.add_child(ch_row)
+		# 编辑按钮
+		var edit_btn := Button.new()
+		edit_btn.text = "✏️"
+		edit_btn.tooltip_text = "编辑此闯关"
+		edit_btn.custom_minimum_size = Vector2(32, 32)
+		edit_btn.focus_mode = Control.FOCUS_NONE
+		edit_btn.add_theme_font_size_override("font_size", 13)
+		var ch_path_edit: String = ch_path
+		edit_btn.pressed.connect(func() -> void: _show_challenge_editor(ch_path_edit))
+		ch_row.add_child(edit_btn)
+		# 启动按钮
+		var play_btn := Button.new()
+		play_btn.text = "▶ %s (%d关)" % [ch_name, ch_count]
+		play_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		play_btn.custom_minimum_size = Vector2(220, 32)
+		play_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		play_btn.focus_mode = Control.FOCUS_NONE
+		play_btn.add_theme_font_size_override("font_size", 12)
+		play_btn.add_theme_color_override("font_color", Color(1.0, 0.85, 0.7))
+		var ch_path_play: String = ch_path
+		play_btn.pressed.connect(func() -> void: _start_challenge(ch_path_play))
+		ch_row.add_child(play_btn)
+
 
 # ============================================================
 # 地图名 override (供内置地图改名用, 因为 TrackSwitcher.TRACKS 是 const 不能改)
@@ -454,6 +507,9 @@ func _relayout() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	# 闯关进行中不响应地图面板快捷键
+	if _is_challenge_running():
+		return
 	# M 键 / F4 切换面板显示
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_F4 or event.keycode == KEY_M or event.physical_keycode == KEY_M:
@@ -465,7 +521,239 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 
 
+func _is_challenge_running() -> bool:
+	var runner: Node = get_node_or_null("/root/ChallengeRunner")
+	if runner == null:
+		return false
+	var val = runner.get("is_running")
+	return val == true
+
+
+func _process(_delta: float) -> void:
+	# 闯关进行中隐藏地图按钮和面板; 非闯关时确保按钮可见
+	var running: bool = _is_challenge_running()
+	if _toggle_btn:
+		_toggle_btn.visible = not running
+	if running and _expanded:
+		_set_expanded(false)
+
+
 # 由 TrackSwitcher.scene_switching 触发
 func _on_scene_switching(_path: String, _display_name: String) -> void:
 	# 切换瞬间收起面板, 避免新场景一进来面板还展着
 	_set_expanded(false)
+
+
+# ============================================================
+#  闯关玩法: 编辑器 + 启动
+# ============================================================
+
+## 启动闯关
+func _start_challenge(challenge_path: String) -> void:
+	_set_expanded(false)
+	var res: Resource = load(challenge_path)
+	if res == null:
+		push_warning("[SceneSelectorUI] 无法加载闯关: %s" % challenge_path)
+		return
+	var data: Resource = res
+	if data.track_sequence.is_empty():
+		push_warning("[SceneSelectorUI] 闯关为空, 没有关卡")
+		return
+	var runner: Node = get_node_or_null("/root/ChallengeRunner")
+	if runner and runner.has_method("start_challenge"):
+		runner.call("start_challenge", data)
+
+
+## 闯关编辑器弹窗 (新建或编辑)
+func _show_challenge_editor(existing_path) -> void:
+	# 加载已有数据或新建
+	var data: Resource = null
+	if existing_path != null and existing_path is String and existing_path != "":
+		var res: Resource = load(existing_path)
+		if res != null and "challenge_name" in res:
+			data = res
+	if data == null:
+		data = ChallengeDataScript.new()
+		data.challenge_name = "新闯关"
+
+	# 弹窗
+	var dlg := Window.new()
+	dlg.title = "编辑闯关玩法"
+	dlg.size = Vector2i(500, 550)
+	dlg.unresizable = false
+	dlg.close_requested.connect(func() -> void: dlg.queue_free())
+	add_child(dlg)
+
+	var margin := MarginContainer.new()
+	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	margin.add_theme_constant_override("margin_left", 16)
+	margin.add_theme_constant_override("margin_right", 16)
+	margin.add_theme_constant_override("margin_top", 16)
+	margin.add_theme_constant_override("margin_bottom", 16)
+	dlg.add_child(margin)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 10)
+	margin.add_child(vbox)
+
+	# 名称
+	var name_row := HBoxContainer.new()
+	vbox.add_child(name_row)
+	var name_lbl := Label.new()
+	name_lbl.text = "闯关名称:"
+	name_lbl.add_theme_font_size_override("font_size", 14)
+	name_row.add_child(name_lbl)
+	var name_edit := LineEdit.new()
+	name_edit.text = data.challenge_name
+	name_edit.custom_minimum_size = Vector2(250, 28)
+	name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_row.add_child(name_edit)
+
+	# 关卡列表
+	var list_label := Label.new()
+	list_label.text = "关卡序列 (从上到下 = 第1关到最后一关):"
+	list_label.add_theme_font_size_override("font_size", 12)
+	vbox.add_child(list_label)
+
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(0, 280)
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	vbox.add_child(scroll)
+
+	var list_vbox := VBoxContainer.new()
+	list_vbox.add_theme_constant_override("separation", 4)
+	list_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(list_vbox)
+
+	# 当前序列副本 (闭包内修改)
+	var sequence: Array = data.track_sequence.duplicate()
+	var user_tracks: Array = _list_user_tracks()
+
+	# 重建列表显示 (用数组包装 Callable 解决递归引用)
+	var _rebuild_ref: Array = []
+	_rebuild_ref.append(func() -> void:
+		for c in list_vbox.get_children():
+			c.queue_free()
+		for i in range(sequence.size()):
+			var row := HBoxContainer.new()
+			row.add_theme_constant_override("separation", 4)
+			list_vbox.add_child(row)
+			var idx_lbl := Label.new()
+			idx_lbl.text = "%d." % (i + 1)
+			idx_lbl.custom_minimum_size = Vector2(24, 0)
+			idx_lbl.add_theme_font_size_override("font_size", 13)
+			row.add_child(idx_lbl)
+			var track_name: String = sequence[i].get_file().get_basename()
+			for ut in user_tracks:
+				if ut["path"] == sequence[i]:
+					track_name = ut["name"]
+					break
+			var track_lbl := Label.new()
+			track_lbl.text = track_name
+			track_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			track_lbl.add_theme_font_size_override("font_size", 12)
+			row.add_child(track_lbl)
+			var up_btn := Button.new()
+			up_btn.text = "↑"
+			up_btn.custom_minimum_size = Vector2(28, 24)
+			up_btn.focus_mode = Control.FOCUS_NONE
+			var idx_up: int = i
+			up_btn.pressed.connect(func() -> void:
+				if idx_up > 0:
+					var tmp = sequence[idx_up]
+					sequence[idx_up] = sequence[idx_up - 1]
+					sequence[idx_up - 1] = tmp
+					_rebuild_ref[0].call()
+			)
+			row.add_child(up_btn)
+			var down_btn := Button.new()
+			down_btn.text = "↓"
+			down_btn.custom_minimum_size = Vector2(28, 24)
+			down_btn.focus_mode = Control.FOCUS_NONE
+			var idx_down: int = i
+			down_btn.pressed.connect(func() -> void:
+				if idx_down < sequence.size() - 1:
+					var tmp = sequence[idx_down]
+					sequence[idx_down] = sequence[idx_down + 1]
+					sequence[idx_down + 1] = tmp
+					_rebuild_ref[0].call()
+			)
+			row.add_child(down_btn)
+			var del_btn := Button.new()
+			del_btn.text = "✕"
+			del_btn.custom_minimum_size = Vector2(28, 24)
+			del_btn.focus_mode = Control.FOCUS_NONE
+			del_btn.add_theme_color_override("font_color", Color(1, 0.4, 0.3))
+			var idx_del: int = i
+			del_btn.pressed.connect(func() -> void:
+				sequence.remove_at(idx_del)
+				_rebuild_ref[0].call()
+			)
+			row.add_child(del_btn)
+	)
+	_rebuild_ref[0].call()
+
+	# 添加关卡按钮 (下拉选择用户赛道)
+	var add_row := HBoxContainer.new()
+	add_row.add_theme_constant_override("separation", 6)
+	vbox.add_child(add_row)
+	var add_option := OptionButton.new()
+	add_option.custom_minimum_size = Vector2(250, 28)
+	for ut in user_tracks:
+		add_option.add_item(ut["name"])
+		add_option.set_item_metadata(add_option.item_count - 1, ut["path"])
+	add_row.add_child(add_option)
+	var add_btn := Button.new()
+	add_btn.text = "＋ 添加"
+	add_btn.custom_minimum_size = Vector2(80, 28)
+	add_btn.pressed.connect(func() -> void:
+		var sel: int = add_option.selected
+		if sel >= 0:
+			var path: String = add_option.get_item_metadata(sel)
+			sequence.append(path)
+			_rebuild_ref[0].call()
+	)
+	add_row.add_child(add_btn)
+
+	# 底部按钮
+	var btn_row := HBoxContainer.new()
+	btn_row.add_theme_constant_override("separation", 10)
+	vbox.add_child(btn_row)
+	var save_btn := Button.new()
+	save_btn.text = "💾 保存"
+	save_btn.custom_minimum_size = Vector2(100, 36)
+	save_btn.pressed.connect(func() -> void:
+		data.challenge_name = name_edit.text.strip_edges()
+		if data.challenge_name.is_empty():
+			data.challenge_name = "未命名闯关"
+		data.track_sequence.clear()
+		for s in sequence:
+			data.track_sequence.append(s)
+		var save_name: String = data.challenge_name
+		ChallengeDataScript.save_challenge(data, save_name)
+		dlg.queue_free()
+		_rebuild_track_buttons()
+	)
+	btn_row.add_child(save_btn)
+
+	var cancel_btn := Button.new()
+	cancel_btn.text = "取消"
+	cancel_btn.custom_minimum_size = Vector2(80, 36)
+	cancel_btn.pressed.connect(func() -> void: dlg.queue_free())
+	btn_row.add_child(cancel_btn)
+
+	# 删除按钮 (仅编辑模式)
+	if existing_path != null and existing_path is String and existing_path != "":
+		var del_ch_btn := Button.new()
+		del_ch_btn.text = "🗑️ 删除"
+		del_ch_btn.custom_minimum_size = Vector2(80, 36)
+		del_ch_btn.add_theme_color_override("font_color", Color(1, 0.4, 0.3))
+		var del_path: String = existing_path
+		del_ch_btn.pressed.connect(func() -> void:
+			DirAccess.remove_absolute(del_path)
+			dlg.queue_free()
+			_rebuild_track_buttons()
+		)
+		btn_row.add_child(del_ch_btn)
+
+	dlg.popup_centered()

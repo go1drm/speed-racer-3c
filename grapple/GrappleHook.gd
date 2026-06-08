@@ -525,6 +525,13 @@ func _build_rope_cylinder_mesh(r: float) -> ArrayMesh:
 # ============================================================
 #  公共接口: 玩家按下空格 (由 car.gd 路由调用)
 # ============================================================
+## 查询: 当前是否处于 IDLE 状态 (没在钩索流程里)
+## car.gd 路由空格键时用: 如果 IDLE + try_fire 返回 false → fallback 到跳跃
+## 如果非 IDLE → 空格交给钩索 (释放/取消), 不触发跳跃
+func is_idle() -> bool:
+	return state == State.IDLE
+
+
 func try_fire() -> bool:
 	if not grapple_enabled:
 		return false

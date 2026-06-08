@@ -32,6 +32,62 @@ var rope_rear_steer_freedom: float = 0.7 ## 后车转向自由度 (0=完全被�
 var rope_visual_thickness: float = 0.12 ## 绳子视觉粗细 (米)
 var rope_color: Color = Color(0.9, 0.75, 0.2, 1.0)  ## 绳子颜色
 
+## ============================================================
+## 真·绳子视觉系统 (适用模式1/2, 模式3铁链有自己的金属外观)
+## ============================================================
+## 核心思路:
+##   1. 把每段路径 (1P→锚点 / 锚点→2P) 细分成 N 个采样点
+##   2. 给每个采样点加抛物线 sag (中段往下垂, 模拟松弛绳子的自然垂坠)
+##   3. 维护 _rope_smoothed_points: 每帧用指数衰减朝 target 插值 (= Q 弹延迟感)
+##   4. 加横向摆动 sin(t × freq) 让绳子"动起来"不像死棍
+##   5. 用相邻采样点对生成 N 段细圆柱 mesh, 在 GPU 看起来就是一条平滑曲线
+## 数学:
+##   sag_offset(t) = -4 × t × (1-t) × sag_max   (抛物线: t=0或1时无垂坠, t=0.5时最大)
+##   sag_max = max(0, natural_length - direct_distance) × sag_factor × 0.5
+##   smoothed = lerp(smoothed, target, 1 - exp(-wobble_speed × dt))   (指数衰减插值)
+## ============================================================
+## 每段路径细分数 (越大绳子越平滑但段数越多, 8 通常够). 直道+绳子 = 8 段; 缠绕过角时每段都是 8
+var rope_subdivisions: int = 10
+## 垂坠强度系数 (0=完全直, 1=按松弛量原样垂, 推荐 0.3~0.7)
+##   sag_max ∝ slack × sag_factor, slack = natural_length - direct_distance
+##   绳子绷直时无 sag, 越松弛中段越垂
+var rope_sag_factor: float = 0.5
+## Q 弹收敛速度 (1/s). 越小绳子越软("过分 Q 弹"), 越大越僵硬跟手
+##   alpha = 1 - exp(-wobble_speed × dt)
+##   wobble_speed=15 → 物理帧 (1/240s) 内 alpha ≈ 0.06, 约 0.15s 跟到位
+var rope_wobble_speed: float = 18.0
+## 摆动频率 (Hz), 横向小抖. 注: 频率仅决定摆动多快, 幅度由 wobble_energy 决定
+var rope_wobble_freq: float = 3.5
+## 摆动幅度峰值 (米). 实际摆动 = 此值 × _rope_wobble_energy
+##   _rope_wobble_energy ∈ [0, 1] 由"绳子受扰动"事件累积, 静止时自然衰减到 0
+##   端点 envelope=0, 中段最大
+var rope_wobble_amp: float = 0.18
+## 摆动能量衰减系数 (1/s). 越大静止后停得越快
+##   energy *= exp(-decay × dt) 每帧
+##   decay=2.0 → 1秒后衰减到 13%, 2秒后 1.8% 几乎完全停下
+##   decay=4.0 → 0.5秒衰减到 13% (停得更快)
+##   推荐 1.5~3.0
+var rope_wobble_decay: float = 2.0
+## 摆动能量触发增益: dL/dt 转换为 energy 增量的系数
+##   energy_gain = (path_len 每秒变化率, 米/秒) × trigger_gain × dt
+##   trigger_gain=0.05 + dL/dt=10 m/s + dt=4ms → energy 增加 0.002
+##   累积 0.5 秒大概到 energy=0.25 (中等摆动)
+##   触发条件: 绳子被拽伸或车快速分开/靠近时, 路径长度变化率高 → 摆动能量上去
+##   推荐 0.04~0.1
+var rope_wobble_trigger_gain: float = 0.06
+## 摆动能量"低速过滤阈值" (米/秒). 路径变化率 < 此值时不增加能量
+##   避免日常缓慢移动也累积摆动 (用户要的"静止时完全不摆动")
+##   推荐 1.0~3.0
+var rope_wobble_min_trigger_speed: float = 1.5
+## 内部状态: 每个采样点的"已平滑位置". 大小 = 总采样点数, 重连时清空
+var _rope_smoothed_points: PackedVector3Array = PackedVector3Array()
+## 摆动相位累加 (rad)
+var _rope_wobble_phase: float = 0.0
+## 摆动能量 (0~1). 受扰动时加, 自然衰减. 实际摆动幅度 = rope_wobble_amp × energy
+var _rope_wobble_energy: float = 0.0
+## 上一帧的绳子总路径长度 (米). 用于计算 dL/dt 触发摆动能量
+var _rope_last_path_len: float = 0.0
+
 ## 后车卡墙摩擦削减参数 (由 Tuner 控制)
 var rope_friction_mult_when_pulled: float = 0.15  ## 后车被绳子拉时的摩擦倍率 (0=无摩擦, 1=正常摩擦). 越小后车越容易被拉动
 var rope_stuck_speed_threshold: float = 3.0       ## 后车速度低于此值(km/h)且绳子拉紧时, 视为卡住, 开始削减摩擦
@@ -76,12 +132,106 @@ var rope_mode2_color_5: Color = Color(1.0, 0.1, 0.0, 1.0)   ## 5档: 红色
 ## 内部状态: 当前档位 (1~5, 0=未激活)
 var _rope_mode2_current_tier: int = 0
 
+## ============================================================
+## 绳子模式3: 毒图铁链 (Hardcore Iron Chain) — 完全无弹性 + 双向 1:1 拉拽
+## ============================================================
+## 设计目标: 给"毒图"专用的高难度绳子玩法
+##   · 铁链 = 完全没有弹性, 链长是硬上限
+##   · 两车距离 d > rope_length3 时, 用 PBD (Position Based Dynamics) 风格的位置硬约束
+##     直接把两车沿绳方向拉近到 rope_length3, 同时反向折算到速度
+##   · 不分前/后车, 双向 1:1 等量拉拽 → 急转/急刹会瞬间把另一车鞭甩出去
+##   · 数学 (PBD 距离约束):
+##       n = (pos_a - pos_b).normalized()
+##       error = d - rope_length3                              ; 当前超出量
+##       correction = error / 2                                ; 每车承担一半 (1:1 = 双向同权)
+##       pos_a' = pos_a - n * correction                       ; a 朝 b 拉近
+##       pos_b' = pos_b + n * correction                       ; b 朝 a 拉近
+##     额外把"沿绳方向的远离速度"投影掉, 模拟链子绷直瞬间的能量传递 (鞭甩)
+## ============================================================
+## 模式3总开关 (与 mode2 互斥, 同时只有一个激活)
+var rope_mode3_enabled: bool = false
+## 铁链长度 (米). 这是硬上限, 两车不可能距离超过此值
+## 数学: 每物理帧检测 |pos_a - pos_b|, 超了就强行拉回
+var rope_mode3_length: float = 18.0
+## 动量耦合开关 (旧名: 鞭甩开关): 1=启用沿绳速度强制相等(真·铁链, 互相扯), 0=只做位置约束(可能仍可独立行动)
+var rope_mode3_whip_enabled: bool = true
+## 收敛速度全局倍率 (0~1) — 对 rope_mode3_pull_rate 的整体缩放
+##   1.0 = 用 pull_rate 原值收敛 (标准)
+##   0.5 = 收敛速度减半 (拽得更慢, 后车追前车需要更长时间)
+##   0.0 = 完全不耦合 (退化为只有位置硬约束 + jerk)
+## 旧版本这是"瞬间耦合强度", 新版本改为"渐进收敛速率倍率"
+var rope_mode3_whip_strength: float = 1.0
+## 张力收敛速率 (1/s) — 真·铁链拽的核心参数
+## 物理意义: 一阶低通滤波器的衰减常数, 时间常数 τ = 1/pull_rate
+##   pull_rate=6.0 → τ≈0.17s, 95% 收敛 ≈ 0.5s, 99.7% 收敛 ≈ 1s
+##   pull_rate=3.0 → τ≈0.33s, 拽得明显更慢更"沉"
+##   pull_rate=15.0 → τ≈0.07s, 几乎瞬间同速
+## 数学:
+##   每物理帧 alpha = 1 - exp(-pull_rate × dt)
+##   后车沿绳速度 += (前车沿绳速度 - 后车沿绳速度) × alpha
+##   等价于一阶 ODE: dv_rear/dt = pull_rate × (v_front - v_rear)
+## 推荐 4~10. 配合 whip_strength 全局调整
+var rope_mode3_pull_rate: float = 6.0
+## 前车反作用系数 (0~1) — 后车的"重量感"传递回前车的比例
+##   0.0 = 前车完全不被拖累, 开车人体验最爽 (推荐默认)
+##   0.1 = 前车微微被拖慢 10% 速度差, 略有"拽东西"重量感
+##   1.0 = 完全动量守恒 (前车减速等量于后车加速, 但开车人会觉得"开不动")
+## 物理意义: 前车朝"后车速度"方向收敛的比例
+## 数学: v_front' = v_front + (v_rear - v_front) × alpha × front_drag_ratio
+## 推荐 0~0.2 (毒图玩法本来就要让带头开的人能开起来)
+var rope_mode3_front_drag_ratio: float = 0.05
+## 链节绷直瞬间的反向冲量 (m/s² × mass): 模拟铁链"咣当"撞击感
+## 关键: 只在"从松弛刚绷紧"那一瞬间触发一次, 不会每帧累加
+##   _was_taut=false → true 时触发一次, 持续绷紧时不再触发
+##   这样避免"每帧都给减速冲量把车按死"的问题
+##   推荐 0~6: 0=完全无冲量(纯位置+主导拽), 3=轻微撞击, 6=明显甩动感
+var rope_mode3_jerk_impulse: float = 3.0
+## 视觉: 链节段数 (越多越像铁链, 越少越像棍子)
+var rope_mode3_chain_segments: int = 12
+## 视觉: 单个链节粗细 (米)
+var rope_mode3_chain_thickness: float = 0.18
+## 视觉: 铁链颜色 (默认银灰金属色)
+var rope_mode3_chain_color: Color = Color(0.55, 0.58, 0.62, 1.0)
+## 视觉: 链节金属感 emission (低值, 仅在阴影里有点反光)
+var rope_mode3_chain_emission: float = 0.15
+## 内部: 缓存上一帧的链节透明状态, 避免重复刷新材质
+var _mode3_chain_segments_cache: Array[MeshInstance3D] = []
+## 内部: 上一帧链子是否绷紧 (用于"刚绷紧瞬间"检测, 防止每帧重复 jerk)
+##   每帧检查 error > 0.05 → 本帧绷紧
+##   was_taut=false → 本帧绷紧 = "刚绷紧" 触发一次 jerk
+##   was_taut=true 持续绷紧 → 不再 jerk
+##   was_taut=true 本帧松弛 → 重置 was_taut=false (链子恢复松弛, 等待下次绷紧)
+var _rope_mode3_was_taut: bool = false
+
 ## 模式2集气粒子特效参数 (Tuner 可调)
 var rope_mode2_charge_particle_count: int = 40       ## 粒子数量
 var rope_mode2_charge_particle_radius: float = 2.5   ## 发射球半径 (粒子从多远聚合)
 var rope_mode2_charge_particle_speed: float = 3.0    ## 粒子聚合速度
 var rope_mode2_charge_particle_size: float = 0.08    ## 粒子大小
 var rope_mode2_charge_particle_color: Color = Color(0.3, 0.6, 1.0, 0.9)  ## 粒子颜色 (蓝色)
+
+## ============================================================
+## 模式2: 尾流能量系统 (后车尾随前车积累能量, 满后可突进)
+## ============================================================
+## 尾流能量参数 (Tuner 可调)
+var rope_mode2_slipstream_enabled: bool = true        ## 尾流能量系统开关
+var rope_mode2_slipstream_max_energy: float = 100.0   ## 尾流能量上限
+var rope_mode2_slipstream_charge_rate: float = 25.0   ## 尾流能量积累速度 (每秒)
+var rope_mode2_slipstream_decay_rate: float = 10.0    ## 不在尾流中时能量衰减速度 (每秒)
+var rope_mode2_slipstream_min_dist: float = 3.0       ## 尾流生效最小距离 (米, 太近不算尾流)
+var rope_mode2_slipstream_max_dist: float = 25.0      ## 尾流生效最大距离 (米, 太远不算尾流)
+var rope_mode2_slipstream_angle_threshold: float = 45.0  ## 尾流角度阈值 (度): 后车必须在前车身后此角度范围内
+var rope_mode2_slipstream_boost_power: float = 800.0  ## 尾流突进推力
+var rope_mode2_slipstream_boost_duration: float = 1.5 ## 尾流突进持续时间 (秒)
+var rope_mode2_slipstream_boost_cooldown: float = 2.0 ## 尾流突进冷却时间 (秒, 突进后多久才能再次积累)
+
+## 尾流能量内部状态
+var _slipstream_energy_1p: float = 0.0   ## 1P 的尾流能量
+var _slipstream_energy_2p: float = 0.0   ## 2P 的尾流能量
+var _slipstream_cooldown_1p: float = 0.0 ## 1P 突进冷却剩余时间
+var _slipstream_cooldown_2p: float = 0.0 ## 2P 突进冷却剩余时间
+var _slipstream_particles_1p: GPUParticles3D = null  ## 1P 尾流粒子特效
+var _slipstream_particles_2p: GPUParticles3D = null  ## 2P 尾流粒子特效
 
 ## 内部状态: 集气粒子特效
 var _charge_particles_1p: GPUParticles3D = null
@@ -130,6 +280,7 @@ var _original_camera: Camera3D = null
 func _ready() -> void:
 	set_process(false)
 	set_physics_process(false)
+	add_to_group("coop_mode")
 
 
 func _input(event: InputEvent) -> void:
@@ -146,9 +297,19 @@ func _input(event: InputEvent) -> void:
 				_start_follow(_car_1p, _car_2p)
 				print("[CoopMode] 1P 开始追随飞向 2P")
 		# 2P (手柄 A): 2P 飞向 1P
-		if Input.is_action_just_pressed("p2_rope_follow"):
+		if event.is_action_pressed("p2_rope_follow") and not event.is_echo():
 			_start_follow(_car_2p, _car_1p)
 			print("[CoopMode] 2P 开始追随飞向 1P")
+
+	# 尾流突进: 模式2下后车能量满时按键触发
+	if _active and _rope_connected and rope_mode2_enabled and rope_mode2_slipstream_enabled:
+		if event is InputEventKey and event.pressed and not event.echo:
+			# 1P (键盘 1): 1P 尾流突进
+			if event.keycode == KEY_1:
+				_try_slipstream_boost(_car_1p, true)
+		# 2P (手柄 Z键/LB): 2P 尾流突进
+		if event.is_action_pressed("p2_slipstream_boost") and not event.is_echo():
+			_try_slipstream_boost(_car_2p, false)
 
 
 func _physics_process(delta: float) -> void:
@@ -161,11 +322,26 @@ func _physics_process(delta: float) -> void:
 		_update_follow(delta)
 	# 绳子物理
 	if _rope_connected and not _follow_active:
-		if rope_mode2_enabled:
+		if rope_mode3_enabled:
+			# 模式3 (毒图铁链): 优先级最高, 与 mode2 互斥
+			# 与 mode2 一样, 它接管整段拉力, 不再走弹簧 mode1
+			_apply_rope_mode3(delta)
+			_hide_slipstream_hud()
+		elif rope_mode2_enabled:
 			_apply_rope_mode2(delta)
+			# 尾流能量系统更新
+			if rope_mode2_slipstream_enabled:
+				_update_slipstream_energy(delta)
+				_update_slipstream_hud()
+			else:
+				_hide_slipstream_hud()
 		else:
 			_apply_rope_physics(delta)
+			_hide_slipstream_hud()
 		_update_rope_visual()
+		_check_rope_star_collection()
+	elif not _rope_connected:
+		_hide_slipstream_hud()
 
 
 ## 激活双人模式 (由 Tuner 或外部调用)
@@ -207,6 +383,8 @@ func deactivate_coop() -> void:
 	_cleanup_dual_hud()
 	_cleanup_2p_car()
 	_cleanup_rope_visual()
+	_cleanup_charge_particles()
+	_reset_slipstream()
 	print("[CoopMode] 双人模式已停用")
 
 
@@ -791,12 +969,258 @@ func _toggle_rope() -> void:
 		_rope_wrap_points.clear()
 		_cleanup_rope_visual()
 		_cleanup_charge_particles()
+		_reset_slipstream()
 		# 绳子断开时恢复两车摩擦
 		if _car_1p and "_rope_friction_mult" in _car_1p:
 			_car_1p.set("_rope_friction_mult", 1.0)
 		if _car_2p and "_rope_friction_mult" in _car_2p:
 			_car_2p.set("_rope_friction_mult", 1.0)
 		print("[CoopMode] 绳子已断开!")
+
+
+## ============================================================
+## 绳子模式3: 毒图铁链 (PBD 距离硬约束 + 鞭甩)
+## ============================================================
+## 每物理帧:
+##   1. 沿用 mode1/2 的缠绕检测 (绳子不穿墙)
+##   2. 计算总路径长度 _rope_total_length (含缠绕锚点)
+##   3. 如果 _rope_total_length > rope_mode3_length: 进入 PBD 校正
+##      a) 沿"链子第一段方向 dir_1p"和"最后一段方向 dir_2p"分别拉两车
+##      b) 修正量 = (_rope_total_length - rope_mode3_length) * 0.5 (1:1 双向)
+##      c) 拉位置 + 反向冲量 (jerk_impulse) + 速度投影 (whip_strength)
+##   4. 不到 rope_mode3_length 时绳子松弛, 不施加任何力
+## 数学详细:
+##   设链超出量 error = _rope_total_length - rope_mode3_length
+##   pos_1p_new = pos_1p + dir_1p * (error * 0.5)   (dir_1p 指向 2P 方向)
+##   pos_2p_new = pos_2p + dir_2p * (error * 0.5)   (dir_2p 指向 1P 方向)
+##   注: dir_1p, dir_2p 在缠绕情况下沿绳路径切线, 不是直线方向
+## ============================================================
+func _apply_rope_mode3(delta: float) -> void:
+	var pos_1p: Vector3 = _car_1p.global_position
+	var pos_2p: Vector3 = _car_2p.global_position
+
+	# ---- 1. 缠绕检测 (与 mode1/2 共用, 铁链同样不穿墙) ----
+	_update_rope_wrap(pos_1p, pos_2p)
+
+	# ---- 2. 计算总路径长度 ----
+	var path_points: Array[Vector3] = _get_rope_path(pos_1p, pos_2p)
+	_rope_total_length = 0.0
+	for i in range(path_points.size() - 1):
+		_rope_total_length += path_points[i].distance_to(path_points[i + 1])
+
+	# ---- 3. 不超长就什么都不做 (绳子松弛) ----
+	# 注意: 用一个很小的 epsilon (0.05m) 防止数值噪声反复触发
+	var error: float = _rope_total_length - rope_mode3_length
+	if error <= 0.05:
+		# 模式3不削减摩擦, 因为铁链松弛时双方应该完全自由
+		_car_1p.set("_rope_friction_mult", 1.0)
+		_car_2p.set("_rope_friction_mult", 1.0)
+		# 链子恢复松弛 → 重置绷紧标志, 让下次绷紧能再触发 jerk
+		_rope_mode3_was_taut = false
+		return
+
+	# ---- 4. 计算两端的拉力切线方向 (沿绳路径首段/末段) ----
+	# 1P 端: 从 1P 指向第一个有效拐点 (跳过太近的锚点, 防止抖动)
+	var dir_1p: Vector3 = Vector3.ZERO
+	for pi in range(1, path_points.size()):
+		var diff: Vector3 = path_points[pi] - path_points[0]
+		if diff.length() > 0.5:
+			dir_1p = diff.normalized()
+			break
+	if dir_1p == Vector3.ZERO:
+		dir_1p = (path_points[path_points.size() - 1] - path_points[0]).normalized()
+	# 2P 端: 从 2P 指向最后一个有效拐点
+	var dir_2p: Vector3 = Vector3.ZERO
+	var last_idx: int = path_points.size() - 1
+	for pi in range(last_idx - 1, -1, -1):
+		var diff: Vector3 = path_points[pi] - path_points[last_idx]
+		if diff.length() > 0.5:
+			dir_2p = diff.normalized()
+			break
+	if dir_2p == Vector3.ZERO:
+		dir_2p = (path_points[0] - path_points[last_idx]).normalized()
+
+	# ============================================================
+	# ---- 5. 张力拉拽 (开车人不被拖累 + 后车被持续拽起来) ----
+	# ============================================================
+	# 用户反馈历程:
+	#   v1: PBD 只修位置不传速度 → "只修距离不互相扯"
+	#   v2: 动量守恒耦合 (v_avg) → "都开不动" (双方都减速到 v_avg)
+	#   v3: 主导拽 (瞬间速度赋值) → "瞬移不像拽"
+	#   v4: 渐进收敛 (一阶低通) → "还是拖不动"
+	#   v5 (本版): 渐进收敛 + 位置修正按 front_share 分担 (前车几乎不被拉)
+	#
+	# v5 关键洞察 — "拖不动"的真正原因是 PBD 位置约束:
+	#   旧版每帧 PBD 双向各 50% 修正: pos_1p += dir_1p × error × 0.5
+	#   前车想跑 0.04m/帧 → 距离 +0.04 → PBD 把前车拉回 0.02 → 净位移砍半!
+	#   不管速度耦合多好, 位置约束直接让前车实际只跑一半路程
+	#   修复: 让 front_drag_ratio 同时控制 "速度反作用" 和 "位置修正分担":
+	#     ratio=0   → 后车 100% 位置修正, 前车 0%   (前车完全自由开 ✓ 推荐)
+	#     ratio=0.5 → 双方各 50%  (经典 PBD, 前车被拖累)
+	#     ratio=1.0 → 前车 100%   (反常用, 前车被拽回去, 后车不动)
+	# ============================================================
+
+	# 计算 n_chain (从 1P 指向 2P 的瞬时连线方向, 统一速度分量坐标系)
+	var n_chain: Vector3 = pos_2p - pos_1p
+	var n_chain_len: float = n_chain.length()
+	if n_chain_len < 0.001:
+		_car_1p.set("_rope_friction_mult", 1.0)
+		_car_2p.set("_rope_friction_mult", 1.0)
+		return
+	n_chain = n_chain / n_chain_len
+
+	# 读两车 linear_velocity (位置修正分担判定 + 速度耦合都要用)
+	var v1: Vector3 = _car_1p.linear_velocity
+	var v2: Vector3 = _car_2p.linear_velocity
+	# 主导方判定: 用整体速度大小 (修复"垂直方向传不了速度"的关键)
+	# 旧版用 rate_1p = -v1.dot(n_chain) vs rate_2p = +v2.dot(n_chain) (沿绳贡献率),
+	# 但当车的运动垂直于绳子时 v.dot(n_chain) = 0, rate 全为 0, 主导判定失效
+	# 新版: 直接看 |v1| 和 |v2|, 速度大的车是 "前车" (主导拽)
+	# 这样不论几何关系, 只要有一辆车在动, 系统就能正确分配主导方
+	var is_1p_front: bool = v1.length() >= v2.length()
+
+	# ============================================================
+	# 5a) 位置硬约束 — 按 front_share 分担修正比例 (核心修复!)
+	# ============================================================
+	# 数学:
+	#   front_share = front_drag_ratio   ∈ [0, 1]   ; 前车承担位置修正比例
+	#   rear_share  = 1 - front_share              ; 后车承担位置修正比例
+	#   验证: front_share + rear_share = 1, 距离总修正量 = error (完整闭合距离约束)
+	# 默认 front_drag_ratio=0.05 → 后车承担 95% 位置修正, 前车几乎不被拉
+	var front_share: float = clampf(rope_mode3_front_drag_ratio, 0.0, 1.0)
+	var rear_share: float = 1.0 - front_share
+	if is_1p_front:
+		# 1P 是前车 → 1P 用 front_share (默认很小), 2P 用 rear_share (默认很大)
+		_car_1p.global_position += dir_1p * error * front_share
+		_car_2p.global_position += dir_2p * error * rear_share
+	else:
+		# 2P 是前车
+		_car_1p.global_position += dir_1p * error * rear_share
+		_car_2p.global_position += dir_2p * error * front_share
+
+	# ============================================================
+	# 5b) 速度向量复制 — 拖着走 (\"被绳子绑住的麻袋\"语义)
+	# ============================================================
+	# 用户反馈历程:
+	#   v1 PBD 位置修正           → 不互相扯
+	#   v2 动量守恒 v_avg          → 都开不动
+	#   v3 主导拽 (瞬间速度赋值)    → 瞬移不像拽
+	#   v4 渐进收敛 (一阶低通)      → 摩擦吃掉, 拖不动
+	#   v5 全向速度收敛            → 同样被摩擦吃掉
+	#   v6 强制 pull_dir × |v_front| 沿绳赋值 → \"后车飞过前车 + 主导反转 + 来回震荡\"
+	#   v7 (本版) 直接复制速度向量 → 两车并行同步移动, 没有飞过去现象
+	#
+	# v6 为什么挂了 (推导):
+	#   1P 朝 +x 跑 v1=(20,0,0), 2P 静止 v2=0
+	#   v6: pull_dir = (1P-2P).normalized() = +x 方向
+	#       2P.velocity = pull_dir × 20 = (20,0,0)  ← 看起来对
+	#   但下一物理帧:
+	#       1P 在 +x 跑了 (0.083, 0, 0), 2P 也跑了 (0.083, 0, 0) — 同步 ✓
+	#   问题来自\"瞬移\"的初始过冲:
+	#       2P 被瞬时赋速度 20, 但 2P 当前没踩油门, 引擎力 = 0,
+	#       2P 还有 \"linear_damp 默认重力影响\" 等让速度有抖动
+	#       同时 1P 受惯性短暂可能比 2P 快或慢一帧 → speed_diff 翻转 → 2P 反成主导
+	#       → 1P 被强制设速度 = pull_dir × |v_2P| 朝 2P 方向飞过去
+	#       → 来回震荡 = \"前车走不动 + 后车原地速度变化\"
+	#
+	# v7 修复 (语义): 把后车的整个速度向量\"复制\"成前车的速度向量
+	#   1P 朝 +x 跑 v1=(20,0,0) → 2P.velocity = (20, rear_y, 0)
+	#   两车水平速度向量完全相等 → 移动方向相同, 速度大小相同
+	#   距离不会增长 (绳子保持张紧) → PBD 几乎不需要修正
+	#   主导方 = 永远是速度大的那辆, 但因为复制后两车速度一致, 不再震荡
+	#   下一帧物理引擎会让 2P 因摩擦/阻力略减速, speed_diff 重新出现, 再复制一次
+	#   → 持续\"复制\" 维持同步
+	#
+	# 关键差异: v6 用 pull_dir 强行让后车朝前车方向飞 (会过冲)
+	#           v7 直接复制速度向量 (两车同向同速 → 不可能过冲)
+	#
+	# 摩擦绕过 (依旧重要):
+	#   设 _rope_friction_mult = 0 让 _apply_friction 屏蔽摩擦
+	#   否则后车被复制的速度立刻被自身摩擦吃掉, 又得重新被复制, 视觉上看起来\"颤抖\"
+	#
+	# whip_strength 的新语义:
+	#   1.0 → 完全复制 (后车速度 = 前车速度, 100% 同步, 真·铁链)
+	#   0.5 → 后车速度 lerp(self, front, 0.5) 半复制 (柔和过渡, 有点滞后感)
+	#   0.0 → 不复制 (退化为只有位置硬约束)
+	#
+	# 主导方判定: 不再用阈值, 直接 speed_1 vs speed_2, 速度大者就是前车
+	#   阈值会导致 \"刚好均势\" 时不拽 → 前车继续靠惯性而后车开始减速 → 速度差立刻
+	#   超阈值再触发 → 抖动. 取消阈值后, 永远复制, 平滑.
+	# ============================================================
+	if rope_mode3_whip_enabled and rope_mode3_whip_strength > 0.001:
+		var speed_1: float = v1.length()
+		var speed_2: float = v2.length()
+		# 触发: 至少要有一辆车在动 (避免双方静止时被链子绑死后无意义触发)
+		# 阈值 0.5 m/s 防数值噪声: 真静止时浮点抖动可能让 speed > 0
+		if speed_1 + speed_2 > 0.5:
+			# 主导方判定: 速度大者 = 前车, 不要阈值, 避免抖动
+			var front_car: RigidBody3D
+			var rear_car: RigidBody3D
+			var v_front_full: Vector3
+			if speed_1 >= speed_2:
+				front_car = _car_1p
+				rear_car = _car_2p
+				v_front_full = v1
+			else:
+				front_car = _car_2p
+				rear_car = _car_1p
+				v_front_full = v2
+
+			# === 速度向量复制 (用户要的"无视车头, 直接设置值") ===
+			# 数学:
+			#   target_xz = (v_front.x, 0, v_front.z)  ← 复制前车水平速度向量
+			#   保留 rear.y                            ← 重力/跳跃不被破坏
+			#   按 whip_strength lerp 过渡:
+			#     copied = lerp(rear_current, target_full, whip_strength)
+			#     whip=1 → copied = target (硬复制)
+			#     whip=0.5 → 半路 (柔和过渡)
+			var rear_v: Vector3 = rear_car.linear_velocity
+			# 目标 = 前车速度的水平分量, Y 用后车自己的 (重力/跳跃保持)
+			var target_v: Vector3 = Vector3(v_front_full.x, rear_v.y, v_front_full.z)
+			# whip_strength 控制\"复制完整度\". 1.0=完全复制, 0.5=半复制, 0=不动
+			var copied: Vector3 = rear_v.lerp(target_v, rope_mode3_whip_strength)
+			rear_car.linear_velocity = copied
+			# 摩擦绕过: car.gd 里 if mult < 1.0 → long_k *= mult, 0=完全屏蔽
+			# 这是关键! 否则后车自己的摩擦会立刻把刚复制的速度吃回去
+			rear_car.set("_rope_friction_mult", 0.0)
+			# 前车一直自由 (速度不动, 摩擦保持正常 1.0, 它就是\"开车的人\")
+			# 不需要任何针对前车的操作 — 前车正常开正常受摩擦, 用户体验= 完全自由
+
+	# 5c) 反向冲量 (jerk): 只在"链子从松弛刚绷紧"那一瞬间触发一次
+	# 旧版 bug: 每物理帧都触发 → 240Hz × 8 m/s 冲量 = 把车按死在原地
+	# 现版: was_taut=false → true 那一帧才给一次 jerk, 持续绷紧时不再加
+	# error > 0.05 已经在函数顶部 "不超长直接 return" 过滤过了, 所以这里 error 一定 > 0.05
+	# 即本帧"链子是绷紧的". 检查 _rope_mode3_was_taut 区分"刚绷紧"和"持续绷紧"
+	if not _rope_mode3_was_taut and rope_mode3_jerk_impulse > 0.01:
+		# === 刚绷紧的瞬间 === (上一帧 was_taut=false, 本帧 error>0.05 → 链子刚被拽紧)
+		# 给两车朝对方方向一次性冲量, 模拟"咣当"撞击
+		# 用 sqrt(error) 让超出量很小时也有点撞击感, 超出大时不至于过分大
+		var jerk_mag: float = rope_mode3_jerk_impulse * sqrt(error)
+		_car_1p.apply_central_impulse(dir_1p * jerk_mag * _car_1p.mass)
+		_car_2p.apply_central_impulse(dir_2p * jerk_mag * _car_2p.mass)
+		print("[Mode3] 铁链绷紧! error=%.2fm jerk=%.2f" % [error, jerk_mag])
+	# 标记本帧为绷紧状态, 下一帧持续绷紧时跳过 jerk
+	_rope_mode3_was_taut = true
+
+	# ---- 6. 摩擦设置 ----
+	# 旧版无脑把两车都设 1.0, 但这会**覆盖掉 5b 段把后车 mult 设为 0 的硬赋值**
+	# (硬赋值后 _apply_friction 会立即把刚赋的速度吃掉 → 用户感受"还是拉不动")
+	#
+	# 新版: 5b 段已经为后车设好了 0.0 (链子绷紧 + 主导方拽), 这里不要再覆盖!
+	# 前车一直是 1.0 (它正常受摩擦, 模拟开车人正常体感)
+	# 如果这帧没有主导方 (5b 没进 if has_dominator 分支), 两车 mult 都保持上一帧值,
+	#   不会出问题: 因为顶部"链子松弛 return 分支"已经把它们设回 1.0
+	#
+	# 这段历史上是写在 5b 之后的, 改成只设 1P (假设它是前车), 错了也没关系:
+	# 因为两车情况都被 5b 正确处理过. 这里只兜底一种情况:
+	#   两车速度都很小但还硬绷着 (has_dominator=false), 此时摩擦应该正常
+	if not (rope_mode3_whip_enabled and rope_mode3_whip_strength > 0.001):
+		# 张力开关被关 → 摩擦保持正常 (回退到纯位置约束模式)
+		_car_1p.set("_rope_friction_mult", 1.0)
+		_car_2p.set("_rope_friction_mult", 1.0)
+	# else: 5b 段已经为后车正确设了 0.0 (拽中) 或者保持上次的值 (均势/无主导)
+	# 注: 上面 5b 没碰前车的 mult, 所以前车的 mult 永远保持 1.0
+	# (Tuner 里手动设的值会被这里覆盖? 不会, 因为这是"绳子摩擦削减", 不是车的"基础摩擦")
 
 
 ## ============================================================
@@ -904,7 +1328,8 @@ func _mode2_speed_boost(delta: float) -> void:
 
 
 ## 模式2效果: 后车拉力 (4档/5档) - 复刻模式1的完整绳子物理
-## 包含: 沿路径拉力方向、弹簧阻尼、前后车分配、转向自由度、摩擦削减、卡墙处理
+## 包含: 沿路径拉力方向、前后车分配、转向自由度、摩擦削减、卡墙处理
+## 注: 与模式1不同, 模式2的拉力是固定值(不依赖弹簧拉伸), 阻尼只用于防止过冲
 func _mode2_rear_pull(delta: float, pull_force: float) -> void:
 	var pos_1p: Vector3 = _car_1p.global_position
 	var pos_2p: Vector3 = _car_2p.global_position
@@ -933,56 +1358,53 @@ func _mode2_rear_pull(delta: float, pull_force: float) -> void:
 	if dir_2p == Vector3.ZERO:
 		dir_2p = (path_points[0] - path_points[last_idx]).normalized()
 
-	# ---- 2. 弹簧力 + 阻尼力 (使用配置的 pull_force 作为基础力) ----
-	var spring_force: float = pull_force
+	# ---- 2. 判断谁是前车/后车 ----
+	# 规则: 绳子通往身后的是前车, 绳子通往身前的是后车; 两车情况相同则看谁速度高
+	var is_1p_front: bool = _is_1p_front_car(dir_1p, dir_2p)
 
-	# 阻尼力: 沿绳子方向的相对速度
-	var rel_vel_1p: float = _car_1p.linear_velocity.dot(dir_1p)
-	var rel_vel_2p: float = _car_2p.linear_velocity.dot(dir_2p)
-	var damping_1p: float = -rope_damping * rel_vel_1p * 0.5
-	var damping_2p: float = -rope_damping * rel_vel_2p * 0.5
+	# ---- 3. 计算拉力 ----
+	# 模式2: 直接使用配置的 pull_force, 不依赖弹簧拉伸量
+	# 后车获得全力拉向前车, 前车受到轻微回拉
+	var force_front: float = pull_force * rope_front_pull_ratio
+	var force_rear: float = pull_force * rope_rear_pull_ratio
 
-	# ---- 3. 判断谁是前车/后车 ----
-	var v1_pulling_away: float = _car_1p.linear_velocity.dot(-dir_1p)
-	var v2_pulling_away: float = _car_2p.linear_velocity.dot(-dir_2p)
-
-	var force_1p: float
-	var force_2p: float
-
-	if v1_pulling_away > v2_pulling_away:
-		# 1P 是前车, 2P 是后车
-		force_1p = clampf((spring_force + damping_1p) * rope_front_pull_ratio, 0.0, rope_max_force)
-		force_2p = clampf((spring_force + damping_2p) * rope_rear_pull_ratio, 0.0, rope_max_force)
-	else:
-		# 2P 是前车, 1P 是后车
-		force_1p = clampf((spring_force + damping_1p) * rope_rear_pull_ratio, 0.0, rope_max_force)
-		force_2p = clampf((spring_force + damping_2p) * rope_front_pull_ratio, 0.0, rope_max_force)
-
-	# ---- 4. 施加力 (后车有转向自由度) ----
-	if v1_pulling_away > v2_pulling_away:
-		# 1P 是前车: 纯中心力回拉
-		_car_1p.apply_central_force(dir_1p * force_1p)
-		# 2P 是后车: 带转向自由度
-		_apply_force_with_steer_freedom(_car_2p, dir_2p * force_2p, rope_rear_steer_freedom)
-	else:
-		# 2P 是前车: 纯中心力回拉
-		_car_2p.apply_central_force(dir_2p * force_2p)
-		# 1P 是后车: 带转向自由度
-		_apply_force_with_steer_freedom(_car_1p, dir_1p * force_1p, rope_rear_steer_freedom)
-
-	# ---- 5. 后车摩擦削减 + 卡墙处理 ----
+	# 阻尼: 只对后车已经在朝前车运动时施加减速(防止过冲), 不抵消拉力本身
 	var rear_car: RigidBody3D
 	var front_car: RigidBody3D
 	var rear_pull_dir: Vector3
-	if v1_pulling_away > v2_pulling_away:
+	var front_pull_dir: Vector3
+
+	if is_1p_front:
+		# 1P 是前车, 2P 是后车
 		rear_car = _car_2p
 		front_car = _car_1p
 		rear_pull_dir = dir_2p
+		front_pull_dir = dir_1p
 	else:
+		# 2P 是前车, 1P 是后车
 		rear_car = _car_1p
 		front_car = _car_2p
 		rear_pull_dir = dir_1p
+		front_pull_dir = dir_2p
 
+	# 后车朝前车方向的速度 (正值=正在靠近前车)
+	var rear_approach_speed: float = rear_car.linear_velocity.dot(rear_pull_dir)
+	# 只有后车已经在快速靠近时才施加阻尼 (防止过冲), 否则不减弱拉力
+	if rear_approach_speed > 0.0:
+		var damping_reduction: float = rope_damping * rear_approach_speed * 0.3
+		force_rear = maxf(force_rear - damping_reduction, pull_force * 0.2)  # 最少保留20%拉力
+
+	# clamp 到最大力
+	force_front = clampf(force_front, 0.0, rope_max_force)
+	force_rear = clampf(force_rear, 0.0, rope_max_force)
+
+	# ---- 4. 施加力 (后车有转向自由度) ----
+	# 前车: 纯中心力回拉 (轻微)
+	front_car.apply_central_force(front_pull_dir * force_front)
+	# 后车: 带转向自由度的拉力
+	_apply_force_with_steer_freedom(rear_car, rear_pull_dir * force_rear, rope_rear_steer_freedom)
+
+	# ---- 5. 后车摩擦削减 + 卡墙处理 ----
 	# 摩擦削减: 拉力越大摩擦越小
 	var stretch: float = _rope_total_length - rope_length - rope_elasticity
 	var stretch_ratio: float = clampf(stretch / maxf(rope_length, 1.0), 0.0, 1.0)
@@ -1182,13 +1604,13 @@ func _apply_rope_physics(delta: float) -> void:
 	var damping_2p: float = -rope_damping * rel_vel_2p * 0.5
 
 	# ---- 5. 判断谁是前车/后车 ----
-	var v1_pulling_away: float = _car_1p.linear_velocity.dot(-dir_1p)
-	var v2_pulling_away: float = _car_2p.linear_velocity.dot(-dir_2p)
+	# 规则: 绳子通往身后的是前车, 绳子通往身前的是后车; 两车情况相同则看谁速度高
+	var is_1p_front: bool = _is_1p_front_car(dir_1p, dir_2p)
 
 	var force_1p: float  # 施加到 1P 的力大小
 	var force_2p: float  # 施加到 2P 的力大小
 
-	if v1_pulling_away > v2_pulling_away:
+	if is_1p_front:
 		# 1P 是前车, 2P 是后车
 		force_1p = clampf((spring_force + damping_1p) * rope_front_pull_ratio, 0.0, rope_max_force)
 		force_2p = clampf((spring_force + damping_2p) * rope_rear_pull_ratio, 0.0, rope_max_force)
@@ -1198,7 +1620,7 @@ func _apply_rope_physics(delta: float) -> void:
 		force_2p = clampf((spring_force + damping_2p) * rope_front_pull_ratio, 0.0, rope_max_force)
 
 	# ---- 6. 施加力 (后车有转向自由度) ----
-	if v1_pulling_away > v2_pulling_away:
+	if is_1p_front:
 		# 1P 是前车, 2P 是后车
 		# 前车: 纯中心力 (回拉, 不影响转向)
 		_car_1p.apply_central_force(dir_1p * force_1p)
@@ -1215,7 +1637,7 @@ func _apply_rope_physics(delta: float) -> void:
 	var rear_car: RigidBody3D
 	var front_car: RigidBody3D
 	var rear_pull_dir: Vector3  # 后车被拉的方向
-	if v1_pulling_away > v2_pulling_away:
+	if is_1p_front:
 		rear_car = _car_2p
 		front_car = _car_1p
 		rear_pull_dir = dir_2p
@@ -1258,6 +1680,35 @@ func _apply_rope_physics(delta: float) -> void:
 					rear_car.apply_central_force(slide_dir * slide_force)
 	# 前车始终保持正常摩擦
 	front_car.set("_rope_friction_mult", 1.0)
+
+
+## 判断 1P 是否为前车
+## 规则: 绳子通往身后的是前车, 绳子通往身前的是后车; 两车情况相同则看谁速度高
+## dir_1p: 从 1P 指向绳子路径的方向 (指向对方)
+## dir_2p: 从 2P 指向绳子路径的方向 (指向对方)
+## 返回 true = 1P 是前车, false = 2P 是前车
+func _is_1p_front_car(dir_1p: Vector3, dir_2p: Vector3) -> bool:
+	# 获取两车的朝向 (forward = -basis.z)
+	var mesh_1p: Node3D = _car_1p.get_node_or_null("CarMesh")
+	var mesh_2p: Node3D = _car_2p.get_node_or_null("CarMesh")
+	var fwd_1p: Vector3 = -mesh_1p.global_transform.basis.z if mesh_1p else _car_1p.linear_velocity.normalized()
+	var fwd_2p: Vector3 = -mesh_2p.global_transform.basis.z if mesh_2p else _car_2p.linear_velocity.normalized()
+
+	# 计算绳子方向与车辆朝向的点积
+	# dot > 0: 绳子在身前 (该车是后车)
+	# dot < 0: 绳子在身后 (该车是前车)
+	var dot_1p: float = fwd_1p.dot(dir_1p)  # 1P 的绳子方向与朝向的关系
+	var dot_2p: float = fwd_2p.dot(dir_2p)  # 2P 的绳子方向与朝向的关系
+
+	# 得分越小(越负) = 绳子越在身后 = 越是前车
+	# 如果差异明显 (>0.3), 直接判断
+	if absf(dot_1p - dot_2p) > 0.3:
+		return dot_1p < dot_2p  # 1P 的 dot 更小 = 绳子更在身后 = 1P 是前车
+
+	# 两车情况相似, 看谁速度高 (速度高的是前车)
+	var speed_1p: float = _car_1p.linear_velocity.length()
+	var speed_2p: float = _car_2p.linear_velocity.length()
+	return speed_1p >= speed_2p
 
 
 ## 施加带转向自由度的力
@@ -1493,6 +1944,31 @@ func _try_unwrap_points(pos_1p: Vector3, pos_2p: Vector3, space_state: PhysicsDi
 			anchor_idx -= 1
 
 
+## 获取赛车的"视觉绳子绑定点" — 用于绳子渲染的端点
+## 不要用 car.global_position! 那是物理球心(空中 1m 位置), 跟视觉车身错位
+##
+## 球体驱动架构特殊性:
+##   car (RigidBody3D)        ← 球心 (空中, 物理位置)
+##   └── CarMesh (top_level)   ← 视觉车身 (贴地, 真正看到的位置)
+##
+## 如果绳子端点用球心 → 绳子从空中出发, 接到视觉车身上看起来"奇怪弯折"
+## 修复: 优先用 CarMesh.global_position (视觉车身位置), 让绳子从车身自然出发
+##
+## 注: 物理拉力依然施加在 car.global_position (球心) — 这是正确的, 球心才是质心
+func _get_rope_visual_anchor(car_node: RigidBody3D) -> Vector3:
+	if car_node == null:
+		return Vector3.ZERO
+	# 取 CarMesh (视觉车身) 位置. CarMesh 是 top_level=true, 它的 global_position
+	# 就是玩家眼睛看到的车身位置 (贴地的)
+	var car_mesh: Node3D = car_node.get_node_or_null("CarMesh") as Node3D
+	if car_mesh != null:
+		# 加 0.4m 上偏移, 模拟绳子绑在车顶/车尾保险杠上方一点
+		# 这样绳子端点不会从车底盘出发, 看起来更自然
+		return car_mesh.global_position + Vector3(0.0, 0.4, 0.0)
+	# 退化: 没有 CarMesh 就用球心 (向下偏移 0.5m 模拟绳子接近地面)
+	return car_node.global_position + Vector3(0.0, -0.5, 0.0)
+
+
 ## 获取绳子完整路径 (1P → 缠绕锚点们 → 2P)
 func _get_rope_path(pos_1p: Vector3, pos_2p: Vector3) -> Array[Vector3]:
 	var path: Array[Vector3] = [pos_1p]
@@ -1503,25 +1979,183 @@ func _get_rope_path(pos_1p: Vector3, pos_2p: Vector3) -> Array[Vector3]:
 
 
 ## 创建绳子视觉 (材质共享, 段数动态管理)
+## 真绳子材质: 高粗糙度 + 无发光 + 金麻色 = 编织绳子质感
 func _create_rope_visual() -> void:
 	_cleanup_rope_visual()
+	# 重置平滑点 (上次断绳的残留状态会让绳子从奇怪的位置弹出来)
+	_rope_smoothed_points = PackedVector3Array()
+	_rope_wobble_phase = 0.0
 	_rope_mat = StandardMaterial3D.new()
 	_rope_mat.albedo_color = rope_color
-	_rope_mat.emission_enabled = true
-	_rope_mat.emission = rope_color
-	_rope_mat.emission_energy_multiplier = 0.5
+	# 真绳子: 不发光 + 高粗糙度 (像编织麻绳, 不是发光霓虹管)
+	# 注: 模式2(档位变色)和模式3(铁链)会在 _update_rope_visual 里覆盖这些设置
+	_rope_mat.emission_enabled = false
+	_rope_mat.roughness = 0.95   # 几乎不反光, 模拟粗糙表面
+	_rope_mat.metallic = 0.0
+	_rope_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 
 
-## 更新绳子视觉位置 (沿缠绕路径绘制所有段: 1P → 锚点1 → 锚点2 → ... → 2P)
+## 更新绳子视觉位置 — 真·绳子 (sag 垂坠 + Q 弹平滑 + 多段曲线)
+## 此函数从 _physics_process 调用, 用 physics delta 保证 240Hz 物理下的平滑
 func _update_rope_visual() -> void:
 	if _car_1p == null or _car_2p == null:
 		return
-	var pos_1p: Vector3 = _car_1p.global_position
-	var pos_2p: Vector3 = _car_2p.global_position
+	# 关键: 视觉端点用 CarMesh 的位置 (= 玩家眼睛看到的车身位置), 不是球心
+	# 球体驱动架构: car 是空中的球, CarMesh top_level 单独贴地, 用 car.global_position
+	# 会导致绳子从空中出发到地面车身, 视觉上"弯折"
+	var pos_1p: Vector3 = _get_rope_visual_anchor(_car_1p)
+	var pos_2p: Vector3 = _get_rope_visual_anchor(_car_2p)
 	var path: Array[Vector3] = _get_rope_path(pos_1p, pos_2p)
-	var seg_count: int = path.size() - 1  # 段数 = 点数 - 1
+	if path.size() < 2:
+		return
 
-	# 动态管理段 mesh 数量: 确保 _rope_segments 有足够的 MeshInstance3D
+	# ---- 1. 计算 sag (绳子松弛量决定中段垂多深) ----
+	# natural_len 取决于当前模式. 模式3用 rope_mode3_length, 模式1/2用 rope_length
+	var natural_len: float = rope_length
+	if rope_mode3_enabled:
+		natural_len = rope_mode3_length
+	# direct_len = 实际绳子总路径长度 (走缠绕锚点的总长). 已在物理帧里算过, 用 _rope_total_length
+	# 但 _rope_total_length 在 mode1 if-stretch<0 时不会更新, 这里重新算一遍保证有效
+	var actual_path_len: float = 0.0
+	for i in range(path.size() - 1):
+		actual_path_len += path[i].distance_to(path[i + 1])
+	# slack = "绳子比当前路径长了多少". slack > 0 时绳子可以垂下来; slack ≤ 0 时绷直无垂坠
+	var slack: float = maxf(natural_len - actual_path_len, 0.0)
+	# sag_max = 中段最大垂坠量 (米)
+	# 数学 (旧版): sag_max = slack × sag_factor × 0.5
+	#   bug: 绳长 18m 两车距离 5m → slack=13 → sag=3.25m
+	#        绳子中段下垂 3 米, 视觉上压在车身上 (用户反馈"绳子缠绕赛车本身")
+	# 数学 (新版): sag_max = min(slack × sag_factor × 0.5, direct × 0.3, ABS_MAX)
+	#   多重约束:
+	#     ① slack × factor × 0.5  ← 原始逻辑 (松弛量决定垂坠基础)
+	#     ② direct × 0.3          ← 距离近时不允许垂太深 (距离 5m → 上限 1.5m)
+	#                              物理直觉: 两车很近时绳子团成一坨在中间, 不会垂得很深
+	#     ③ ABS_MAX = 2.0 m       ← 绝对上限, 任何情况下不会比这更深
+	#                              (车身高约 1m, sag 上限 2m 视觉上不会覆盖车头)
+	# 模式3 (铁链) 重力下垂被金属刚性吸收, 所以乘 0.4 弱化
+	var direct_dist: float = path[0].distance_to(path[path.size() - 1])
+	const SAG_ABS_MAX: float = 2.0   # 绝对上限 (米), 防止任何极端情况下绳子下垂过深压到车
+	var sag_max: float = slack * rope_sag_factor * 0.5
+	sag_max = minf(sag_max, direct_dist * 0.3)   # 与两车直线距离挂钩的相对上限
+	sag_max = minf(sag_max, SAG_ABS_MAX)         # 绝对上限兜底
+	if rope_mode3_enabled:
+		sag_max *= 0.4
+
+	# ---- 2. 沿路径生成 raw target points (含 sag 抛物线垂坠) ----
+	# 总采样点数 = 路径段数 × subdivisions + 1 (端点)
+	var subs: int = maxi(rope_subdivisions, 2)
+	var raw_points: PackedVector3Array = PackedVector3Array()
+	for i in range(path.size() - 1):
+		var p0: Vector3 = path[i]
+		var p1: Vector3 = path[i + 1]
+		# 当前段细分: 输出 subs 个点 (j=0..subs-1, t=0..1-1/subs)
+		# 下一段会以 t=0 开头自然衔接, 所以本段不输出 j=subs (避免重复)
+		# 但最后一段需要补上 j=subs (= p1, 即终点)
+		var n: int = subs if i < path.size() - 2 else subs + 1
+		for j in range(n):
+			var t: float = float(j) / float(subs)
+			# 路径线性插值
+			var pt: Vector3 = p0.lerp(p1, t)
+			# Sag: 抛物线 4t(1-t), t=0 或 1 时为 0, t=0.5 时为 1
+			# 注意: sag 应该让绳子在世界 -Y 方向下垂 (重力)
+			# 但是如果路径本身已经是斜的, 单纯减 Y 会让绳子穿地
+			# 这里简单处理: 只在 sag_max > 0 时减 Y, 路径斜的话垂坠仍指世界下
+			var sag_t: float = 4.0 * t * (1.0 - t)
+			pt.y -= sag_t * sag_max
+			raw_points.append(pt)
+	var total_samples: int = raw_points.size()
+
+	# ---- 3. 平滑: smoothed_points 朝 raw_points 做指数衰减 lerp (Q 弹核心) ----
+	# 第一次或采样点数变了 (绕了新锚点等) → 直接用 raw 不做 lerp 避免一次性弹飞
+	if _rope_smoothed_points.size() != total_samples:
+		_rope_smoothed_points = raw_points.duplicate()
+		_rope_last_path_len = actual_path_len  # 同步基线, 避免本帧虚假触发摆动
+	# 用 physics delta (从 _physics_process 调用本函数, 应该是 1/240 = 4ms)
+	var dt: float = get_physics_process_delta_time()
+	# alpha = 1 - exp(-wobble_speed × dt). 例如 dt=0.004, speed=18 → alpha ≈ 0.069
+	# 物理意义: 每帧把 smoothed 朝 target 拉近 7%, 大约 0.16s 完成 95% 收敛
+	var alpha: float = 1.0 - exp(-rope_wobble_speed * dt)
+
+	# ---- 3a. 摆动能量管理 (用户要求: 静止时不摆, 拉伸/扰动时才摆) ----
+	# 数学:
+	#   触发: dL/dt = (actual_path_len - _rope_last_path_len) / dt   ; 路径长度变化率 m/s
+	#         如果 |dL/dt| > min_trigger_speed:
+	#             energy += (|dL/dt| - min_trigger_speed) × trigger_gain × dt
+	#   衰减: energy *= exp(-wobble_decay × dt)
+	#   钳制: energy ∈ [0, 1]
+	# 物理意义:
+	#   绳子被快速拉伸 (dL/dt > 0, 比如车互相远离) → 累积摆动能量
+	#   绳子被快速放松 (dL/dt < 0, 比如车互相靠近, 也会导致绳子甩动) → 也累积
+	#   两车几乎不动 (|dL/dt| ≈ 0) → 不累积, 已有能量自然衰减
+	# 注: 这是用户专门要求的"符合物理的真实绳子"行为
+	var dL: float = actual_path_len - _rope_last_path_len
+	_rope_last_path_len = actual_path_len
+	var dL_speed: float = absf(dL) / maxf(dt, 0.0001)   # 米/秒
+	if dL_speed > rope_wobble_min_trigger_speed:
+		# 超过阈值才累积能量 (过滤微小漂移)
+		var excess: float = dL_speed - rope_wobble_min_trigger_speed
+		_rope_wobble_energy += excess * rope_wobble_trigger_gain * dt
+	# 衰减 (始终执行, 不管有没有触发)
+	_rope_wobble_energy *= exp(-rope_wobble_decay * dt)
+	# 钳制
+	_rope_wobble_energy = clampf(_rope_wobble_energy, 0.0, 1.0)
+	# 当能量低于一个很小的阈值时直接归零 (避免"无限小"的浮点抖动)
+	if _rope_wobble_energy < 0.005:
+		_rope_wobble_energy = 0.0
+
+	# 摆动相位: 只在 energy > 0 时推进, 静止时不动 (省一点 CPU 也避免相位累积)
+	if _rope_wobble_energy > 0.0:
+		_rope_wobble_phase += dt * rope_wobble_freq * TAU
+
+	for i in range(total_samples):
+		var target: Vector3 = raw_points[i]
+		# 端点 (i=0 或 i=total_samples-1) 必须贴车, 不做平滑也不抖动
+		# 否则绳子会脱离车身浮空看起来超假
+		if i == 0 or i == total_samples - 1:
+			_rope_smoothed_points[i] = target
+			continue
+		# 中段: 指数衰减 lerp, 但靠近端点时增强 alpha 让它\"也跟着瞬时\"
+		# ============================================================
+		# 用户反馈: \"赛车有速度时, 靠近赛车段的绳子会弯折\"
+		# 原因: 端点不做 lerp 直接 = target (瞬时跟车),
+		#       但相邻采样点 (i=1) 用 alpha~0.07 慢慢追,
+		#       高速移动时 (车每帧瞬移 0.08m), 端点和 i=1 之间产生明显落差
+		#       → 视觉上看起来车身附近\"折\"了一下
+		# 修复: 让 alpha 在靠近端点时趋近 1.0 (跟车瞬时无滞后),
+		#       中段保持原 alpha (Q 弹感保留)
+		# 数学:
+		#   t_g = i / (total-1) ∈ [0, 1]
+		#   edge_proximity = (1 - sin(t_g × π))^2 ∈ [0, 1]
+		#       t_g=0 或 1 → edge_proximity = 1 (端点附近)
+		#       t_g=0.5  → edge_proximity = 0 (中段)
+		#       平方让\"端点附近\" 更陡峭, 只有 ~10% 区域受影响, 不破坏中段 Q 弹
+		#   alpha_local = lerp(alpha, 1.0, edge_proximity)
+		#       端点附近 alpha_local → 1 (瞬时跟车)
+		#       中段 alpha_local = alpha (原 Q 弹)
+		# ============================================================
+		var t_g_for_alpha: float = float(i) / float(total_samples - 1)
+		var edge_proximity: float = pow(1.0 - sin(t_g_for_alpha * PI), 2.0)
+		var alpha_local: float = lerp(alpha, 1.0, edge_proximity)
+		var smoothed: Vector3 = _rope_smoothed_points[i].lerp(target, alpha_local)
+		# 横向摆动: 中段最大, 两端 0 (用 sin(πt) 包络)
+		# t_global ∈ (0, 1), 越靠中间 envelope 越大 (sin(π × 0.5) = 1)
+		var t_global: float = float(i) / float(total_samples - 1)
+		var envelope: float = sin(t_global * PI)
+		# 关键: wobble_amp 实际值 = 配置峰值 × 当前能量 (能量为 0 时完全不摆)
+		var actual_amp: float = rope_wobble_amp * _rope_wobble_energy
+		if envelope > 0.01 and actual_amp > 0.001 and sag_max < natural_len * 0.5:
+			# 摆动只在 sag 不太大时启用 (绳子绷紧时也允许小幅抖, 但松弛太多不抖防穿地)
+			# 用 envelope × actual_amp × sin(phase + 频率沿绳分布) 实现"行波"感
+			var wobble_phase_local: float = _rope_wobble_phase + t_global * 6.0
+			# Y 方向小幅抖 (主要)
+			smoothed.y += sin(wobble_phase_local) * actual_amp * envelope * 0.5
+			# X 方向 (用 cos 错相位避免同步) — 让绳子有"扭转"感
+			smoothed.x += cos(wobble_phase_local * 1.3) * actual_amp * envelope * 0.3
+		_rope_smoothed_points[i] = smoothed
+
+	# ---- 4. 用平滑后的相邻点对生成绳子 mesh ----
+	var seg_count: int = total_samples - 1
+	# 动态扩容
 	while _rope_segments.size() < seg_count:
 		var seg := MeshInstance3D.new()
 		seg.name = "CoopRopeSeg_%d" % _rope_segments.size()
@@ -1529,28 +2163,25 @@ func _update_rope_visual() -> void:
 		cyl.top_radius = rope_visual_thickness
 		cyl.bottom_radius = rope_visual_thickness
 		cyl.height = 1.0
-		cyl.radial_segments = 8
+		cyl.radial_segments = 6   # 细一点节省 GPU, 6 边形圆柱看着已经够圆
 		seg.mesh = cyl
 		if _rope_mat:
 			seg.material_override = _rope_mat
+		# 关阴影投射: 64+ 段绳子投阴影会很贵
+		seg.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		get_tree().current_scene.add_child(seg)
 		_rope_segments.append(seg)
-
 	# 隐藏多余的段
 	for i in range(_rope_segments.size()):
-		if i < seg_count:
-			_rope_segments[i].visible = true
-		else:
-			_rope_segments[i].visible = false
-
-	# 更新每段的位置和朝向
+		_rope_segments[i].visible = i < seg_count
+	# 同步每段的位置和朝向
 	for i in range(seg_count):
-		var p0: Vector3 = path[i]
-		var p1: Vector3 = path[i + 1]
+		var p0: Vector3 = _rope_smoothed_points[i]
+		var p1: Vector3 = _rope_smoothed_points[i + 1]
 		var seg_vec: Vector3 = p1 - p0
 		var seg_len: float = seg_vec.length()
 		var seg_mesh: MeshInstance3D = _rope_segments[i]
-		if seg_len < 0.01:
+		if seg_len < 0.001:
 			seg_mesh.visible = false
 			continue
 		var mid: Vector3 = (p0 + p1) * 0.5
@@ -1561,22 +2192,56 @@ func _update_rope_visual() -> void:
 		seg_mesh.rotate_object_local(Vector3.RIGHT, deg_to_rad(90.0))
 		seg_mesh.scale = Vector3(1.0, seg_len, 1.0)
 
-	# 绳子颜色: 模式2用档位颜色, 模式1用拉伸程度变色
+	# ---- 5. 颜色 / 材质: 模式3=金属铁链, 模式2=档位颜色, 模式1=拉伸程度变色 ----
 	if _rope_mat:
-		if rope_mode2_enabled:
-			# 模式2: 根据档位显示对应颜色
+		if rope_mode3_enabled:
+			# 模式3: 金属铁链外观
+			_rope_mat.albedo_color = rope_mode3_chain_color
+			_rope_mat.emission = rope_mode3_chain_color * 0.5
+			_rope_mat.emission_energy_multiplier = rope_mode3_chain_emission
+			_rope_mat.emission_enabled = rope_mode3_chain_emission > 0.01
+			_rope_mat.metallic = 0.85
+			_rope_mat.roughness = 0.4
+			# 同步链节粗细
+			for seg in _rope_segments:
+				if seg and seg.mesh is CylinderMesh:
+					var cyl: CylinderMesh = seg.mesh
+					if not is_equal_approx(cyl.top_radius, rope_mode3_chain_thickness):
+						cyl.top_radius = rope_mode3_chain_thickness
+						cyl.bottom_radius = rope_mode3_chain_thickness
+		elif rope_mode2_enabled:
+			# 模式2: 档位颜色 (绿/黄/红等), 保留低发光让档位颜色更醒目
 			var tier_col: Color = _get_mode2_tier_color()
 			_rope_mat.albedo_color = tier_col
+			_rope_mat.emission_enabled = true
 			_rope_mat.emission = tier_col
-			_rope_mat.emission_energy_multiplier = 1.5
+			_rope_mat.emission_energy_multiplier = 1.2
+			_rope_mat.metallic = 0.0
+			_rope_mat.roughness = 0.7
+			# 模式2 用绳子粗细
+			for seg in _rope_segments:
+				if seg and seg.mesh is CylinderMesh:
+					var cyl: CylinderMesh = seg.mesh
+					if not is_equal_approx(cyl.top_radius, rope_visual_thickness):
+						cyl.top_radius = rope_visual_thickness
+						cyl.bottom_radius = rope_visual_thickness
 		else:
-			# 模式1: 颜色随拉伸程度变化 (松弛=金色, 拉紧=红色)
+			# 模式1: 真·绳子. 颜色随拉伸变化 (松弛=金麻色, 拉紧=偏红)
+			# 关键: 不开 emission_enabled, 让绳子是粗糙麻绳质感, 不是发光的霓虹管
 			var stretch_amount: float = _rope_total_length - rope_length
 			var tension: float = clampf(stretch_amount / maxf(rope_elasticity * 2.0, 1.0), 0.0, 1.0)
-			var col: Color = rope_color.lerp(Color(1.0, 0.2, 0.1), tension)
+			var col: Color = rope_color.lerp(Color(0.85, 0.25, 0.15), tension)
 			_rope_mat.albedo_color = col
-			_rope_mat.emission = col
-			_rope_mat.emission_energy_multiplier = 0.5
+			_rope_mat.emission_enabled = false
+			_rope_mat.metallic = 0.0
+			_rope_mat.roughness = 0.95
+			# 同步绳子粗细
+			for seg in _rope_segments:
+				if seg and seg.mesh is CylinderMesh:
+					var cyl: CylinderMesh = seg.mesh
+					if not is_equal_approx(cyl.top_radius, rope_visual_thickness):
+						cyl.top_radius = rope_visual_thickness
+						cyl.bottom_radius = rope_visual_thickness
 
 
 ## 清理绳子视觉
@@ -1586,6 +2251,13 @@ func _cleanup_rope_visual() -> void:
 			seg.queue_free()
 	_rope_segments.clear()
 	_rope_mat = null
+	# 清空平滑/能量缓存, 否则下次连绳会从旧位置弹出来或者继承旧能量
+	_rope_smoothed_points = PackedVector3Array()
+	_rope_wobble_phase = 0.0
+	_rope_wobble_energy = 0.0
+	_rope_last_path_len = 0.0
+	# 重置模式3绷紧标志, 下次连绳第一次绷紧时能正常 jerk
+	_rope_mode3_was_taut = false
 
 
 ## 每帧更新分屏摄像机 (跟随各自的赛车)
@@ -1619,3 +2291,300 @@ func _copy_camera_params(src: Camera3D, dst: Camera3D) -> void:
 			if val is Curve:
 				val = val.duplicate() if val != null else null
 			dst.set(prop_name, val)
+
+
+## ============================================================
+## 尾流能量系统: 后车尾随前车积累能量, 满后可突进
+## ============================================================
+
+## 每物理帧更新尾流能量 (在 _physics_process 中调用)
+func _update_slipstream_energy(delta: float) -> void:
+	if _car_1p == null or _car_2p == null:
+		return
+
+	# 更新冷却计时器
+	if _slipstream_cooldown_1p > 0.0:
+		_slipstream_cooldown_1p -= delta
+	if _slipstream_cooldown_2p > 0.0:
+		_slipstream_cooldown_2p -= delta
+
+	# 判断前后车
+	var pos_1p: Vector3 = _car_1p.global_position
+	var pos_2p: Vector3 = _car_2p.global_position
+	var dir_1p_to_2p: Vector3 = (pos_2p - pos_1p).normalized()
+	var dir_2p_to_1p: Vector3 = -dir_1p_to_2p
+
+	var is_1p_front: bool = _is_1p_front_car(dir_1p_to_2p, dir_2p_to_1p)
+
+	# 确定前车和后车
+	var front_car: RigidBody3D = _car_1p if is_1p_front else _car_2p
+	var rear_car: RigidBody3D = _car_2p if is_1p_front else _car_1p
+	var is_rear_1p: bool = not is_1p_front  # 后车是否是1P
+
+	# 计算两车距离
+	var dist: float = pos_1p.distance_to(pos_2p)
+
+	# 判断后车是否在前车的尾流区域内
+	var in_slipstream: bool = _check_in_slipstream(front_car, rear_car, dist)
+
+	# 更新后车的尾流能量
+	if is_rear_1p:
+		_update_single_slipstream(delta, in_slipstream, true)
+		# 2P 是前车, 不积累尾流能量, 衰减
+		_decay_slipstream(delta, false)
+	else:
+		_update_single_slipstream(delta, in_slipstream, false)
+		# 1P 是前车, 不积累尾流能量, 衰减
+		_decay_slipstream(delta, true)
+
+
+## 检查后车是否在前车的尾流区域内
+func _check_in_slipstream(front_car: RigidBody3D, rear_car: RigidBody3D, dist: float) -> bool:
+	# 距离检查
+	if dist < rope_mode2_slipstream_min_dist or dist > rope_mode2_slipstream_max_dist:
+		return false
+
+	# 角度检查: 后车必须在前车身后的锥形区域内
+	var front_mesh: Node3D = front_car.get_node_or_null("CarMesh")
+	var front_fwd: Vector3
+	if front_mesh:
+		front_fwd = -front_mesh.global_transform.basis.z
+	else:
+		front_fwd = front_car.linear_velocity.normalized()
+
+	if front_fwd.length_squared() < 0.01:
+		return false
+
+	# 从前车指向后车的方向
+	var to_rear: Vector3 = (rear_car.global_position - front_car.global_position).normalized()
+	# 后车应该在前车的身后 (与前车朝向相反的方向)
+	var dot: float = front_fwd.dot(to_rear)
+	# dot < 0 表示后车在前车身后
+	# 将角度阈值转换为 cos 值 (注意是负方向)
+	var angle_cos: float = cos(deg_to_rad(rope_mode2_slipstream_angle_threshold))
+	# 后车在前车身后的锥形区域: dot < -cos(threshold)
+	return dot < -angle_cos
+
+
+## 更新单个玩家的尾流能量 (积累)
+func _update_single_slipstream(delta: float, in_slipstream: bool, is_1p: bool) -> void:
+	var cooldown: float = _slipstream_cooldown_1p if is_1p else _slipstream_cooldown_2p
+	if cooldown > 0.0:
+		# 冷却中, 不积累
+		return
+
+	if in_slipstream:
+		# 在尾流中, 积累能量
+		if is_1p:
+			_slipstream_energy_1p = minf(_slipstream_energy_1p + rope_mode2_slipstream_charge_rate * delta, rope_mode2_slipstream_max_energy)
+		else:
+			_slipstream_energy_2p = minf(_slipstream_energy_2p + rope_mode2_slipstream_charge_rate * delta, rope_mode2_slipstream_max_energy)
+	else:
+		# 不在尾流中, 衰减能量
+		_decay_slipstream(delta, is_1p)
+
+
+## 衰减尾流能量
+func _decay_slipstream(delta: float, is_1p: bool) -> void:
+	if is_1p:
+		_slipstream_energy_1p = maxf(_slipstream_energy_1p - rope_mode2_slipstream_decay_rate * delta, 0.0)
+	else:
+		_slipstream_energy_2p = maxf(_slipstream_energy_2p - rope_mode2_slipstream_decay_rate * delta, 0.0)
+
+
+## 尝试使用尾流突进 (按键触发)
+func _try_slipstream_boost(car: RigidBody3D, is_1p: bool) -> void:
+	if car == null:
+		return
+
+	var energy: float = _slipstream_energy_1p if is_1p else _slipstream_energy_2p
+	var cooldown: float = _slipstream_cooldown_1p if is_1p else _slipstream_cooldown_2p
+
+	# 检查能量是否满
+	if energy < rope_mode2_slipstream_max_energy:
+		print("[CoopMode] 尾流突进失败: 能量不足 (%.1f/%.1f)" % [energy, rope_mode2_slipstream_max_energy])
+		return
+
+	# 检查冷却
+	if cooldown > 0.0:
+		print("[CoopMode] 尾流突进失败: 冷却中 (%.1fs)" % cooldown)
+		return
+
+	# 消耗能量
+	if is_1p:
+		_slipstream_energy_1p = 0.0
+		_slipstream_cooldown_1p = rope_mode2_slipstream_boost_cooldown
+	else:
+		_slipstream_energy_2p = 0.0
+		_slipstream_cooldown_2p = rope_mode2_slipstream_boost_cooldown
+
+	# 给后车施加 boost (使用 car 的 _start_boost 方法)
+	if car.has_method("_start_boost"):
+		car._start_boost("slipstream", rope_mode2_slipstream_boost_power, rope_mode2_slipstream_boost_duration)
+		print("[CoopMode] 尾流突进! %s 获得 power=%.0f, duration=%.1fs" % ["1P" if is_1p else "2P", rope_mode2_slipstream_boost_power, rope_mode2_slipstream_boost_duration])
+	else:
+		# 备用方案: 直接施加冲量
+		var car_mesh: Node3D = car.get_node_or_null("CarMesh")
+		var boost_dir: Vector3
+		if car_mesh:
+			boost_dir = -car_mesh.global_transform.basis.z
+		else:
+			boost_dir = car.linear_velocity.normalized()
+		if boost_dir.length_squared() < 0.01:
+			boost_dir = Vector3.FORWARD
+		car.apply_central_impulse(boost_dir * rope_mode2_slipstream_boost_power * 0.5)
+		print("[CoopMode] 尾流突进(冲量模式)! %s" % ["1P" if is_1p else "2P"])
+
+	# HUD 弹字反馈
+	var hud = _hud_1p if is_1p else _hud_2p
+	if hud and hud.has_method("show_slipstream_boost_popup"):
+		hud.show_slipstream_boost_popup()
+
+
+## 重置尾流能量状态 (绳子断开时调用)
+func _reset_slipstream() -> void:
+	_slipstream_energy_1p = 0.0
+	_slipstream_energy_2p = 0.0
+	_slipstream_cooldown_1p = 0.0
+	_slipstream_cooldown_2p = 0.0
+	if _slipstream_particles_1p and is_instance_valid(_slipstream_particles_1p):
+		_slipstream_particles_1p.queue_free()
+		_slipstream_particles_1p = null
+	if _slipstream_particles_2p and is_instance_valid(_slipstream_particles_2p):
+		_slipstream_particles_2p.queue_free()
+		_slipstream_particles_2p = null
+	_hide_slipstream_hud()
+
+
+## 更新 HUD 上的尾流能量显示
+func _update_slipstream_hud() -> void:
+	# 确保尾流 UI 已创建
+	if _hud_1p and _hud_1p.has_method("create_slipstream_ui"):
+		if _hud_1p.get("_slipstream_container") == null:
+			_hud_1p.create_slipstream_ui()
+		_hud_1p.update_slipstream_ui(_slipstream_energy_1p, rope_mode2_slipstream_max_energy, _slipstream_cooldown_1p)
+	if _hud_2p and _hud_2p.has_method("create_slipstream_ui"):
+		if _hud_2p.get("_slipstream_container") == null:
+			_hud_2p.create_slipstream_ui()
+		_hud_2p.update_slipstream_ui(_slipstream_energy_2p, rope_mode2_slipstream_max_energy, _slipstream_cooldown_2p)
+
+
+## 隐藏 HUD 上的尾流能量显示
+func _hide_slipstream_hud() -> void:
+	if _hud_1p and _hud_1p.has_method("hide_slipstream_ui"):
+		_hud_1p.hide_slipstream_ui()
+	if _hud_2p and _hud_2p.has_method("hide_slipstream_ui"):
+		_hud_2p.hide_slipstream_ui()
+
+
+# ============================================================
+#  绳子吃星星系统
+# ============================================================
+var _star_collected_total: int = 0          ## 本局已收集星星总数
+var _star_combo: int = 0                    ## 当前连击数
+var _star_combo_timer: float = 0.0          ## 连击宽容倒计时 (秒)
+const STAR_COMBO_WINDOW: float = 0.4        ## 连击宽容窗口 (秒)
+
+## 获取当前星星收集总数 (供 HUD 读取)
+func get_star_count() -> int:
+	return _star_collected_total
+
+## 赛车直接碰到星星时由 Block_StarTrail 调用
+func on_star_collected_by_car() -> void:
+	_star_collected_total += 1
+	_star_combo += 1
+	_star_combo_timer = STAR_COMBO_WINDOW
+	_flash_rope_on_star_collect()
+	_update_star_hud()
+
+## 获取当前连击数
+func get_star_combo() -> int:
+	return _star_combo
+
+## 每物理帧检测绳子路径是否穿过星星碰撞球
+func _check_rope_star_collection() -> void:
+	if _car_1p == null or _car_2p == null:
+		return
+	# 连击倒计时
+	var dt: float = get_physics_process_delta_time()
+	if _star_combo_timer > 0.0:
+		_star_combo_timer -= dt
+		if _star_combo_timer <= 0.0:
+			_star_combo = 0  # 连击断裂
+
+	# 获取绳子路径 (含缠绕锚点)
+	var pos_1p: Vector3 = _get_rope_visual_anchor(_car_1p)
+	var pos_2p: Vector3 = _get_rope_visual_anchor(_car_2p)
+	var rope_path: Array[Vector3] = _get_rope_path(pos_1p, pos_2p)
+	if rope_path.size() < 2:
+		return
+
+	# 遍历场景中所有绳星轨迹
+	var trails: Array = get_tree().get_nodes_in_group("star_trails")
+	for trail in trails:
+		if not trail.has_method("get_uncollected_stars"):
+			continue
+		var stars: Array = trail.call("get_uncollected_stars")
+		for star_info in stars:
+			var star_pos: Vector3 = star_info["world_pos"]
+			var radius: float = star_info["radius"]
+			var star_idx: int = star_info["index"]
+			# 检测: 绳子路径中任意线段是否穿过星星球
+			if _rope_intersects_sphere(rope_path, star_pos, radius):
+				trail.call("collect_star", star_idx)
+				_star_collected_total += 1
+				_star_combo += 1
+				_star_combo_timer = STAR_COMBO_WINDOW
+				# 绳子短暂发光反馈
+				_flash_rope_on_star_collect()
+				# 通知 HUD 更新
+				_update_star_hud()
+
+
+## 线段组是否穿过球体 (宽松判定: 线段到球心最短距离 < 半径)
+func _rope_intersects_sphere(path: Array[Vector3], center: Vector3, radius: float) -> bool:
+	for i in range(path.size() - 1):
+		var a: Vector3 = path[i]
+		var b: Vector3 = path[i + 1]
+		var ab: Vector3 = b - a
+		var ab_len_sq: float = ab.length_squared()
+		if ab_len_sq < 0.0001:
+			if a.distance_to(center) < radius:
+				return true
+			continue
+		# 投影参数 t, 限制在 [0,1]
+		var t: float = clampf((center - a).dot(ab) / ab_len_sq, 0.0, 1.0)
+		var closest: Vector3 = a + ab * t
+		if closest.distance_to(center) < radius:
+			return true
+	return false
+
+
+## 绳子短暂发光 (收集反馈)
+func _flash_rope_on_star_collect() -> void:
+	if _rope_mat == null:
+		return
+	# 临时高亮: 保存原色 → 改成金色高 emission → 0.15s 后恢复
+	var orig_emission_enabled: bool = _rope_mat.emission_enabled
+	var orig_emission: Color = _rope_mat.emission if _rope_mat.emission_enabled else Color.BLACK
+	var orig_energy: float = _rope_mat.emission_energy_multiplier
+	_rope_mat.emission_enabled = true
+	_rope_mat.emission = Color(1.0, 0.9, 0.3)
+	_rope_mat.emission_energy_multiplier = 6.0
+	# 用 tween 恢复
+	var tw: Tween = create_tween()
+	tw.tween_interval(0.15)
+	tw.tween_callback(func() -> void:
+		if _rope_mat:
+			_rope_mat.emission_enabled = orig_emission_enabled
+			_rope_mat.emission = orig_emission
+			_rope_mat.emission_energy_multiplier = orig_energy
+	)
+
+
+## 通知 HUD 更新星星计数
+func _update_star_hud() -> void:
+	if _hud_1p and _hud_1p.has_method("update_star_count"):
+		_hud_1p.call("update_star_count", _star_collected_total, _star_combo)
+	if _hud_2p and _hud_2p.has_method("update_star_count"):
+		_hud_2p.call("update_star_count", _star_collected_total, _star_combo)

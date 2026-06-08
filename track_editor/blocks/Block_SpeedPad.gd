@@ -1,4 +1,4 @@
-@tool
+﻿@tool
 extends Node3D
 ## ============================================================
 ## 加速带 (Speed Pad) — 编辑器机关
@@ -52,19 +52,19 @@ extends Node3D
 # ============================================================
 @export var width: float = 8.0:
 	set(v):
-		width = clampf(v, 1.0, 60.0)
+		width = clampf(v, 0.001, 100000.0)
 		if is_inside_tree():
 			_rebuild()
 @export var length: float = 5.0:
 	set(v):
-		length = clampf(v, 1.0, 60.0)
+		length = clampf(v, 0.001, 100000.0)
 		if is_inside_tree():
 			_rebuild()
 ## 触发区高度 (Area3D 的 box 高度, 决定车多高时还能触发)
 ## 注意: 视觉面片永远很薄 (0.05m), 这个只影响触发区
 @export var thickness: float = 2.5:
 	set(v):
-		thickness = clampf(v, 0.5, 10.0)
+		thickness = clampf(v, 0.001, 100000.0)
 		if is_inside_tree():
 			_rebuild()
 
@@ -92,12 +92,12 @@ extends Node3D
 ## 瞬时增速 (m/s, 沿车头方向). 推荐 15~30
 @export var speed_kick: float = 15.0:
 	set(v):
-		speed_kick = clampf(v, 0.0, 100.0)
+		speed_kick = clampf(v, 0.001, 100000.0)
 ## 持续推力时长 (秒). 用户要求: 加速带应该有持续加速感, 不是单纯给一次力
 ## 1.5 秒 = 短氮气感. 想要更持久的弹射器调到 2~3 秒
 @export var duration: float = 1.5:
 	set(v):
-		duration = clampf(v, 0.0, 5.0)
+		duration = clampf(v, 0.001, 100000.0)
 
 ## 触发冷却 (秒). 同一辆车在此时间内重复进入不会再次触发
 @export var retrigger_cooldown: float = 0.5

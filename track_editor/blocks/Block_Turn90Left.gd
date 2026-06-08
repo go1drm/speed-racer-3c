@@ -1,4 +1,4 @@
-@tool
+﻿@tool
 extends TrackBlock
 ## 90° 左弯 — 连续 ArrayMesh 弯道路面 (替代之前的"N 段矩形拼接")
 ##
@@ -36,12 +36,12 @@ extends TrackBlock
 
 @export var angle_deg: float = 90.0:
 	set(v):
-		angle_deg = clampf(v, 5.0, 360.0)
+		angle_deg = clampf(v, 0.001, 100000.0)
 		if is_inside_tree():
 			rebuild()
 @export var radius: float = 20.0:
 	set(v):
-		radius = clampf(v, 3.0, 80.0)
+		radius = clampf(v, 0.001, 100000.0)
 		if is_inside_tree():
 			rebuild()
 @export var total_pitch_deg: float = 0.0:

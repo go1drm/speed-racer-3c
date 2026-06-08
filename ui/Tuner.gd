@@ -131,7 +131,9 @@ const PARAMS := [
 	["drift_slip_smooth",         "打滑过渡速度",       1.0,  20.0,  0.5,
 		"打滑强度过渡平滑速度. 越大越锐利, 越小越柔和.", ""],
 	["drift_inertia_boost",       "惯性感增强",         0.0,  1.0,   0.05,
-		"漂移中沿惯性方向的摩擦削减. 0=不变, 1=漂到深度时摩擦(除空气)归零. 推荐 0.3~0.6.", ""],
+		"漂移中沿惯性方向的摩擦削减. 0=不变, 1=漂到深度时摩擦(除空气)归零. 推荐 0.3~0.6.", "drift_inertia_speed_curve"],
+	["drift_inertia_speed_ref",   "惯性感速度参考(m/s)", 5.0, 200.0, 1.0,
+		"惯性感曲线 X=1 对应的速度. 低于此速度惯性强(外移多), 高于或等于此速度按曲线末端衰减. 推荐设为你期望的'高速弯临界速度'.", ""],
 	["drift_centripetal_pull",    "向心力拉力",         0.0,  50.0,  0.5,
 		"漂移中把速度方向往车头方向拉的拉力. 0=关闭, 推荐 5~20. 大弧线过弯的'粘'感来源.", "drift_centripetal_curve"],
 
@@ -309,6 +311,8 @@ const PARAMS := [
 		"进入地图或复位时自动获得的氮气格数(不超过氮气槽上限)。", ""],
 
 	["__group", "喷射类型"],
+	["boost_window_time",         "小喷窗口时长(秒)",   0.1,  5.0,   0.05,
+		"退漂后按 W 可释放小喷的有效窗口秒数。超时未按则小喷资格失效。", ""],
 	["mini_boost_power",          "小喷推进力",         5.0,  100.0, 1.0,
 		"小喷的基础推进力, 实时力 = 此值 × 力度曲线在当前进度的采样。", "mini_boost_curve"],
 	["mini_boost_time",           "小喷持续(秒)",       0.1,  3.0,   0.05,
@@ -558,6 +562,55 @@ const PARAMS := [
 	# ========================================================
 	# rewind_*  → R 键时间回溯; freefly_* → 小键盘 0 自定义位置模式
 	# 这两组都是 car.gd 上的 @export, 直接走 kind="car" 即可
+	["__page", "🦘 跳跃"],
+	["__group", "总开关 + 双段跳"],
+	["jump_enabled",              "跳跃总开关",          0,    1,     1,
+		"1=启用跳跃 (空格键找不到钩索锚点时 fallback 跳跃); 0=禁用整套跳跃系统.\n输入路由: 按空格 → 优先尝试钩索, 钩到锚点进钩索流程, 找不到锚点 fallback 到跳跃.", ""],
+	["jump_double_enabled",       "二段跳开关",          0,    1,     1,
+		"1=允许在空中再跳一次 (二段跳); 0=只能在地面跳.\n二段跳冲量较小 (jump_double_impulse), 给爬坡/补救/连跳特技用. 落地后自动重置二段跳次数.", ""],
+	["jump_allow_in_drift",       "漂移中允许跳",        0,    1,     0,
+		"1=漂移状态也能跳 (会打断漂移); 0=漂移中按空格不跳 (推荐, 防止误触打断漂移段).", ""],
+
+	["__group", "跳跃力 (m/s 冲量)"],
+	["jump_impulse",              "一段跳冲量",          5.0,  60.0,  0.5,
+		"地面起跳时的 Y 速度冲量 (m/s). 直接覆盖当前 v.y, 不累加.\n推荐 15~35: 15=轻跳 1.2m, 25=跳到 ~10.8m 高 (默认), 35=跳到 ~21m 高.\n公式: 高度 h = v² / (2g), g=29 (项目重力). 25² / 58 ≈ 10.8m.", ""],
+	["jump_double_impulse",       "二段跳冲量",          5.0,  60.0,  0.5,
+		"空中二段跳的 Y 速度冲量 (m/s). 一般比一段跳小, 给爬坡/补救用.\n推荐 12~25, 默认 18 = 从顶点再爬 ~5.6m.", ""],
+	["jump_horizontal_keep",      "保留水平速度",        0.0,  1.0,   0.05,
+		"跳跃时保留水平速度的比例 (0~1).\n1.0 (默认) = 完全保留 (跳起来按惯性, 不干扰玩家方向控制).\n0.0 = 跳起来水平速度归零.\n用户高压线 (2026-06-02): 跳跃不要碰水平方向, 推荐保持 1.0.", ""],
+	["jump_redirect_horizontal_to_forward", "[废弃]水平重定向到车头", 0, 1, 0,
+		"[废弃] 用户反馈'重定向=强行设置车头朝向'已禁用.\n保留此参数只为兼容旧 cfg, 改它无实际效果.", ""],
+	["jump_forward_kick",         "最低前飞速度",        0.0,  30.0,  0.5,
+		"跳跃最低前飞速度 (m/s). 保证即使静止/低速按空格也朝车头方向飞.\n数学: horiz_speed = max(|v.xz| × keep, 此值)\n0 = 静止跳只有 Y (会被残余角速度漂向一侧); 10 (默认) = 静止也沿车头飞; 推荐 5~15.", ""],
+
+	["__group", "时间控制"],
+	["jump_cooldown",             "跳跃冷却 (s)",        0.0,  2.0,   0.05,
+		"跳跃冷却 (秒). 防止连按空格爆跳. 推荐 0.1~0.3, 默认 0.15.", ""],
+	["jump_skip_stick",           "防弹豁免窗口 (s)",    0.05, 1.5,   0.05,
+		"跳跃后多少秒内跳过 _apply_ground_stick 的下压力/防弹机制. 跟蘑菇/反重力机关一样.\n太短 → 跳起来立刻被压回, 跳得很弱.\n太长 → 落地了还在豁免会乱.\n推荐 0.3~0.5, 默认 0.4.", ""],
+
+	["__group", "起跳压扁动画"],
+	["jump_squash_enabled",       "起跳压扁开关",        0,    1,     1,
+		"1=起跳瞬间 car_mesh 压扁 (Y 缩到 0.8, X/Z 撑到 1.1, 模拟蹲跳); 0=纯物理跳无视觉压扁.", ""],
+	["jump_squash_amount",        "压扁强度",            0.0,  0.5,   0.01,
+		"压扁强度. car_mesh.scale.y 起跳瞬间 = (1 - amount).\n0.2 = 压扁到 0.8 (推荐), 0.4 = 压扁到 0.6 (夸张), 0 = 不压扁.", ""],
+	["jump_squash_duration",      "恢复时长 (s)",        0.05, 0.6,   0.01,
+		"压扁到完全恢复的总时长 (秒). 推荐 0.15~0.25, 默认 0.18.\n曲线: 起跳瞬间立刻压到底, 然后用 √t 平滑回弹.", ""],
+
+	["__group", "震屏反馈"],
+	["jump_takeoff_shake",        "起跳震屏强度",        0.0,  3.0,   0.05,
+		"起跳瞬间震屏强度 (0=无). 推荐 0.2~0.5, 默认 0.3.\n持续 0.15s. 连接到 camera_shake_requested 信号.", ""],
+	["jump_landing_shake",        "落地震屏强度",        0.0,  3.0,   0.05,
+		"跳跃后落地瞬间震屏强度 (0=无). 推荐 0.4~1.0, 默认 0.6.\n实际震屏会按落地速度缩放: amp × clamp(|v.y| / 15, 0.5, 1.5)\n→ 落得越快越震.", ""],
+	["jump_landing_dust_enabled", "落地烟尘开关",        0,    1,     1,
+		"1=落地瞬间触发 DriftFX 节点的 mini 喷射烟雾 (借用现有特效作为落地烟尘); 0=无.\n如果 DriftFX 节点不存在, 这个开关无效.", ""],
+
+	["__group", "二段跳前空翻"],
+	["jump_air_flip_enabled",     "前空翻开关",          0,    1,     1,
+		"1=二段跳时车身绕 X 轴前空翻 360° (视觉特效); 0=平跳无翻转.", ""],
+	["jump_air_flip_speed",       "前空翻速度 (度/s)",   0.0,  1080.0,5.0,
+		"前空翻角速度 (度/秒). 360 = 1 秒翻一圈, 540 = 0.67 秒一圈 (推荐, 默认).\n持续时长 = 360 / speed.", ""],
+
 	["__page", "🕒 倒带 / 自定义"],
 	["__group", "倒带 (R 键)"],
 	["rewind_enabled",            "倒带总开关",          0,    1,     1,
@@ -606,6 +659,37 @@ const CAR_MESH_PARAMS := [
 		"车身/轮子法线贴图的强度. 0=平坦(无凹凸细节), 1=正常, 2+=过度(不真实). 推荐 0.8~1.5.", ""],
 	["subsurf_strength",          "次表面散射强度",            0.0,  1.0,  0.05,
 		"车漆的'透感'(阳光下边缘透光). 0=关闭(节省性能), 0.1~0.3 = 轻微透感. 默认 0.", ""],
+	["mask_blend",                "Mask 装饰强度",             0.0,  1.0,  0.05,
+		"车身装饰花纹/边线区域的显示强度 (Mask 多色蒙版). 0=不显示装饰, 0.6=适中, 1=完全显示.", ""],
+	# 4 个车身 surface 各自的贴图选择 (0~3 → ""/00/_001/_01)
+	# 4 套贴图是车身不同部位的贴图(尺寸不同), 不是整车换装. FBX surface 顺序不一定
+	# 和后缀字典序对齐, 用户调出协调组合.
+	["surface_0_paint",           "surface[0] 贴图选择",       0,    3,    1,
+		"车身 surface[0] 用哪套贴图. 0=默认\"\", 1=\"00\", 2=\"_001\", 3=\"_01\". 默认 0.", ""],
+	["surface_1_paint",           "surface[1] 贴图选择",       0,    3,    1,
+		"车身 surface[1] 用哪套贴图. 默认 1=\"00\".", ""],
+	["surface_2_paint",           "surface[2] 贴图选择",       0,    3,    1,
+		"车身 surface[2] 用哪套贴图. 默认 2=\"_001\".", ""],
+	["surface_3_paint",           "surface[3] 贴图选择",       0,    3,    1,
+		"车身 surface[3] 用哪套贴图. 默认 3=\"_01\". 如果觉得拼接乱可全调成 0 让整车统一.", ""],
+	# RMA 倍率 (调整 metallic/roughness/AO 强度)
+	["metallic_mult",             "金属度倍率",                0.0,  2.0,  0.05,
+		"全局金属度倍率 (在 RMA.g 通道上再乘). 0=完全非金属, 1=贴图原值, 2=超金属感.", ""],
+	["roughness_mult",            "粗糙度倍率",                0.0,  2.0,  0.05,
+		"全局粗糙度倍率 (在 RMA.r 通道上再乘). 0=完全镜面(高光强), 1=贴图原值, 2=超磨砂.", ""],
+	["ao_strength",               "AO 环境遮蔽强度",           0.0,  1.0,  0.05,
+		"环境遮蔽强度 (RMA.b 通道). 0=关闭(车身较亮), 1=完全应用(凹陷处变暗增加立体感).", ""],
+	# Mask 多色装饰 (4 个 ColorPicker)
+	["__color", "Mask R 装饰色 (金边)", "mask_color_r", "car_mesh",
+		"Mask 贴图 R 通道亮的区域显示此色. 常用于车身金属边线/拉花. 推荐: 金/银/铜等装饰色."],
+	["__color", "Mask G 装饰色 (暗装饰)", "mask_color_g", "car_mesh",
+		"Mask 贴图 G 通道亮的区域显示此色. 常用于车身阴影部装饰. 推荐: 黑/深灰."],
+	["__color", "Mask B 装饰色 (亮高光)", "mask_color_b", "car_mesh",
+		"Mask 贴图 B 通道亮的区域显示此色. 常用于车身高光/亮饰. 推荐: 白/浅金."],
+	# 车漆调色 (持久化到 [color] 段, 不走 [tune] float 体系)
+	# __color 行格式: ["__color", label, prop_name, kind(可省略, 默认随父 tab), tooltip]
+	["__color", "车漆颜色 (Tint)", "paint_color", "car_mesh",
+		"车漆调色, 与 albedo 贴图相乘. 白色=原贴图色, 红色=染红, 偏蓝色=蓝调. 接近纯色时贴图细节会被盖掉, 推荐每通道至少 0.3."],
 ]
 
 # BoostFX 强度参数(应用到所有 BoostFX 实例, 玉麒麟 5 个 tailpipe 都同步)
@@ -967,6 +1051,22 @@ const COOP_PARAMS := [
 	["__group", "绳子视觉"],
 	["rope_visual_thickness",     "绳子粗细(米)",         0.02, 0.5,   0.01,
 		"绳子视觉渲染的粗细.", ""],
+	["rope_subdivisions",         "细分段数",             2,    20,    1,
+		"每段路径细分多少小段, 越大越平滑曲线, 性能成本线性增加. 推荐 8~12.", ""],
+	["rope_sag_factor",           "垂坠强度",             0.0,  1.5,   0.05,
+		"绳子松弛时中段往下垂的强度. 0=完全直挺挺, 1=按松弛量原样垂. 推荐 0.4~0.7 才像绳子.", ""],
+	["rope_wobble_speed",         "Q弹收敛速度",          1.0,  60.0,  0.5,
+		"绳子跟随车移动的'软度'. 越小越软(过分Q弹), 越大越僵硬(像棍). 推荐 12~25.", ""],
+	["rope_wobble_freq",          "摆动频率(Hz)",         0.0,  10.0,  0.1,
+		"绳子被扰动时摆动的频率. 0=不摆, 3~5=自然摆动. 推荐 3~5.", ""],
+	["rope_wobble_amp",           "摆动幅度峰值(米)",     0.0,  0.6,   0.01,
+		"绳子摆动的最大振幅(实际 = 此值 × 摆动能量). 推荐 0.12~0.25.", ""],
+	["rope_wobble_decay",         "摆动衰减(1/s)",        0.1,  10.0,  0.1,
+		"摆动能量衰减速度. 越大停得越快. 1.0=1秒衰到37%, 2.0=1秒衰到13%, 4.0=0.5秒衰到13%. 推荐 1.5~3.0.", ""],
+	["rope_wobble_trigger_gain",  "摆动触发增益",         0.0,  0.3,   0.005,
+		"路径长度变化率→摆动能量的转换系数. 越大越容易被触发摆动. 0=完全不摆动. 推荐 0.04~0.10.", ""],
+	["rope_wobble_min_trigger_speed", "摆动触发阈值(m/s)", 0.0, 10.0, 0.1,
+		"路径变化速率低于此值不累积摆动能量. 静止时绳子完全不摆. 推荐 1.0~3.0.", ""],
 	["__group", "绳子追随(吸附)"],
 	["_follow_duration",          "追随飞行时长(秒)",     0.1,  2.0,   0.05,
 		"按下追随键后飞向对方的总时长. 越小越快到达. 飞行过程为加速曲线(越来越快). 推荐 0.3~0.8.", ""],
@@ -1000,6 +1100,53 @@ const COOP_PARAMS := [
 		"粒子向车身中心飞行的速度. 越大聚合越快. 推荐 2.0~4.0.", ""],
 	["rope_mode2_charge_particle_size",   "粒子大小(米)",    0.02, 0.3,   0.01,
 		"单个粒子球的半径. 推荐 0.05~0.12.", ""],
+	["__group", "模式2尾流能量系统"],
+	["rope_mode2_slipstream_enabled",       "尾流能量开关",        0, 1, 1,
+		"尾流能量系统总开关. 1=开启, 0=关闭. 开启后后车尾随前车可积累尾流能量, 满后可突进.", ""],
+	["rope_mode2_slipstream_max_energy",    "尾流能量上限",        20.0, 500.0, 5.0,
+		"尾流能量的最大值. 能量达到此值时可以释放尾流突进. 推荐 80~150.", ""],
+	["rope_mode2_slipstream_charge_rate",   "尾流积累速度(/秒)",   5.0, 100.0, 1.0,
+		"后车在尾流区域内时每秒积累的能量. 越大攒满越快. 推荐 20~40.", ""],
+	["rope_mode2_slipstream_decay_rate",    "尾流衰减速度(/秒)",   0.0, 50.0, 1.0,
+		"后车不在尾流区域时每秒衰减的能量. 0=不衰减. 推荐 5~15.", ""],
+	["rope_mode2_slipstream_min_dist",      "尾流最小距离(米)",    1.0, 15.0, 0.5,
+		"两车距离小于此值时不算尾流(太近了). 推荐 2~5.", ""],
+	["rope_mode2_slipstream_max_dist",      "尾流最大距离(米)",    10.0, 60.0, 1.0,
+		"两车距离大于此值时不算尾流(太远了). 推荐 20~35.", ""],
+	["rope_mode2_slipstream_angle_threshold", "尾流角度阈值(度)",  10.0, 90.0, 5.0,
+		"后车必须在前车身后此角度范围内才算尾流. 越大越宽松. 推荐 30~60.", ""],
+	["rope_mode2_slipstream_boost_power",   "突进推力",            100.0, 3000.0, 50.0,
+		"尾流突进时的推力大小. 类似氮气推力. 推荐 600~1200.", ""],
+	["rope_mode2_slipstream_boost_duration", "突进持续时间(秒)",   0.3, 5.0, 0.1,
+		"尾流突进的持续时间. 推荐 1.0~2.0.", ""],
+	["rope_mode2_slipstream_boost_cooldown", "突进冷却时间(秒)",   0.0, 10.0, 0.5,
+		"突进后多久才能再次积累尾流能量. 推荐 1.5~3.0.", ""],
+	# ============================================================
+	# 🔥 绳子模式3: 毒图铁链 (Hardcore Iron Chain)
+	# ============================================================
+	# 完全没有弹性, 链长是硬上限. 双向 1:1 等量拉拽, 急转/急刹会瞬间把另一车鞭甩.
+	# 与 mode2 互斥, 同时只能开一个 (mode3 优先级更高)
+	["__group", "🔥 模式3 (毒图铁链)"],
+	["rope_mode3_enabled",          "模式3开关",            0,    1,     1,
+		"1=启用模式3(毒图铁链, 完全刚性约束). 启用后忽略 mode2 设置. 0=用 mode1/mode2.", ""],
+	["rope_mode3_length",           "铁链长度(米)",         5.0,  60.0,  0.5,
+		"铁链硬上限. 两车距离不可能超过此值, 超了立刻强行拉回. 推荐 12~25.", ""],
+	["rope_mode3_whip_enabled",     "张力拉拽开关",         0,    1,     1,
+		"1=启用前车拽后车的张力机制(后车被持续加速到与前车同速). 0=只做位置硬约束(无速度耦合).", ""],
+	["rope_mode3_whip_strength",    "拽力倍率(0~1)",        0.0,  1.0,   0.05,
+		"对收敛速率的全局缩放. 1.0=按 pull_rate 原值收敛, 0.5=拽得更慢, 0.0=完全不耦合. 推荐 0.8~1.0.", ""],
+	["rope_mode3_pull_rate",        "收敛速率(1/s)",        0.5,  20.0,  0.5,
+		"后车追上前车速度的快慢. 时间常数 τ=1/此值. 6.0→1秒收敛99%, 3.0→拽得明显沉, 12.0→几乎瞬间. 推荐 4~10.", ""],
+	["rope_mode3_front_drag_ratio", "前车反作用比例",       0.0,  1.0,   0.02,
+		"前车被后车'重量感'拖慢的比例. 0=前车完全不被拖累(开车人最爽), 0.1=微微拖慢, 1.0=动量守恒(开不动). 推荐 0~0.2.", ""],
+	["rope_mode3_jerk_impulse",     "绷直冲量(瞬间)",       0.0,  15.0,  0.5,
+		"链子从松弛'刚绷紧'那一瞬间给两车的反向冲量(只触发一次, 不会每帧累加). 0=无冲量, 3=轻微撞击, 6=明显甩动. 推荐 0~5.", ""],
+	["rope_mode3_chain_segments",   "链节段数(暂未启用)",   2,    32,    1,
+		"未来扩展用. 当前一段 mesh, 改这个不会立刻生效.", ""],
+	["rope_mode3_chain_thickness",  "链节粗细(米)",         0.05, 0.6,   0.01,
+		"铁链单段的粗细. 推荐 0.15~0.25, 比模式1/2的绳子粗一点显得有重量感.", ""],
+	["rope_mode3_chain_emission",   "金属反光强度",         0.0,  3.0,   0.05,
+		"铁链 emission 倍率. 0=纯漫反射黑灰链, 0.5=阴影里也能看见, 2.0=明显发光.", ""],
 ]
 
 #
@@ -2135,6 +2282,13 @@ func _build_ui() -> void:
 	for p in GRAPHICS_PARAMS:
 		_add_param_row(graphics_list, p, "graphics")
 
+	# 🎯 机关默认值 Tab — 配置所有机关的默认参数 (用户需求 2026-06-03)
+	# 实现: 遍历 BLOCK_LIBRARY 中所有机关 tscn, 实例化后读 get_editable_params(),
+	#       为每个参数生成 slider + spin 行, 改值时保存到 cfg 的 [mechanism_defaults] 段
+	#       TrackEditor 放新机关时读此默认值覆盖 @export 初始值
+	_build_mechanism_defaults_tab()
+	_build_transition_tab()
+
 	# 默认选中第一个 tab
 	if _tab_list.item_count > 0:
 		_tab_list.select(0)
@@ -2231,6 +2385,7 @@ func _add_color_row(parent: Node, p: Array, kind: String) -> void:
 		"grapple": target = _get_grapple_hook()
 		"cam": target = _get_camera()
 		"fx": target = _get_drift_fx()
+		"car_mesh": target = _get_car_mesh()
 		_: target = car
 	var cur_color := Color(1.0, 1.0, 1.0)
 	if target != null and prop in target:
@@ -2251,9 +2406,21 @@ func _add_color_row(parent: Node, p: Array, kind: String) -> void:
 			"grapple": t = _get_grapple_hook()
 			"cam": t = _get_camera()
 			"fx": t = _get_drift_fx()
+			"car_mesh": t = _get_car_mesh()
 			_: t = car
 		if t != null and prop in t:
 			t.set(prop, c)
+		# 双人模式: 同步颜色到 2P 的对应节点
+		var coop = get_node_or_null("/root/CoopMode")
+		if coop and coop.get("_active") and coop.get("_car_2p"):
+			var t2p: Object = null
+			match item_kind:
+				"car_mesh":
+					t2p = coop._car_2p.get_node_or_null("CarMesh")
+				_:
+					pass   # 其他 kind 暂不同步 2P
+			if t2p != null and prop in t2p:
+				t2p.set(prop, c)
 		_save_color_to_cfg(prop, c)
 	)
 	row.add_child(cpb)
@@ -2277,11 +2444,17 @@ func _load_colors_from_cfg(cfg: ConfigFile) -> void:
 	for prop in cfg.get_section_keys("color"):
 		var c: Color = cfg.get_value("color", prop, Color.WHITE)
 		# 暴力试遍所有 kind 的 target, 找到有此属性的就 set
-		var targets: Array = [_get_grapple_hook(), _get_camera(), _get_drift_fx(), car]
+		var targets: Array = [_get_grapple_hook(), _get_camera(), _get_drift_fx(), _get_car_mesh(), car]
 		for t in targets:
 			if t != null and prop in t:
 				t.set(prop, c)
 				break
+		# 双人模式: 同步颜色到 2P 的 CarMesh (其他节点暂不同步)
+		var coop = get_node_or_null("/root/CoopMode")
+		if coop and coop.get("_active") and coop.get("_car_2p"):
+			var mesh_2p = coop._car_2p.get_node_or_null("CarMesh")
+			if mesh_2p != null and prop in mesh_2p:
+				mesh_2p.set(prop, c)
 
 
 # 单行参数: [prop, label, vmin, vmax, step, tooltip, curve_prop]
@@ -2753,6 +2926,758 @@ class _CurveEditor extends Control:
 
 
 # ============================================================
+#  🎯 机关默认值 Tab
+# ============================================================
+# 用户需求 (2026-06-03): "我需要一个专门的机关TAB页配置所有机关的默认参数"
+#
+# 实现:
+#   1. 遍历 BLOCK_LIBRARY 中所有 tscn, instantiate 临时实例读 get_editable_params()
+#   2. 为每个机关创建一个 __group, 下面每个参数生成 slider+spin (跟普通 PARAMS 行一样)
+#   3. 改值 → 保存到 _mechanism_defaults[block_id][param_key] = value
+#   4. 持久化: cfg 的 [mechanism_defaults] 段, key = "block_id:param_key"
+#   5. TrackEditor 放新机关时调 _apply_mechanism_defaults(node, block_id) 覆盖 @export
+#   6. 已放置的同类机关: 不自动更新 (避免把用户手调的覆盖掉), 只影响新放的
+
+# 机关默认值存储 (内存)
+# 结构: { "spike": { "launch_impulse": 40.0, "spike_height": 3.0 }, ... }
+var _mechanism_defaults: Dictionary = {}
+
+# 机关 @export 原始默认值 (实例化 tscn 时读到的初始值, 不会被用户修改)
+# 用途: 首次在 Tab 里改默认值时, 旧默认 = 这个原始值
+# 结构: { "spike": { "launch_impulse": 30.0, ... }, ... }
+var _mech_original_defaults: Dictionary = {}
+
+# 临时存储所有机关参数 row 引用 (用于 cfg 保存/加载)
+# key = "block_id:param_key", value = { "slider": HSlider, "spin": SpinBox }
+var _mech_rows: Dictionary = {}
+
+
+func _build_mechanism_defaults_tab() -> void:
+	var page: VBoxContainer = _create_tab_page("🎯 机关默认值")
+
+	# 提示
+	var tip := Label.new()
+	tip.text = "配置所有机关的默认参数 (影响新放置的机关, 已放置的不变)"
+	tip.add_theme_font_size_override("font_size", 11)
+	tip.add_theme_color_override("font_color", Color(0.8, 0.8, 0.6))
+	tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	page.add_child(tip)
+
+	# 参数含义字典: key → 详细中文解释 (悬停 tooltip 显示)
+	var param_tooltips: Dictionary = {
+		# 地刺
+		"base_width": "地刺底座的宽度(X方向), 决定覆盖范围",
+		"base_depth": "地刺底座的深度(Z方向/行进方向), 决定纵向覆盖范围",
+		"base_thickness": "地刺底座的厚度(高度), 影响视觉凸起程度",
+		"spike_height": "单根刺突起的最大高度, 越高越难跳过",
+		"spike_radius": "单根刺的底部半径, 影响刺的粗细",
+		"spike_rows": "刺的行数(Z方向), 行×列 = 总刺数",
+		"spike_cols": "刺的列数(X方向), 行×列 = 总刺数",
+		"spike_up_time": "刺完全突起后保持不动的时间, 这段时间踩上去会被弹飞",
+		"spike_down_time": "刺完全缩回后保持不动的时间, 这段时间安全通过",
+		"spike_rise_time": "刺从缩回到完全突起的动画时间, 越短越突然",
+		"spike_fall_time": "刺从突起到完全缩回的动画时间",
+		"spike_phase_offset": "节奏相位偏移, 多组地刺可设不同偏移制造交替节奏",
+		"launch_impulse": "弹飞冲量, 决定被刺击中时飞多远/多高",
+		"launch_up_ratio": "弹飞时向上分量的比例, 1.0=纯向上, 0.0=纯水平推开",
+		"launch_skip_stick": "弹飞后的防弹豁免时间, 避免连续被同一组刺反复弹飞",
+		"retrigger_cooldown": "同一辆车被连续触发弹飞的冷却时间",
+		# 大风车
+		"blade_count": "风车叶片数量",
+		"blade_length": "叶片长度, 越长扫过范围越大",
+		"blade_width": "叶片宽度(碰撞+视觉)",
+		"blade_thickness": "叶片厚度",
+		"rotation_speed": "旋转速度(度/秒), 正=逆时针, 负=顺时针",
+		"hub_radius": "中心轴毂的半径",
+		"hub_height": "中心轴毂的高度(Y方向), 影响叶片离地高度",
+		"hit_impulse": "被叶片击中时的弹飞冲量",
+		"hit_up_ratio": "叶片击中时向上分量比例",
+		# 弹簧蘑菇
+		"mushroom_radius": "蘑菇帽半径, 决定弹射触发范围",
+		"mushroom_height": "蘑菇总高度(菌柱+菌帽)",
+		"cap_height": "蘑菇帽(弹射面)的厚度",
+		"stem_radius": "菌柱半径",
+		"bounce_impulse": "弹射冲量, 决定踩上去弹多高",
+		"bounce_up_ratio": "弹射方向的向上分量比例",
+		"bounce_cooldown": "同一辆车连续弹射的冷却时间",
+		# 固定跳板
+		"ramp_length": "跳板长度(行进方向), 越长起跑距离越充裕",
+		"ramp_width": "跳板宽度, 决定能通过的车身宽度",
+		"ramp_height": "跳板最高点的高度, 越高飞得越远",
+		"ramp_angle": "跳板倾斜角度(度), 影响起飞仰角",
+		# 反重力圆柱/墙面/弧面
+		"cylinder_radius": "圆柱半径, 决定弯道曲率",
+		"cylinder_height": "圆柱高度(行驶面长度)",
+		"arc_angle": "弧面展开角度(度), 360=完整圆柱",
+		"gravity_strength": "反重力强度, 越大车越贴紧曲面",
+		"wall_width": "墙面宽度(行驶方向)",
+		"wall_height": "墙面高度(垂直方向)",
+		"wall_thickness": "墙面厚度(碰撞体)",
+		"arc_radius": "弧面半径",
+		"arc_width": "弧面宽度(行驶方向)",
+		# 加速带
+		"pad_length": "加速带长度(行进方向)",
+		"pad_width": "加速带宽度",
+		"boost_speed": "经过加速带时获得的速度加成(m/s)",
+		"boost_duration": "加速效果持续时间(秒)",
+		# 激光闸门
+		"gate_width": "闸门两柱之间的宽度",
+		"gate_height": "闸门高度",
+		"laser_speed": "激光从一端扫到另一端的速度",
+		"laser_width": "激光束的宽度(粗细)",
+		"laser_damage_impulse": "被激光击中的弹飞冲量",
+		"laser_slow_factor": "被激光击中后的减速比例(0.5=速度减半)",
+		"laser_on_time": "激光开启持续时间",
+		"laser_off_time": "激光关闭(安全通过)持续时间",
+		"pillar_radius": "门柱半径",
+		# 毒雾
+		"fog_radius": "毒雾覆盖半径",
+		"fog_height": "毒雾高度(垂直范围)",
+		"damage_interval": "毒雾每次造成减速/伤害的间隔",
+		"slow_amount": "进入毒雾后的减速比例",
+		"visibility_reduction": "毒雾中视野降低程度(0~1)",
+		# 毒坑
+		"pit_width": "毒坑宽度(X方向)",
+		"pit_length": "毒坑长度(Z方向/行进方向)",
+		"pit_depth": "毒坑深度, 掉入后触发复位",
+		# 凹坑
+		"hole_width": "凹坑宽度",
+		"hole_length": "凹坑长度",
+		"hole_depth": "凹坑深度, 车掉入后减速但不复位",
+		# 易碎窄道
+		"break_delay": "车压过后到路面坠落的延迟时间",
+		"fall_duration": "路面坠落动画的持续时间",
+		"respawn_time": "路面坠落后重新恢复的时间(0=不恢复)",
+		# 弹簧
+		"spring_radius": "弹簧圆柱半径",
+		"spring_length": "弹簧伸出的最大长度",
+		"base_size": "弹簧底座大小",
+		"extend_time": "弹簧完全伸出后保持的时间",
+		"retract_time": "弹簧完全缩回后保持的时间",
+		"extend_speed": "弹簧伸出动画时间, 越短越突然",
+		"retract_speed": "弹簧缩回动画时间",
+		"launch_speed": "弹飞速度, 决定赛车被弹出后飞多远",
+		# 硬墙
+		"wall_length": "硬墙长度",
+		# 笑脸墙
+		"face_speed": "笑脸墙移动速度",
+		"face_size": "笑脸墙大小",
+		# 跷跷板 & 往复滑块 (共用 key: platform_width/length/thickness)
+		"platform_width": "平台宽度(X方向)",
+		"platform_length": "平台长度(Z方向/行进方向)",
+		"platform_thickness": "平台厚度",
+		"max_tilt_angle": "平台最大倾斜角度(度), 限制翻转幅度",
+		"tilt_speed": "平台响应重力倾斜的速度, 越大越灵敏",
+		"return_speed": "无重物时平台回正的速度",
+		"pivot_height": "支点距地面的高度",
+		"move_speed": "滑块往复运动速度(m/s)",
+		"end_offset_x": "终点X偏移: 正值=往右, 负值=往左 (滑块/窄道通用)",
+		"end_offset_y": "终点Y偏移: 正值=往上(电梯/上坡), 负值=往下",
+		"end_offset_z": "终点Z偏移: 控制前后方向延伸距离",
+		"pause_at_ends": "到达端点后暂停多久再返回",
+		"ease_ratio": "两端减速区的比例(0~0.5), 越大启停越平滑",
+		"surface_friction": "平台表面摩擦力, 高值防止赛车在平台上打滑",
+		# 钟摆平台
+		"pendulum_length": "钟摆摆臂长度, 越长摆动越慢",
+		"pendulum_amplitude": "钟摆摆动幅度(度)",
+		"pendulum_speed": "钟摆摆动角速度",
+		"pendulum_phase": "钟摆初始相位偏移, 多个钟摆可设不同值制造节奏差",
+		# 红蓝门
+		"gate_color_mode": "门颜色: 0=红门(1P可通过), 1=蓝门(2P可通过)",
+		"glow_detect_range": "车靠近多远时开始触发车身发光效果",
+		"car_glow_intensity": "车身发光的亮度, 越高越醒目",
+		"reject_impulse": "颜色不匹配时的弹飞冲量, 越大飞越远",
+		"reject_up_ratio": "弹飞时向上抬起的比例",
+		"gate_thickness": "门面的厚度(碰撞判定范围)",
+		# 窄道
+		"path_width": "窄道路面宽度, 越窄越考验走线",
+		"path_thickness": "窄道路面厚度(视觉)",
+		"rail_height": "窄道两侧护栏高度, 0=无护栏(纯开放窄道)",
+		"rail_thickness": "护栏厚度",
+		"curve_offset_x": "贝塞尔中间控制点X: 正值=路径右弯, 负值=左弯",
+		"curve_offset_y": "贝塞尔中间控制点Y: 正值=路径中间拱起, 负值=凹陷",
+		"curve_offset_z": "贝塞尔中间控制点Z: 前后偏移曲线峰值位置",
+		"segment_count": "路面分段数, 默认72段, 越多曲线越平滑",
+		"edge_glow": "路面边缘发光强度, 让窄道在远处更醒目",
+		"fall_impulse": "坠落窄道后弹回/复位的冲量",
+	}
+
+	# 机关列表 (从 BLOCK_LIBRARY 的 tscn 文件)
+	# 只处理有 get_editable_params 方法的 (排除路段积木如 straight_short)
+	var block_library: Dictionary = {
+		"spike": "res://track_editor/blocks/spike.tscn",
+		"windmill": "res://track_editor/blocks/windmill.tscn",
+		"spring_mushroom": "res://track_editor/blocks/spring_mushroom.tscn",
+		"flip_board": "res://track_editor/blocks/flip_board.tscn",
+		"gravity_cylinder": "res://track_editor/blocks/gravity_cylinder.tscn",
+		"gravity_wall": "res://track_editor/blocks/gravity_wall.tscn",
+		"gravity_arc": "res://track_editor/blocks/gravity_arc.tscn",
+		"speed_pad": "res://track_editor/blocks/speed_pad.tscn",
+		"laser_gate": "res://track_editor/blocks/laser_gate.tscn",
+		"toxic_fog": "res://track_editor/blocks/toxic_fog.tscn",
+		"pitfall": "res://track_editor/blocks/pitfall.tscn",
+		"pithole": "res://track_editor/blocks/pithole.tscn",
+		"fragile_narrow": "res://track_editor/blocks/fragile_narrow.tscn",
+		"hard_wall": "res://track_editor/blocks/hard_wall.tscn",
+		"face_wall": "res://track_editor/blocks/face_wall.tscn",
+		"seesaw": "res://track_editor/blocks/seesaw.tscn",
+		"slider": "res://track_editor/blocks/slider.tscn",
+		"pendulum": "res://track_editor/blocks/pendulum.tscn",
+		"color_gate": "res://track_editor/blocks/color_gate.tscn",
+		"narrow_path": "res://track_editor/blocks/narrow_path.tscn",
+		"spring": "res://track_editor/blocks/spring.tscn",
+		"trigger_spring": "res://track_editor/blocks/trigger_spring.tscn",
+		"star_trail": "res://track_editor/blocks/star_trail.tscn",
+	}
+
+	# 机关中文名映射
+	var block_names: Dictionary = {
+		"spike": "🔺 地刺",
+		"windmill": "🌀 大风车",
+		"spring_mushroom": "🍄 弹簧蘑菇",
+		"flip_board": "🪂 固定跳板",
+		"gravity_cylinder": "🌀 反重力圆柱",
+		"gravity_wall": "🧱 反重力墙面",
+		"gravity_arc": "🌈 反重力弧面",
+		"speed_pad": "🟨 加速带",
+		"laser_gate": "⚡ 激光闸门",
+		"toxic_fog": "☠️ 毒雾",
+		"pitfall": "⬛ 毒坑",
+		"pithole": "🕳️ 凹坑",
+		"fragile_narrow": "💔 易碎窄道",
+		"hard_wall": "🧱 硬墙",
+		"face_wall": "😊 笑脸墙来了",
+		"seesaw": "⚖️ 跷跷板",
+		"slider": "🛗 往复滑块",
+		"pendulum": "🕰️ 钟摆平台",
+		"color_gate": "🚦 红蓝门",
+		"narrow_path": "🛤️ 窄道",
+		"spring": "🔵 弹簧",
+		"trigger_spring": "🟠 触发弹簧",
+		"star_trail": "⭐ 绳星轨迹",
+	}
+
+	for block_id in block_library.keys():
+		var tscn_path: String = block_library[block_id]
+		if not ResourceLoader.exists(tscn_path):
+			continue
+		var scene: PackedScene = load(tscn_path)
+		if scene == null:
+			continue
+		var instance: Node = scene.instantiate()
+		if instance == null or not instance.has_method("get_editable_params"):
+			if instance:
+				instance.queue_free()
+			continue
+		var params: Array = instance.call("get_editable_params")
+		instance.queue_free()
+		if params.is_empty():
+			continue
+		# 记录原始默认值 (用于 _set_mechanism_default 判断"用户有没有手调过")
+		if not _mech_original_defaults.has(block_id):
+			_mech_original_defaults[block_id] = {}
+		for p_orig in params:
+			var k_orig: String = String(p_orig.get("key", ""))
+			if not k_orig.is_empty():
+				_mech_original_defaults[block_id][k_orig] = float(p_orig.get("value", 0.0))
+
+		# 组标题
+		var group_name: String = block_names.get(block_id, block_id)
+		_add_group_header(page, group_name)
+
+		# 每个参数一行
+		for p in params:
+			var key: String = String(p.get("key", ""))
+			var label: String = String(p.get("label", key))
+			var p_min: float = float(p.get("min", -1000.0))
+			var p_max: float = float(p.get("max", 1000.0))
+			var step: float = float(p.get("step", 0.1))
+			var default_val: float = float(p.get("value", 0.0))
+			# 如果已有保存的 override, 用 override
+			var full_key: String = block_id + ":" + key
+			var val: float = default_val
+			if _mechanism_defaults.has(block_id) and _mechanism_defaults[block_id].has(key):
+				val = float(_mechanism_defaults[block_id][key])
+
+			var row := HBoxContainer.new()
+			row.add_theme_constant_override("separation", 4)
+			page.add_child(row)
+
+			# 参数名用 Button (高压线2: 悬停显示 tooltip, 点击弹窗调 min/max)
+			var name_btn := Button.new()
+			name_btn.text = "  " + label
+			name_btn.flat = true
+			name_btn.clip_text = true
+			name_btn.add_theme_font_size_override("font_size", 11)
+			name_btn.add_theme_color_override("font_color", Color(0.9, 0.85, 0.7))
+			name_btn.custom_minimum_size = Vector2(140, 22)
+			# tooltip: 优先从 param_tooltips 字典取详细含义, 否则用 label
+			var detail_tip: String = param_tooltips.get(key, "")
+			if detail_tip.is_empty():
+				detail_tip = label
+			name_btn.tooltip_text = "📖 %s\n\n%s\n\n范围: %s ~ %s  步长: %s\n(点击可调整范围)" % [label, detail_tip, str(p_min), str(p_max), str(step)]
+			row.add_child(name_btn)
+
+			var slider := HSlider.new()
+			slider.min_value = p_min
+			slider.max_value = p_max
+			slider.step = step
+			slider.value = val
+			slider.custom_minimum_size = Vector2(120, 22)
+			slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			slider.tooltip_text = label
+			row.add_child(slider)
+
+			var spin := SpinBox.new()
+			spin.min_value = p_min
+			spin.max_value = p_max
+			spin.step = step
+			spin.value = val
+			spin.custom_minimum_size = Vector2(70, 22)
+			spin.add_theme_font_size_override("font_size", 11)
+			spin.tooltip_text = label
+			# step >= 1 时只显示整数, 避免 "10.000" 这种多余小数
+			if step >= 1.0:
+				spin.rounded = true
+			row.add_child(spin)
+
+			# 点击参数名按钮 → 弹窗编辑 min/max/step (高压线2)
+			var fk_c: String = full_key
+			var bid_c: String = block_id
+			var key_c: String = key
+			var label_c: String = label
+			name_btn.pressed.connect(func():
+				_open_mech_range_editor(fk_c, label_c, slider, spin)
+			)
+
+			# 双向绑定 + 保存
+			slider.value_changed.connect(func(v: float) -> void:
+				spin.set_value_no_signal(v)
+				_set_mechanism_default(bid_c, key_c, v)
+			)
+			spin.value_changed.connect(func(v: float) -> void:
+				slider.set_value_no_signal(v)
+				_set_mechanism_default(bid_c, key_c, v)
+			)
+			_mech_rows[full_key] = {"slider": slider, "spin": spin, "name_btn": name_btn, "label": label, "min": p_min, "max": p_max, "step": step}
+
+
+## 机关默认值 Tab: 点击参数名弹窗调 min/max/step (高压线2)
+func _open_mech_range_editor(full_key: String, label_text: String, slider: HSlider, spin: SpinBox) -> void:
+	var row_data: Dictionary = _mech_rows.get(full_key, {})
+	var cur_min: float = slider.min_value
+	var cur_max: float = slider.max_value
+	var cur_step: float = slider.step
+
+	var dlg := AcceptDialog.new()
+	dlg.title = "编辑范围: " + label_text
+	dlg.dialog_hide_on_ok = true
+	dlg.min_size = Vector2(360, 180)
+
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 8)
+	dlg.add_child(vb)
+
+	var tip := Label.new()
+	tip.text = label_text + "\n当前范围: " + str(cur_min) + " ~ " + str(cur_max)
+	tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	tip.add_theme_color_override("font_color", Color(0.85, 0.85, 0.9))
+	tip.add_theme_font_size_override("font_size", 12)
+	tip.custom_minimum_size = Vector2(340, 0)
+	vb.add_child(tip)
+
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 10)
+	vb.add_child(grid)
+
+	var lbl_min := Label.new(); lbl_min.text = "最小值"; grid.add_child(lbl_min)
+	var sp_min := SpinBox.new(); sp_min.allow_lesser = true; sp_min.allow_greater = true; sp_min.step = cur_step; sp_min.value = cur_min; grid.add_child(sp_min)
+	var lbl_max := Label.new(); lbl_max.text = "最大值"; grid.add_child(lbl_max)
+	var sp_max := SpinBox.new(); sp_max.allow_lesser = true; sp_max.allow_greater = true; sp_max.step = cur_step; sp_max.value = cur_max; grid.add_child(sp_max)
+	var lbl_step := Label.new(); lbl_step.text = "步长"; grid.add_child(lbl_step)
+	var sp_step := SpinBox.new(); sp_step.allow_lesser = true; sp_step.allow_greater = true; sp_step.step = 0.001; sp_step.value = cur_step; grid.add_child(sp_step)
+
+	dlg.confirmed.connect(func():
+		var new_min: float = sp_min.value
+		var new_max: float = sp_max.value
+		var new_step: float = sp_step.value
+		if new_max <= new_min:
+			new_max = new_min + maxf(new_step, 0.001)
+		slider.min_value = new_min
+		slider.max_value = new_max
+		slider.step = new_step
+		spin.min_value = new_min
+		spin.max_value = new_max
+		spin.step = new_step
+		# 夹紧当前值
+		var cur_v: float = clampf(spin.value, new_min, new_max)
+		spin.value = cur_v
+		slider.value = cur_v
+		# 更新 _mech_rows 缓存
+		if _mech_rows.has(full_key):
+			_mech_rows[full_key]["min"] = new_min
+			_mech_rows[full_key]["max"] = new_max
+			_mech_rows[full_key]["step"] = new_step
+	)
+	add_child(dlg)
+	dlg.popup_centered()
+
+
+func _set_mechanism_default(block_id: String, key: String, value: float) -> void:
+	# 拿旧默认值 (用于判断已放置机关是否"手调过")
+	var old_default: float = 0.0
+	if _mechanism_defaults.has(block_id) and _mechanism_defaults[block_id].has(key):
+		old_default = float(_mechanism_defaults[block_id][key])
+	else:
+		# 之前没设过这个默认值 → 旧默认 = 机关 @export 原始值
+		# 从 _mech_original_defaults 取 (在 _build_mechanism_defaults_tab 时记录的)
+		if _mech_original_defaults.has(block_id) and _mech_original_defaults[block_id].has(key):
+			old_default = float(_mech_original_defaults[block_id][key])
+
+	# 更新默认值
+	if not _mechanism_defaults.has(block_id):
+		_mechanism_defaults[block_id] = {}
+	_mechanism_defaults[block_id][key] = value
+
+	# === 同步到已放置的同类机关 (用户需求 2026-06-03) ===
+	# 规则: 如果某个已放置机关的该参数 == 旧默认值 (没被手动改过) → 更新为新默认值
+	#        如果 != 旧默认值 (被手动改过) → 保留不动
+	var track_editor: Node = get_tree().current_scene.find_child("TrackEditor", true, false)
+	if track_editor == null:
+		# TrackEditor 可能不存在 (比如在非编辑器场景), 跳过
+		_request_autosave()
+		return
+	# 通过 _placed_blocks 数组遍历 (TrackEditor 的公开字段)
+	if "_placed_blocks" in track_editor:
+		var placed: Array = track_editor._placed_blocks
+		for entry in placed:
+			if String(entry.get("id", "")) != block_id:
+				continue
+			var node: Node = entry.get("node")
+			if node == null or not is_instance_valid(node):
+				continue
+			if not node.has_method("get_editable_params") or not node.has_method("set_editable_param"):
+				continue
+			# 读该机关当前这个参数的值
+			var params: Array = node.call("get_editable_params")
+			for p in params:
+				if String(p.get("key", "")) == key:
+					var current_val: float = float(p.get("value", 0.0))
+					# 判断: 当前值是否等于旧默认值 (容差 0.001)
+					if absf(current_val - old_default) < 0.001:
+						# 没被手调过 → 更新为新默认值
+						node.call("set_editable_param", key, value)
+					# 否则保留不动
+					break
+	_request_autosave()
+
+
+## 外部接口: TrackEditor 放新机关时调用, 把默认值应用到新实例
+func apply_mechanism_defaults(node: Node, block_id: String) -> void:
+	if not _mechanism_defaults.has(block_id):
+		return
+	if not node.has_method("set_editable_param"):
+		return
+	var defs: Dictionary = _mechanism_defaults[block_id]
+	for key in defs.keys():
+		node.call("set_editable_param", key, float(defs[key]))
+
+
+# ============================================================
+#  🎬 转场 Tab (配置闯关转场动效参数 + 实时预览)
+# ============================================================
+var _transition_params: Dictionary = {
+	"transition_type": 0,        # 0=Basic, 2=Shape, 3=Clock
+	"grid_size_x": 8.0,
+	"grid_size_y": 6.0,
+	"from_center": 1.0,          # bool as float
+	"invert": 0.0,
+	"basic_feather": 0.15,
+	"edges": 6.0,                # Shape 模式多边形边数
+	"shape_feather": 0.1,
+	"sectors": 1.0,              # Clock 模式扇区数
+	"clock_feather": 0.0,
+	"stagger_x": 0.3,
+	"stagger_y": 0.0,
+	"rotation_angle": 0.0,
+	"progress_bias_x": 0.0,
+	"progress_bias_y": 0.0,
+	"duration_in": 0.5,          # 进入动画时长
+	"duration_hold": 1.0,        # 停留时长
+	"duration_out": 0.6,         # 退出动画时长
+}
+
+const TRANSITION_PARAM_DEFS: Array = [
+	# [key, label, min, max, step, default]
+	["transition_type", "过渡类型(0基础/2多边形/3时钟)", 0.0, 3.0, 1.0, 0.0],
+	["grid_size_x", "网格列数", 1.0, 20.0, 1.0, 8.0],
+	["grid_size_y", "网格行数", 1.0, 16.0, 1.0, 6.0],
+	["from_center", "从中心展开(0/1)", 0.0, 1.0, 1.0, 1.0],
+	["invert", "反转(0/1)", 0.0, 1.0, 1.0, 0.0],
+	["basic_feather", "边缘柔和(Basic)", 0.0, 1.0, 0.01, 0.15],
+	["edges", "多边形边数(Shape)", 3.0, 64.0, 1.0, 6.0],
+	["shape_feather", "边缘柔和(Shape)", 0.0, 5.0, 0.1, 0.1],
+	["sectors", "扇区数(Clock)", 1.0, 32.0, 1.0, 1.0],
+	["clock_feather", "边缘柔和(Clock)", 0.0, 16.0, 0.5, 0.0],
+	["stagger_x", "行错位", 0.0, 1.0, 0.05, 0.3],
+	["stagger_y", "列错位", 0.0, 1.0, 0.05, 0.0],
+	["rotation_angle", "旋转角度(°)", -180.0, 180.0, 5.0, 0.0],
+	["progress_bias_x", "进度偏移X", -5.0, 5.0, 0.1, 0.0],
+	["progress_bias_y", "进度偏移Y", -5.0, 5.0, 0.1, 0.0],
+	["duration_in", "进入时长(s)", 0.1, 2.0, 0.05, 0.5],
+	["duration_hold", "停留时长(s)", 0.3, 3.0, 0.1, 1.0],
+	["duration_out", "退出时长(s)", 0.1, 2.0, 0.05, 0.6],
+]
+
+
+func _build_transition_tab() -> void:
+	var page: VBoxContainer = _create_tab_page("🎬 转场")
+
+	var tip := Label.new()
+	tip.text = "配置闯关转场动效 (调完点预览立刻看效果)"
+	tip.add_theme_font_size_override("font_size", 11)
+	tip.add_theme_color_override("font_color", Color(0.7, 0.7, 0.75))
+	page.add_child(tip)
+
+	# 加载已保存的转场配置
+	_load_transition_cfg()
+
+	# 参数行
+	for def in TRANSITION_PARAM_DEFS:
+		var key: String = def[0]
+		var label: String = def[1]
+		var min_v: float = def[2]
+		var max_v: float = def[3]
+		var step: float = def[4]
+		var default_v: float = def[5]
+		var value: float = _transition_params.get(key, default_v)
+
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 6)
+		page.add_child(row)
+
+		var lbl := Label.new()
+		lbl.text = label
+		lbl.custom_minimum_size = Vector2(160, 0)
+		lbl.add_theme_font_size_override("font_size", 11)
+		row.add_child(lbl)
+
+		var slider := HSlider.new()
+		slider.min_value = min_v
+		slider.max_value = max_v
+		slider.step = step
+		slider.value = value
+		slider.custom_minimum_size = Vector2(120, 0)
+		slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(slider)
+
+		var spin := SpinBox.new()
+		spin.min_value = min_v
+		spin.max_value = max_v
+		spin.step = step
+		spin.value = value
+		spin.custom_minimum_size = Vector2(70, 0)
+		row.add_child(spin)
+
+		var key_cap: String = key
+		slider.value_changed.connect(func(v: float) -> void:
+			spin.value = v
+			_transition_params[key_cap] = v
+			_apply_transition_to_runner()
+			_save_transition_cfg()
+		)
+		spin.value_changed.connect(func(v: float) -> void:
+			slider.value = v
+			_transition_params[key_cap] = v
+			_apply_transition_to_runner()
+			_save_transition_cfg()
+		)
+
+	# ---- 颜色配置 ----
+	var color_header := Label.new()
+	color_header.text = "── 配色 ──"
+	color_header.add_theme_font_size_override("font_size", 12)
+	color_header.add_theme_color_override("font_color", Color(0.8, 0.75, 0.6))
+	page.add_child(color_header)
+
+	# 底色
+	var bg_row := HBoxContainer.new()
+	bg_row.add_theme_constant_override("separation", 8)
+	page.add_child(bg_row)
+	var bg_lbl := Label.new()
+	bg_lbl.text = "底色"
+	bg_lbl.custom_minimum_size = Vector2(80, 0)
+	bg_lbl.add_theme_font_size_override("font_size", 12)
+	bg_row.add_child(bg_lbl)
+	var bg_picker := ColorPickerButton.new()
+	bg_picker.custom_minimum_size = Vector2(120, 30)
+	bg_picker.color = Color(_transition_params.get("bg_r", 0.12), _transition_params.get("bg_g", 0.15), _transition_params.get("bg_b", 0.25))
+	bg_picker.color_changed.connect(func(c: Color) -> void:
+		_transition_params["bg_r"] = c.r
+		_transition_params["bg_g"] = c.g
+		_transition_params["bg_b"] = c.b
+		_apply_transition_colors()
+		_save_transition_cfg()
+	)
+	bg_row.add_child(bg_picker)
+
+	# 文字色
+	var txt_row := HBoxContainer.new()
+	txt_row.add_theme_constant_override("separation", 8)
+	page.add_child(txt_row)
+	var txt_lbl := Label.new()
+	txt_lbl.text = "文字色"
+	txt_lbl.custom_minimum_size = Vector2(80, 0)
+	txt_lbl.add_theme_font_size_override("font_size", 12)
+	txt_row.add_child(txt_lbl)
+	var txt_picker := ColorPickerButton.new()
+	txt_picker.custom_minimum_size = Vector2(120, 30)
+	txt_picker.color = Color(_transition_params.get("text_r", 1.0), _transition_params.get("text_g", 0.92), _transition_params.get("text_b", 0.4))
+	txt_picker.color_changed.connect(func(c: Color) -> void:
+		_transition_params["text_r"] = c.r
+		_transition_params["text_g"] = c.g
+		_transition_params["text_b"] = c.b
+		_apply_transition_colors()
+		_save_transition_cfg()
+	)
+	txt_row.add_child(txt_picker)
+
+	# 描边色
+	var out_row := HBoxContainer.new()
+	out_row.add_theme_constant_override("separation", 8)
+	page.add_child(out_row)
+	var out_lbl := Label.new()
+	out_lbl.text = "描边色"
+	out_lbl.custom_minimum_size = Vector2(80, 0)
+	out_lbl.add_theme_font_size_override("font_size", 12)
+	out_row.add_child(out_lbl)
+	var out_picker := ColorPickerButton.new()
+	out_picker.custom_minimum_size = Vector2(120, 30)
+	out_picker.color = Color(_transition_params.get("outline_r", 0.2), _transition_params.get("outline_g", 0.1), _transition_params.get("outline_b", 0.0))
+	out_picker.color_changed.connect(func(c: Color) -> void:
+		_transition_params["outline_r"] = c.r
+		_transition_params["outline_g"] = c.g
+		_transition_params["outline_b"] = c.b
+		_apply_transition_colors()
+		_save_transition_cfg()
+	)
+	out_row.add_child(out_picker)
+
+	# 预览按钮
+	var preview_btn := Button.new()
+	preview_btn.text = "▶  预览转场效果"
+	preview_btn.custom_minimum_size = Vector2(200, 40)
+	preview_btn.add_theme_font_size_override("font_size", 14)
+	preview_btn.add_theme_color_override("font_color", Color(1.0, 0.85, 0.3))
+	preview_btn.pressed.connect(_preview_transition)
+	page.add_child(preview_btn)
+
+
+func _apply_transition_colors() -> void:
+	var runner: Node = get_node_or_null("/root/ChallengeRunner")
+	if runner == null:
+		return
+	var bg := Color(_transition_params.get("bg_r", 0.12), _transition_params.get("bg_g", 0.15), _transition_params.get("bg_b", 0.25))
+	var txt := Color(_transition_params.get("text_r", 1.0), _transition_params.get("text_g", 0.92), _transition_params.get("text_b", 0.4))
+	var outline := Color(_transition_params.get("outline_r", 0.2), _transition_params.get("outline_g", 0.1), _transition_params.get("outline_b", 0.0))
+	runner.set("transition_bg_color", bg)
+	runner.set("transition_text_color", txt)
+	runner.set("transition_outline_color", outline)
+	if runner.has_method("_rebuild_transition_texture"):
+		runner.call("_rebuild_transition_texture")
+	if runner.has_method("_apply_label_colors"):
+		runner.call("_apply_label_colors")
+
+
+func _apply_transition_to_runner() -> void:
+	var runner: Node = get_node_or_null("/root/ChallengeRunner")
+	if runner == null:
+		return
+	var shader_mat = runner.get("_transition_shader")
+	if shader_mat == null:
+		return
+	shader_mat.set_shader_parameter("transition_type", int(_transition_params.get("transition_type", 0)))
+	shader_mat.set_shader_parameter("grid_size", Vector2(_transition_params.get("grid_size_x", 8.0), _transition_params.get("grid_size_y", 6.0)))
+	shader_mat.set_shader_parameter("from_center", _transition_params.get("from_center", 1.0) > 0.5)
+	shader_mat.set_shader_parameter("invert", _transition_params.get("invert", 0.0) > 0.5)
+	shader_mat.set_shader_parameter("basic_feather", _transition_params.get("basic_feather", 0.15))
+	shader_mat.set_shader_parameter("edges", int(_transition_params.get("edges", 6.0)))
+	shader_mat.set_shader_parameter("shape_feather", _transition_params.get("shape_feather", 0.1))
+	shader_mat.set_shader_parameter("sectors", int(_transition_params.get("sectors", 1.0)))
+	shader_mat.set_shader_parameter("clock_feather", _transition_params.get("clock_feather", 0.0))
+	shader_mat.set_shader_parameter("stagger", Vector2(_transition_params.get("stagger_x", 0.3), _transition_params.get("stagger_y", 0.0)))
+	shader_mat.set_shader_parameter("rotation_angle", _transition_params.get("rotation_angle", 0.0))
+	shader_mat.set_shader_parameter("progress_bias", Vector2(_transition_params.get("progress_bias_x", 0.0), _transition_params.get("progress_bias_y", 0.0)))
+
+
+func _preview_transition() -> void:
+	var runner: Node = get_node_or_null("/root/ChallengeRunner")
+	if runner == null:
+		return
+	_apply_transition_to_runner()
+	var shader_mat = runner.get("_transition_shader")
+	if shader_mat == null:
+		return
+	var layer = runner.get("_transition_layer")
+	if layer == null:
+		return
+	var label_node = runner.get("_stage_label")
+
+	# 播放完整预览动画: 进入 → 停留(显示文字) → 退出
+	layer.visible = true
+	shader_mat.set_shader_parameter("progress", 0.0)
+	if label_node:
+		label_node.text = ""
+		label_node.modulate = Color(1, 1, 1, 0)
+
+	var dur_in: float = _transition_params.get("duration_in", 0.5)
+	var dur_hold: float = _transition_params.get("duration_hold", 1.0)
+	var dur_out: float = _transition_params.get("duration_out", 0.6)
+
+	var tw := create_tween()
+	# 进入
+	tw.tween_method(func(v: float) -> void:
+		shader_mat.set_shader_parameter("progress", v)
+	, 0.0, 1.0, dur_in).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_CUBIC)
+	# 显示文字
+	tw.tween_callback(func() -> void:
+		if label_node:
+			label_node.text = "第 1 关"
+			label_node.modulate = Color(1, 1, 1, 1)
+	)
+	# 停留
+	tw.tween_interval(dur_hold)
+	# 退出
+	tw.tween_method(func(v: float) -> void:
+		shader_mat.set_shader_parameter("progress", v)
+	, 1.0, 0.0, dur_out).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+	if label_node:
+		tw.parallel().tween_property(label_node, "modulate:a", 0.0, dur_out * 0.8)
+	tw.tween_callback(func() -> void:
+		layer.visible = false
+	)
+
+
+func _save_transition_cfg() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load("user://tuner.cfg")  # 追加到已有 tuner.cfg
+	for key in _transition_params.keys():
+		cfg.set_value("transition", key, _transition_params[key])
+	cfg.save("user://tuner.cfg")
+
+
+func _load_transition_cfg() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load("user://tuner.cfg") != OK:
+		return
+	if not cfg.has_section("transition"):
+		return
+	for key in cfg.get_section_keys("transition"):
+		_transition_params[key] = cfg.get_value("transition", key, _transition_params.get(key, 0.0))
+
+
+# ============================================================
 #  按钮动作: 重置/保存/加载
 # ============================================================
 func _on_reset() -> void:
@@ -2803,11 +3728,24 @@ func _on_save() -> void:
 	_save_to_path(_stable_cfg_path())
 
 
-## 保存到备份1 (backup1.cfg) — 用户手动点保存按钮触发
+## 保存按钮 — 同时写 tune.cfg (下次启动会读) + backup1.cfg (备份)
+##
+## 历史 bug: 旧版只写 backup1.cfg, 但启动自动加载读的是 tune.cfg
+##           用户调参 → 点保存 → 关游戏重开 → 看到旧值 → "保存不了!"
+##
+## 修复: 同时写两份, 语义对齐用户心智模型
+##   tune.cfg     ← 启动自动加载, 必须更新成最新值才能"保存生效"
+##   backup1.cfg  ← 安全备份, 用户可以用"加载"按钮回滚到这个手动快照
+##
+## 这样既保留\"保存=备份点\"的语义, 又让\"保存=立即生效\"成立
 func _on_save_backup() -> void:
-	var path := _stable_cfg_dir().path_join("backup1.cfg")
-	_save_to_path(path)
-	print("[Tuner] 已保存备份1 → ", path)
+	# 1) 写 tune.cfg (启动加载的那一份, 必须更新才能下次启动看到)
+	var tune_path: String = _stable_cfg_path()
+	_save_to_path(tune_path)
+	# 2) 写 backup1.cfg (手动备份点)
+	var backup_path: String = _stable_cfg_dir().path_join("backup1.cfg")
+	_save_to_path(backup_path)
+	print("[Tuner] 已保存 → tune.cfg (下次启动生效) + backup1.cfg (备份)")
 
 
 ## 从备份1 (backup1.cfg) 加载 — 用户手动点加载按钮触发
@@ -2890,6 +3828,11 @@ func _save_to_path(save_path: String) -> void:
 			var rm: int = c.get_point_right_mode(i)
 			pts.append([pt.x, pt.y, lt, rt, lm, rm])
 		cfg.set_value("curves", cprop, pts)
+	# 机关默认值 [mechanism_defaults]
+	for bid in _mechanism_defaults.keys():
+		var defs: Dictionary = _mechanism_defaults[bid]
+		for k in defs.keys():
+			cfg.set_value("mechanism_defaults", bid + ":" + k, float(defs[k]))
 	# 确保稳定目录存在 (save_path 已在函数顶部声明)
 	DirAccess.make_dir_recursive_absolute(_stable_cfg_dir())
 	cfg.save(save_path)
@@ -2995,6 +3938,23 @@ func _load_from_path(load_path: String) -> void:
 			_apply_curve_to_target(cprop, c)
 	# 加载颜色配置 (走 [color] 段, 由 ColorPickerButton 行管理)
 	_load_colors_from_cfg(cfg)
+	# 加载机关默认值 [mechanism_defaults]
+	if cfg.has_section("mechanism_defaults"):
+		_mechanism_defaults.clear()
+		for full_key in cfg.get_section_keys("mechanism_defaults"):
+			var parts: PackedStringArray = String(full_key).split(":", true, 1)
+			if parts.size() == 2:
+				var bid: String = parts[0]
+				var k: String = parts[1]
+				if not _mechanism_defaults.has(bid):
+					_mechanism_defaults[bid] = {}
+				var v: float = float(cfg.get_value("mechanism_defaults", full_key, 0.0))
+				_mechanism_defaults[bid][k] = v
+				# 同步到 UI (如果 row 存在)
+				var row_key: String = bid + ":" + k
+				if _mech_rows.has(row_key):
+					_mech_rows[row_key].slider.set_value_no_signal(v)
+					_mech_rows[row_key].spin.set_value_no_signal(v)
 	# 加载完成后启用图形参数自动持久化 (图形参数改了立即生效, 不走 autosave)
 	# 注意: _autosave_enabled 保持 false — 用户要求手动保存, 不自动写盘
 	_graphics_autosave_enabled = true

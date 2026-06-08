@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://btrk_springmushroom_001"]
+
+[ext_resource type="Script" path="res://track_editor/blocks/Block_SpringMushroom.gd" id="1_script"]
+
+[node name="SpringMushroom" type="Node3D"]
+script = ExtResource("1_script")
