@@ -40,58 +40,122 @@ var car_mesh: Node3D = null
 ## 自由钩索总开关
 @export var free_grapple_enabled: bool = true
 
-@export_group("锚点")
-## 锚点基础偏移 (本地坐标): X=右, Y=上, Z=前方基础距离
+## ==================== 直线钩索 ====================
+@export_group("直线-锚点")
+## 锚点基础偏移: X=右, Y=上, Z=前方基础距离
 @export var anchor_offset: Vector3 = Vector3(0.0, 5.0, 15.0)
-## 锚点前方距离随车速增加的系数 (米/(m/s)). 实际前方距离 = Z + 车速 × 此值
+## 前方距离随水平速度增加的系数
 @export_range(0.0, 3.0, 0.05) var anchor_speed_scale: float = 0.8
-## 锚点高度随水平车速增加的系数 (米/(m/s))
+## 高度随水平速度增加的系数
 @export_range(0.0, 1.0, 0.02) var anchor_height_speed_scale: float = 0.15
-## 锚点高度随向上速度增加的系数 (米/(m/s)). 车往上飞时锚点更高
+## 高度随向上速度增加的系数
 @export_range(0.0, 2.0, 0.05) var anchor_height_upspeed_scale: float = 0.5
 
-@export_group("收绳")
-## 绳索射出后延迟多久开始收绳 (秒). 射出动画在此期间播放, 绳头飞向锚点
+@export_group("直线-收绳")
+## 射出动画时长 (秒)
 @export_range(0.2, 2.0, 0.02) var rope_taut_delay: float = 0.5
-## 收绳速度 (米/秒). 每秒绳子缩短多少米
+## 收绳速度 (米/秒)
 @export_range(5.0, 80.0, 1.0) var reel_speed: float = 35.0
-## 朝锚点的持续拉力 (N × mass). 绳子绷紧时朝锚点拉车的力
+## 朝锚点拉力 (N × mass)
 @export_range(30.0, 500.0, 5.0) var pull_force: float = 180.0
-## 收绳最大时长 (秒). 超时强制断绳甩出
+## 收绳最大时长 (秒)
 @export_range(0.5, 5.0, 0.1) var pull_max_time: float = 2.5
-## 断绳距离百分比 (初始绳长的%). 车与锚点距离 < 绳长×此比例 时断绳
-## 例: 0.2 = 距离缩短到绳长的 20% 以下时断绳
+## 断绳距离百分比
 @export_range(0.05, 0.5, 0.01) var arrive_ratio: float = 0.2
-## 收绳时重力抵消比例 (0=不抵消, 1=完全抵消重力)
+## 重力抵消比例
 @export_range(0.0, 1.0, 0.05) var pull_gravity_cancel: float = 0.8
-## 碰撞豁免时间 (秒). 射出后短暂无视墙体碰撞
-@export_range(0.0, 2.0, 0.05) var collision_exempt_time: float = 0.3
 
-@export_group("甩出")
-## 甩出速度倍率. 绳断时 速度 = 当前速度 × 倍率
+@export_group("直线-甩出")
+## 甩出速度倍率
 @export_range(1.0, 3.0, 0.05) var fling_speed_mult: float = 1.2
-## 甩出最低速度 (m/s). 保底甩出速度
+## 甩出保底速度 (m/s)
 @export_range(5.0, 40.0, 1.0) var fling_min_speed: float = 18.0
 
-@export_group("空中")
+@export_group("直线-空中")
 ## 空中转向速度 (rad/s)
 @export_range(0.5, 8.0, 0.1) var air_turn_speed: float = 2.5
-## 按住漂移键时转向倍率
+## 漂移键转向倍率
 @export_range(1.0, 5.0, 0.1) var air_drift_turn_mult: float = 2.0
-## 下坠重力倍率 (<1 = 滞空感, 1 = 正常, >1 = 加速下落)
+## 空中重力倍率
 @export_range(0.1, 5.0, 0.05) var fall_gravity_mult: float = 0.5
-## 空中阻力系数. 速度越高阻力越大, 让车逐渐减速. 0=无阻力
+## 空中阻力
 @export_range(0.0, 2.0, 0.02) var air_drag: float = 0.3
 
-@export_group("发射")
-## 发射速度 (m/s). 按空格后沿车头方向的速度
+@export_group("直线-发射")
+## 发射速度 (m/s)
 @export_range(10.0, 80.0, 1.0) var launch_speed: float = 35.0
 ## 发射后无重力时间 (秒)
 @export_range(0.0, 1.5, 0.05) var launch_float_time: float = 0.4
-## 发射持续时间 (秒). 之后回到自由落体
+## 发射持续时间 (秒)
 @export_range(0.1, 2.0, 0.05) var launch_duration: float = 0.5
-## 发射后下坠重力倍率 (>1 = 加速落地). 弹射结束后进入 FALLING 使用此值
+## 发射后重力倍率
 @export_range(1.0, 5.0, 0.1) var post_launch_gravity_mult: float = 2.5
+
+## ==================== 过弯钩索 ====================
+@export_group("过弯-锚点")
+## 过弯锚点偏移: X=侧向距离(漂移方向), Y=高度, Z=少量前移
+@export var swing_anchor_offset: Vector3 = Vector3(15.0, 8.0, 5.0)
+## 前方距离随水平速度系数
+@export_range(0.0, 3.0, 0.05) var swing_anchor_speed_scale: float = 0.5
+## 高度随水平速度系数
+@export_range(0.0, 1.0, 0.02) var swing_anchor_height_speed_scale: float = 0.1
+## 高度随向上速度系数
+@export_range(0.0, 2.0, 0.05) var swing_anchor_height_upspeed_scale: float = 0.3
+## 漂移基础偏转角度 (度)
+@export_range(0.0, 90.0, 1.0) var drift_base_yaw_deg: float = 30.0
+## 方向键额外偏转角度 (度)
+@export_range(0.0, 90.0, 1.0) var steer_extra_yaw_deg: float = 45.0
+
+@export_group("过弯-收绳")
+## 过弯钩索挂住后是否无视墙体碰撞 (穿墙). 让漂移过弯时绳子拉着车穿过弯道内墙
+@export var swing_ignore_wall: bool = true
+## 过弯射出动画时长 (秒)
+@export_range(0.1, 1.5, 0.02) var swing_rope_taut_delay: float = 0.3
+## 过弯收绳速度 (米/秒)
+@export_range(5.0, 80.0, 1.0) var swing_reel_speed: float = 20.0
+## 过弯拉力 (N × mass)
+@export_range(30.0, 500.0, 5.0) var swing_pull_force: float = 220.0
+## 过弯收绳最大时长 (秒)
+@export_range(0.3, 3.0, 0.05) var swing_duration: float = 1.2
+## 过弯断绳距离百分比
+@export_range(0.05, 0.5, 0.01) var swing_arrive_ratio: float = 0.15
+## 过弯重力抵消
+@export_range(0.0, 1.0, 0.05) var swing_gravity_cancel: float = 0.9
+## 松手断绳
+@export var release_on_steer_up: bool = true
+## 松手容错 (秒)
+@export_range(0.0, 0.3, 0.02) var steer_release_grace: float = 0.08
+## 扭矩修正强度 (rad/s²)
+@export_range(0.0, 15.0, 0.5) var swing_torque: float = 6.0
+
+@export_group("过弯-甩出")
+## 过弯甩出速度倍率
+@export_range(1.0, 3.0, 0.05) var swing_fling_speed_mult: float = 1.1
+## 过弯甩出保底速度 (m/s)
+@export_range(5.0, 40.0, 1.0) var swing_fling_min_speed: float = 15.0
+
+@export_group("过弯-空中")
+## 过弯后空中转向速度
+@export_range(0.5, 8.0, 0.1) var swing_air_turn_speed: float = 3.0
+## 过弯后漂移键转向倍率
+@export_range(1.0, 5.0, 0.1) var swing_air_drift_turn_mult: float = 2.5
+## 过弯后空中重力倍率
+@export_range(0.1, 5.0, 0.05) var swing_fall_gravity_mult: float = 1.0
+## 过弯后空中阻力
+@export_range(0.0, 2.0, 0.02) var swing_air_drag: float = 0.2
+
+@export_group("过弯-发射")
+## 过弯后发射速度 (m/s)
+@export_range(10.0, 80.0, 1.0) var swing_launch_speed: float = 30.0
+## 过弯后发射无重力时间
+@export_range(0.0, 1.5, 0.05) var swing_launch_float_time: float = 0.3
+## 过弯后发射持续时间
+@export_range(0.1, 2.0, 0.05) var swing_launch_duration: float = 0.4
+
+## ==================== 通用 ====================
+@export_group("通用")
+## 碰撞豁免时间 (秒)
+@export_range(0.0, 2.0, 0.05) var collision_exempt_time: float = 0.3
 
 @export_group("镜头效果")
 ## 发射时震屏强度 (0=无震屏)
@@ -140,6 +204,10 @@ var _exempt_timer: float = 0.0
 var _launch_timer: float = 0.0
 var _wall_hit: bool = false
 var _has_launched: bool = false  ## 本次飞行是否已发射过
+var _swing_dir: float = 0.0     ## 本次钩索的偏转方向 (-1=左, 0=直线, 1=右)
+var _is_swing_hook: bool = false ## 本次是否是过弯钩索 (有偏转)
+var _steer_release_timer: float = 0.0  ## 松开方向键的计时器
+var _hook_drift_broken: bool = false   ## 钩索挂住时是否已断漂
 var _original_collision_mask: int = 0
 var _original_collision_layer: int = 0
 
@@ -221,22 +289,66 @@ func _update_pulling(delta: float) -> void:
 		_fling_release()
 		return
 
-	# 1. 超时 → 强制断绳甩出
-	if _state_timer >= pull_max_time:
+	# 1. 超时 → 强制断绳甩出 (过弯钩索有独立时长)
+	var max_time: float = swing_duration if _is_swing_hook else pull_max_time
+	if _state_timer >= max_time:
 		_fling_release()
 		return
 
-	# 2. 绳子射出延迟
-	if _state_timer < rope_taut_delay:
+	# 2. 绳子射出延迟 (直线/过弯各自独立)
+	var cur_taut_delay: float = swing_rope_taut_delay if _is_swing_hook else rope_taut_delay
+	if _state_timer < cur_taut_delay:
 		return
 
-	# 3. 收绳: 每帧缩短允许绳长
-	_current_rope_length -= reel_speed * delta
+	# 2.5 钩索挂住的第一帧: 设 _free_grapple_active + 强制断漂 + 过弯穿墙
+	if not _hook_drift_broken:
+		_hook_drift_broken = true
+		# 现在才设 flag (射出阶段不设, 保留正常摩擦让漂移维持到此刻)
+		if car and "_free_grapple_active" in car:
+			car.set("_free_grapple_active", true)
+		# 过弯钩索: 挂住后无视墙体碰撞 (穿墙荡弯)
+		if _is_swing_hook and swing_ignore_wall:
+			_disable_wall_collision()
+		if car and "state" in car:
+			var car_state_now: int = int(car.get("state"))
+			if car_state_now == 1:  # State.DRIFT
+				car.set("state", 0)  # State.NORMAL
+				if "drift_dir" in car:
+					car.set("drift_dir", 0.0)
+				if "drift_intensity" in car:
+					car.set("drift_intensity", 0.0)
+				if "_is_in_songqian" in car:
+					car.set("_is_in_songqian", false)
+				# 要求松开Q才能重新入漂 (防止落地后自动续漂)
+				if "_require_release_q" in car:
+					car.set("_require_release_q", true)
+				if "_drift_system" in car and car.get("_drift_system") != null:
+					var ds = car.get("_drift_system")
+					if ds.has_method("end_drift"):
+						ds.call("end_drift", false)
+
+	# 3. 过弯钩索: 松开方向键 → 断绳甩出 (让玩家控制荡多久)
+	if _is_swing_hook and release_on_steer_up:
+		var steer_now: float = Input.get_axis("steer_right", "steer_left")
+		if absf(steer_now) < 0.05:
+			steer_now = Input.get_axis("ui_right", "ui_left")
+		var holding_swing_dir: bool = (steer_now * _swing_dir) > 0.1
+		if not holding_swing_dir:
+			_steer_release_timer += delta
+			if _steer_release_timer >= steer_release_grace:
+				_fling_release()
+				return
+		else:
+			_steer_release_timer = 0.0
+
+	# 4. 收绳: 每帧缩短允许绳长
+	var cur_reel: float = swing_reel_speed if _is_swing_hook else reel_speed
+	_current_rope_length -= cur_reel * delta
 	_current_rope_length = maxf(_current_rope_length, 0.0)
 
-	# 4. 断绳条件: 绳长缩到阈值以下, 或车实际距离 < 阈值
-	#    阈值 = 初始绳长 × arrive_ratio (绳越长断绳距离越大)
-	var snap_dist: float = _initial_rope_length * arrive_ratio
+	# 5. 断绳条件
+	var cur_arrive: float = swing_arrive_ratio if _is_swing_hook else arrive_ratio
+	var snap_dist: float = _initial_rope_length * cur_arrive
 	if _current_rope_length <= snap_dist or dist < snap_dist:
 		_fling_release()
 		return
@@ -251,36 +363,53 @@ func _update_pulling(delta: float) -> void:
 		else:
 			pull_dir = Vector3.UP
 
+	var cur_pull_force: float = swing_pull_force if _is_swing_hook else pull_force
+	var cur_gravity_cancel: float = swing_gravity_cancel if _is_swing_hook else pull_gravity_cancel
+
 	if dist > _current_rope_length:
 		var vel: Vector3 = car.linear_velocity
 		var radial_speed: float = vel.dot(pull_dir)
 		if radial_speed < 0.0:
-			# 去掉远离锚点的速度分量 (只保留切线速度)
 			var new_vel: Vector3 = vel - pull_dir * radial_speed
-			# 保护: 不把 Y 速度压到负值 (防止陷地)
 			if new_vel.y < 0.0 and vel.y >= 0.0:
 				new_vel.y = 0.0
 			car.linear_velocity = new_vel
-		# 朝锚点拉力
 		var overshoot: float = dist - _current_rope_length
-		var constraint_force: float = pull_force * clampf(overshoot / 5.0, 0.2, 1.5)
+		var constraint_force: float = cur_pull_force * clampf(overshoot / 5.0, 0.2, 1.5)
 		car.apply_central_force(pull_dir * constraint_force * car.mass)
 	else:
-		# 在允许范围内: 施加温和拉力
-		car.apply_central_force(pull_dir * pull_force * 0.5 * car.mass)
+		car.apply_central_force(pull_dir * cur_pull_force * 0.5 * car.mass)
 
-	# 6. 重力完全抵消 (收绳阶段车不应该下沉)
-	car.apply_central_force(Vector3.UP * 9.8 * car.mass * pull_gravity_cancel)
+	# 6. 重力抵消
+	car.apply_central_force(Vector3.UP * 9.8 * car.mass * cur_gravity_cancel)
 
-	# 7. 地面保护: 如果车在地面附近且速度向下, 清除向下速度
+	# 7. 过弯扭矩修正: 让车头朝钩索切线方向转 (绕锚点荡时车头跟着转)
+	if _is_swing_hook and swing_torque > 0.01 and car_mesh:
+		# 切线方向 = 锚点到车的向量 × UP (垂直于绳子的水平方向)
+		var radial: Vector3 = (car.global_position - _anchor_world_pos)
+		radial.y = 0.0
+		if radial.length() > 0.1:
+			# 切线 = radial 旋转90° (根据 swing_dir 决定方向)
+			var tangent: Vector3 = Vector3(-radial.z, 0.0, radial.x).normalized() * _swing_dir
+			# 当前车头方向
+			var car_fwd: Vector3 = -car_mesh.global_transform.basis.z
+			car_fwd.y = 0.0
+			car_fwd = car_fwd.normalized()
+			# 计算车头与切线方向的偏差角 (有符号)
+			var cross_y: float = car_fwd.x * tangent.z - car_fwd.z * tangent.x
+			# 施加扭矩让车头朝切线方向转
+			car_mesh.rotate_y(swing_torque * cross_y * delta)
+
+	# 8. 地面保护: 如果车在地面附近且速度向下, 清除向下速度
 	if car.linear_velocity.y < -1.0 and _is_on_ground():
 		var v: Vector3 = car.linear_velocity
 		v.y = 0.0
 		car.linear_velocity = v
 
-	# 7. 撞墙检测
-	if _exempt_timer <= 0.0 and _detect_wall_collision():
-		_enter_state(State.WALL_HIT)
+	# 9. 撞墙检测 (过弯穿墙时跳过, 因为车已经可以穿过墙体)
+	if not (_is_swing_hook and swing_ignore_wall):
+		if _exempt_timer <= 0.0 and _detect_wall_collision():
+			_enter_state(State.WALL_HIT)
 
 
 # ============================================================
@@ -290,26 +419,32 @@ func _update_pulling(delta: float) -> void:
 func _update_falling(delta: float) -> void:
 	_state_timer += delta
 
-	# 绳断后统一重力: fall_gravity_mult 控制
-	var gravity_adjust: float = (1.0 - fall_gravity_mult) * 9.8 * car.mass
+	# 使用对应参数集 (直线 vs 过弯)
+	var cur_grav: float = swing_fall_gravity_mult if _is_swing_hook else fall_gravity_mult
+	var cur_drag: float = swing_air_drag if _is_swing_hook else air_drag
+	var cur_turn: float = swing_air_turn_speed if _is_swing_hook else air_turn_speed
+	var cur_drift_mult: float = swing_air_drift_turn_mult if _is_swing_hook else air_drift_turn_mult
+
+	# 重力
+	var gravity_adjust: float = (1.0 - cur_grav) * 9.8 * car.mass
 	car.apply_central_force(Vector3.UP * gravity_adjust)
 
-	# 空气阻力: F = -v * speed * air_drag * mass (二次方阻力, 速度越快减速越猛)
-	if air_drag > 0.001:
+	# 空气阻力
+	if cur_drag > 0.001:
 		var vel: Vector3 = car.linear_velocity
 		var speed: float = vel.length()
 		if speed > 1.0:
-			car.apply_central_force(-vel.normalized() * speed * air_drag * car.mass)
+			car.apply_central_force(-vel.normalized() * speed * cur_drag * car.mass)
 
-	# 空中转向: 只有未发射时可以调整车头 (发射后锁定方向快速落地)
+	# 空中转向: 只有未发射时可以调整车头
 	if not _has_launched:
 		var steer_input: float = Input.get_axis("steer_right", "steer_left")
 		if absf(steer_input) < 0.05:
 			steer_input = Input.get_axis("ui_right", "ui_left")
 		var drift_held: bool = Input.is_action_pressed("drift")
-		var turn_mult: float = air_drift_turn_mult if drift_held else 1.0
+		var turn_mult: float = cur_drift_mult if drift_held else 1.0
 		if car_mesh and absf(steer_input) > 0.1:
-			car_mesh.rotate_y(air_turn_speed * turn_mult * steer_input * delta)
+			car_mesh.rotate_y(cur_turn * turn_mult * steer_input * delta)
 
 	# 着地检测 (前 0.3s 不检测)
 	if _state_timer > 0.3 and _is_on_ground():
@@ -327,13 +462,16 @@ func _update_falling(delta: float) -> void:
 func _update_launching(delta: float) -> void:
 	_launch_timer += delta
 
+	var cur_float_time: float = swing_launch_float_time if _is_swing_hook else launch_float_time
+	var cur_duration: float = swing_launch_duration if _is_swing_hook else launch_duration
+
 	# 发射期间减弱重力
-	if _launch_timer < launch_float_time:
+	if _launch_timer < cur_float_time:
 		var gravity_cancel: float = 9.8 * car.mass * 0.9
 		car.apply_central_force(Vector3.UP * gravity_cancel)
 
 	# 发射结束 → 自由落体
-	if _launch_timer >= launch_duration:
+	if _launch_timer >= cur_duration:
 		_enter_state(State.FALLING)
 
 	# 着地检测
@@ -372,9 +510,11 @@ func _enter_state(new_state: int) -> void:
 			_has_launched = false
 			if car and "_free_grapple_active" in car:
 				car.set("_free_grapple_active", false)
+			# 恢复防弹下压力
+			if car and "_jump_pad_kick_left" in car:
+				car.set("_jump_pad_kick_left", 0.0)
 		State.PULLING:
-			if car and "_free_grapple_active" in car:
-				car.set("_free_grapple_active", true)
+			pass  # flag 在挂住施力时设 (不在进入 PULLING 时设, 保留射出阶段的正常摩擦)
 		State.FALLING:
 			if car and "_free_grapple_active" in car:
 				car.set("_free_grapple_active", true)
@@ -401,35 +541,83 @@ func _trigger_pull() -> void:
 	_charges -= 1
 	emit_signal("charges_changed", _charges, max_charges)
 
-	# 必须最先设 flag
-	if car and "_free_grapple_active" in car:
-		car.set("_free_grapple_active", true)
+	# 注意: 不在射出阶段设 _free_grapple_active (否则摩擦降低会导致提前断漂)
+	# 改在钩索挂住施力时 (_hook_drift_broken 那里) 才设 flag
 
 	_has_launched = false
+	_steer_release_timer = 0.0
+	_hook_drift_broken = false
 
-	# 计算锚点: 前方距离根据水平速度, 高度根据水平速度+向上速度
+	# 判断是否过弯钩索: 正在漂移时触发 = 过弯钩索
+	var drift_d: float = 0.0
+	if car and "drift_dir" in car and "state" in car:
+		var car_state: int = int(car.get("state"))
+		if car_state == 1:  # State.DRIFT
+			drift_d = float(car.get("drift_dir"))
+
+	_is_swing_hook = absf(drift_d) > 0.1
+	_swing_dir = drift_d  # 记录漂移方向 (用于松手断绳检测和扭矩修正)
+
+	# 根据类型计算锚点
 	var vel: Vector3 = car.linear_velocity
 	var horizontal_speed: float = Vector2(vel.x, vel.z).length()
-	var upward_speed: float = maxf(vel.y, 0.0)  # 只取向上分量，向下不影响
-	var forward_dist: float = anchor_offset.z + horizontal_speed * anchor_speed_scale
-	var height: float = anchor_offset.y + horizontal_speed * anchor_height_speed_scale + upward_speed * anchor_height_upspeed_scale
+	var upward_speed: float = maxf(vel.y, 0.0)
 
-	if car_mesh:
-		var origin: Vector3 = car_mesh.global_position
-		var forward: Vector3 = -car_mesh.global_transform.basis.z
-		var right: Vector3 = car_mesh.global_transform.basis.x
-		_anchor_world_pos = origin \
-			+ right * anchor_offset.x \
-			+ Vector3.UP * height \
-			+ forward * forward_dist
+	if _is_swing_hook:
+		# 过弯钩索: 锚点在车的侧面 (漂移方向), 固定偏移
+		# swing_anchor_offset: X=侧向距离, Y=高度, Z=前方距离
+		var side_dist: float = swing_anchor_offset.x + horizontal_speed * swing_anchor_speed_scale
+		var height: float = swing_anchor_offset.y + horizontal_speed * swing_anchor_height_speed_scale + upward_speed * swing_anchor_height_upspeed_scale
+		var fwd_dist: float = swing_anchor_offset.z
+
+		if car_mesh:
+			var origin: Vector3 = car_mesh.global_position
+			var basis: Basis = car_mesh.global_transform.basis
+			var body_mesh: Node3D = car_mesh.get_node_or_null("suv2")
+			if body_mesh and absf(body_mesh.rotation.y) > 0.001:
+				basis = basis.rotated(basis.y, body_mesh.rotation.y)
+			var forward: Vector3 = -basis.z
+			var right: Vector3 = basis.x
+			# _swing_dir: 左漂=正(锚点在左), 右漂=负(锚点在右)
+			# right 指向车的右边, 所以左边 = -right
+			_anchor_world_pos = origin \
+				+ right * (-_swing_dir * side_dist) \
+				+ Vector3.UP * height \
+				+ forward * fwd_dist
+		else:
+			_anchor_world_pos = car.global_position + Vector3(-_swing_dir * side_dist, height, 0)
 	else:
-		_anchor_world_pos = car.global_position + Vector3(0, height, -forward_dist)
+		# 直线钩索: 锚点在车头正前方
+		var forward_dist: float = anchor_offset.z + horizontal_speed * anchor_speed_scale
+		var height: float = anchor_offset.y + horizontal_speed * anchor_height_speed_scale + upward_speed * anchor_height_upspeed_scale
+
+		if car_mesh:
+			var origin: Vector3 = car_mesh.global_position
+			var basis: Basis = car_mesh.global_transform.basis
+			var body_mesh: Node3D = car_mesh.get_node_or_null("suv2")
+			if body_mesh and absf(body_mesh.rotation.y) > 0.001:
+				basis = basis.rotated(basis.y, body_mesh.rotation.y)
+			var forward: Vector3 = -basis.z
+			var right: Vector3 = basis.x
+			_anchor_world_pos = origin \
+				+ right * anchor_offset.x \
+				+ Vector3.UP * height \
+				+ forward * forward_dist
+		else:
+			_anchor_world_pos = car.global_position + Vector3(0, height, -forward_dist)
 
 	_initial_rope_length = car.global_position.distance_to(_anchor_world_pos)
 	_current_rope_length = _initial_rope_length
 
+
+
 	# 不禁用碰撞 (保留地面碰撞, 防止陷地)
 	_exempt_timer = 0.0
+
+	# 免疫防弹下压力: 设一个长的 kick 窗口跳过 _apply_ground_stick
+	# 整个钩索期间 (射出+收绳) 都不受防弹下压影响
+	if car and "_jump_pad_kick_left" in car:
+		car.set("_jump_pad_kick_left", 99.0)  # 足够长, 钩索结束时会清掉
 
 	# 清除向下速度分量 (确保不会被重力压着跑不动)
 	var cur_vel: Vector3 = car.linear_velocity
@@ -444,6 +632,15 @@ func _trigger_pull() -> void:
 ## 绳断甩出: 靠近锚点/超时 → 绳断, 沿当前速度甩出
 func _fling_release() -> void:
 	_hide_rope()
+	# 恢复碰撞 (过弯穿墙时在挂住阶段禁用了碰撞)
+	# 如果车正嵌在墙里, 延迟恢复碰撞 (等车飞出去后再恢复, 避免被弹飞)
+	if _is_swing_hook and swing_ignore_wall:
+		if _is_inside_wall():
+			_exempt_timer = collision_exempt_time
+		else:
+			_restore_collision()
+	else:
+		_restore_collision()
 
 	var vel: Vector3 = car.linear_velocity
 	var speed: float = vel.length()
@@ -458,7 +655,9 @@ func _fling_release() -> void:
 	fling_dir.y = maxf(fling_dir.y, -0.2)
 	fling_dir = fling_dir.normalized()
 
-	var fling_speed: float = maxf(speed * fling_speed_mult, fling_min_speed)
+	var cur_fling_mult: float = swing_fling_speed_mult if _is_swing_hook else fling_speed_mult
+	var cur_fling_min: float = swing_fling_min_speed if _is_swing_hook else fling_min_speed
+	var fling_speed: float = maxf(speed * cur_fling_mult, cur_fling_min)
 	car.linear_velocity = fling_dir * fling_speed
 
 	_enter_state(State.FALLING)
@@ -477,12 +676,13 @@ func _trigger_launch() -> void:
 	_enter_state(State.LAUNCHING)
 	_launch_timer = 0.0
 
+	var cur_launch_speed: float = swing_launch_speed if _is_swing_hook else launch_speed
 	var forward: Vector3 = -car_mesh.global_transform.basis.z if car_mesh else Vector3.FORWARD
 	forward.y = clampf(forward.y, -0.3, 0.3)
 	forward = forward.normalized()
-	car.linear_velocity = forward * launch_speed
+	car.linear_velocity = forward * cur_launch_speed
 	_apply_camera_effect(launch_shake_intensity, launch_shake_duration, launch_fov_boost)
-	print("[FreeGrapple] 发射! 方向=%s, 速度=%.1f" % [str(forward), launch_speed])
+	print("[FreeGrapple] 发射! 方向=%s, 速度=%.1f" % [str(forward), cur_launch_speed])
 
 
 # ============================================================
@@ -659,7 +859,8 @@ func _update_rope_visual() -> void:
 
 	# 射出动画: 绳头从车飞向锚点
 	# 飞行进度: 0 = 刚射出(绳头在车上), 1 = 到达锚点
-	var fly_duration: float = maxf(rope_taut_delay - 0.1, 0.05)  # 在延迟结束前0.1s到达
+	var cur_taut: float = swing_rope_taut_delay if _is_swing_hook else rope_taut_delay
+	var fly_duration: float = maxf(cur_taut - 0.1, 0.05)  # 在延迟结束前0.1s到达
 	var fly_progress: float = clampf(_state_timer / fly_duration, 0.0, 1.0)
 	# ease-out: 开始快结尾慢 (钩索飞出的感觉)
 	var eased: float = 1.0 - (1.0 - fly_progress) * (1.0 - fly_progress)
