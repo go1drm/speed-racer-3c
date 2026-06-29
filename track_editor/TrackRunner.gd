@@ -91,8 +91,35 @@ func _load_track(data: Resource) -> void:
 		# 在 add_child 之后再 set 参数, 因为 setter 内部 rebuild() 需要 is_inside_tree()
 		# 各 setter 调用顺序无所谓, 最后一次 rebuild 会用所有最新值
 		if not bparams.is_empty() and node.has_method("set_editable_param"):
+			# 先应用普通参数 (跳过 _wl_ / _wr_ 开头的墙壁序列化数据)
 			for k in bparams.keys():
+				if String(k).begins_with("_wl_") or String(k).begins_with("_wr_"):
+					continue
 				node.call("set_editable_param", String(k), float(bparams[k]))
+			# 恢复 WallCurve 数据 (编辑器里关闭的墙壁游戏中也要关闭)
+			if node.has_method("get_wall_curve_left") and bparams.has("_wl_count"):
+				var wl: WallCurve = node.call("get_wall_curve_left")
+				var count: int = int(bparams["_wl_count"])
+				wl.nodes.clear()
+				for wi in range(count):
+					var t: float = float(bparams.get("_wl_t_%d" % wi, 0.0))
+					var active: bool = float(bparams.get("_wl_a_%d" % wi, 1.0)) > 0.5
+					wl.nodes.append({"t": t, "active": active})
+				if wl.nodes.size() < 2:
+					wl.nodes = [{"t": 0.0, "active": true}, {"t": 1.0, "active": true}]
+			if node.has_method("get_wall_curve_right") and bparams.has("_wr_count"):
+				var wr: WallCurve = node.call("get_wall_curve_right")
+				var count_r: int = int(bparams["_wr_count"])
+				wr.nodes.clear()
+				for wi in range(count_r):
+					var t: float = float(bparams.get("_wr_t_%d" % wi, 0.0))
+					var active: bool = float(bparams.get("_wr_a_%d" % wi, 1.0)) > 0.5
+					wr.nodes.append({"t": t, "active": active})
+				if wr.nodes.size() < 2:
+					wr.nodes = [{"t": 0.0, "active": true}, {"t": 1.0, "active": true}]
+			# 墙壁数据恢复后重建 (让新的 WallCurve 状态生效)
+			if (bparams.has("_wl_count") or bparams.has("_wr_count")) and node.has_method("_rebuild"):
+				node.call("_rebuild")
 
 	# 2. 实例化钩索锚点
 	var anchors_root := Node3D.new()

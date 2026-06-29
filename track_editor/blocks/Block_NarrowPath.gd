@@ -27,6 +27,12 @@ class_name Block_NarrowPath
 @export var rail_color: Color = Color(0.7, 0.3, 0.1)
 @export_range(0.0, 2.0, 0.1) var edge_glow: float = 0.5
 
+@export_group("墙壁")
+@export_range(0.0, 5.0, 0.1) var wall_height: float = 0.0  ## 默认0=无墙, 向后兼容旧地图
+@export_range(0.1, 1.0, 0.05) var wall_thickness: float = 0.3
+@export var wall_color: Color = Color(0.2, 0.5, 0.9, 0.45)  ## 半透明蓝色
+@export_range(0.0, 2.0, 0.1) var wall_emission: float = 0.6
+
 ## Hermite 模式: 当 hermite_from_tan 非零时启用, _rebuild 用 Hermite 插值代替贝塞尔
 ## 这些值是本地空间切线向量 (由 TrackEditor 连接时设置)
 var hermite_from_tan: Vector3 = Vector3.ZERO
@@ -39,6 +45,10 @@ var _color_area: Area3D = null  # 颜色限制检测区
 var _excluded_cars: Dictionary = {}  # 被排斥的车 {instance_id: true}
 var _edge_mesh_l: MeshInstance3D = null
 var _edge_mesh_r: MeshInstance3D = null
+# 墙壁系统
+var _wall_curve_left: WallCurve = null
+var _wall_curve_right: WallCurve = null
+var _wall_meshes: Array[Node3D] = []
 # 控制点手柄
 var _handle_start: Node3D = null
 var _handle_mid: Node3D = null
@@ -48,6 +58,10 @@ var _handles_visible: bool = false
 
 
 func _ready() -> void:
+	if _wall_curve_left == null:
+		_wall_curve_left = WallCurve.new()
+	if _wall_curve_right == null:
+		_wall_curve_right = WallCurve.new()
 	_rebuild()
 	# 如果有颜色限制, 延迟几帧后给场景中所有车上色 (开局就显示颜色)
 	if color_mode > 0:
@@ -272,6 +286,9 @@ func _rebuild() -> void:
 
 	# 坠落检测已移除 (掉下去不复位, 跟易碎窄道一致)
 
+	# ---- 墙壁生成 ----
+	_build_walls(points, rights, widths)
+
 	# ---- 颜色限制区域 (color_mode > 0 时创建 Area3D 检测错色车) ----
 	_color_area = null
 	_excluded_cars.clear()
@@ -293,6 +310,202 @@ func _rebuild() -> void:
 		add_child(_color_area)
 
 	_update_handles()
+
+
+## 生成墙壁 (根据 WallCurve 节点决定哪段有墙)
+func _build_walls(points: Array[Vector3], rights: Array[Vector3], widths: Array[float]) -> void:
+	_wall_meshes.clear()
+	if wall_height < 0.01:
+		return
+	if _wall_curve_left == null:
+		_wall_curve_left = WallCurve.new()
+	if _wall_curve_right == null:
+		_wall_curve_right = WallCurve.new()
+
+	# 同步参数
+	_wall_curve_left.wall_height = wall_height
+	_wall_curve_left.wall_thickness = wall_thickness
+	_wall_curve_left.wall_color = wall_color
+	_wall_curve_left.wall_emission = wall_emission
+	_wall_curve_right.wall_height = wall_height
+	_wall_curve_right.wall_thickness = wall_thickness
+	_wall_curve_right.wall_color = wall_color
+	_wall_curve_right.wall_emission = wall_emission
+
+	var wall_mat := StandardMaterial3D.new()
+	wall_mat.albedo_color = wall_color
+	wall_mat.metallic = 0.4
+	wall_mat.roughness = 0.3
+	wall_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	if wall_color.a < 0.99:
+		wall_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	if wall_emission > 0.01:
+		wall_mat.emission_enabled = true
+		wall_mat.emission = Color(wall_color.r, wall_color.g, wall_color.b)
+		wall_mat.emission_energy_multiplier = wall_emission
+
+	var n: int = points.size()
+	# 左墙
+	var left_segs: Array = _wall_curve_left.get_wall_segments()
+	for seg in left_segs:
+		var from_t: float = seg["from_t"]
+		var to_t: float = seg["to_t"]
+		_build_wall_strip(points, rights, widths, n, from_t, to_t, -1.0, wall_mat)
+	# 右墙
+	var right_segs: Array = _wall_curve_right.get_wall_segments()
+	for seg in right_segs:
+		var from_t: float = seg["from_t"]
+		var to_t: float = seg["to_t"]
+		_build_wall_strip(points, rights, widths, n, from_t, to_t, 1.0, wall_mat)
+
+	# 编辑器中: 可视化墙壁节点标记 (绿=有墙, 红=无墙)
+	if _is_in_editor():
+		_build_wall_node_markers(points, rights, widths, n, _wall_curve_left, -1.0)
+		_build_wall_node_markers(points, rights, widths, n, _wall_curve_right, 1.0)
+
+
+func _is_in_editor() -> bool:
+	var scene: Node = get_tree().current_scene if get_tree() else null
+	if scene == null:
+		return false
+	return scene.name == "TrackEditor" or scene.has_method("_place_at_mouse")
+
+
+## 在编辑器中显示墙壁节点标记 (小立方体: 绿=active, 红=inactive)
+func _build_wall_node_markers(points: Array[Vector3], rights: Array[Vector3], widths: Array[float], n: int, curve: WallCurve, side: float) -> void:
+	for node_data in curve.nodes:
+		var t: float = float(node_data["t"])
+		var active: bool = bool(node_data["active"])
+		var i: int = clampi(int(t * float(n - 1)), 0, n - 1)
+		var w_i: float = widths[i] if i < widths.size() else path_width
+		var pos: Vector3 = points[i] + rights[i] * (w_i * 0.5 * side)
+		pos.y += path_thickness * 0.5 + wall_height + 0.5  # 墙顶上方
+
+		var marker := MeshInstance3D.new()
+		var box_mesh := BoxMesh.new()
+		box_mesh.size = Vector3(0.6, 0.6, 0.6)
+		marker.mesh = box_mesh
+		var mat := StandardMaterial3D.new()
+		if active:
+			mat.albedo_color = Color(0.1, 0.9, 0.2, 0.85)
+			mat.emission_enabled = true
+			mat.emission = Color(0.1, 0.9, 0.2)
+			mat.emission_energy_multiplier = 1.5
+		else:
+			mat.albedo_color = Color(0.9, 0.15, 0.1, 0.85)
+			mat.emission_enabled = true
+			mat.emission = Color(0.9, 0.15, 0.1)
+			mat.emission_energy_multiplier = 1.5
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		marker.material_override = mat
+		marker.position = pos
+		add_child(marker)
+		_wall_meshes.append(marker)
+
+
+## 构建一段墙壁 strip (side: -1=左, +1=右)
+func _build_wall_strip(points: Array[Vector3], rights: Array[Vector3], widths: Array[float], n: int, from_t: float, to_t: float, side: float, mat: StandardMaterial3D) -> void:
+	var i_start: int = int(from_t * float(n - 1))
+	var i_end: int = int(to_t * float(n - 1))
+	i_start = clampi(i_start, 0, n - 1)
+	i_end = clampi(i_end, i_start + 1, n - 1)
+	if i_end <= i_start:
+		return
+
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# 每个点生成两个顶点: 底部(路面边缘) 和 顶部(路面边缘 + UP*wall_height)
+	for i in range(i_start, i_end + 1):
+		var w_i: float = widths[i] if i < widths.size() else widths[0]
+		var edge_pos: Vector3 = points[i] + rights[i] * (w_i * 0.5 * side)
+		var bottom: Vector3 = edge_pos + Vector3(0.0, path_thickness * 0.5, 0.0)
+		var top: Vector3 = bottom + Vector3(0.0, wall_height, 0.0)
+		var normal: Vector3 = (rights[i] * side).normalized()
+		var uv_v: float = float(i - i_start) / float(i_end - i_start)
+		st.set_normal(normal)
+		st.set_uv(Vector2(0.0, uv_v))
+		st.add_vertex(bottom)
+		st.set_normal(normal)
+		st.set_uv(Vector2(1.0, uv_v))
+		st.add_vertex(top)
+	# 索引
+	var vert_count: int = i_end - i_start + 1
+	for i in range(vert_count - 1):
+		var bl: int = i * 2
+		var tl: int = i * 2 + 1
+		var br: int = (i + 1) * 2
+		var tr: int = (i + 1) * 2 + 1
+		# 朝外的面
+		if side > 0.0:
+			st.add_index(bl); st.add_index(br); st.add_index(tl)
+			st.add_index(tl); st.add_index(br); st.add_index(tr)
+		else:
+			st.add_index(bl); st.add_index(tl); st.add_index(br)
+			st.add_index(tl); st.add_index(tr); st.add_index(br)
+
+	var mi := MeshInstance3D.new()
+	mi.mesh = st.commit()
+	mi.material_override = mat
+	add_child(mi)
+	_wall_meshes.append(mi)
+
+	# 墙壁碰撞体 (每段一个细长 Box)
+	var mid_i: int = (i_start + i_end) / 2
+	var w_mid: float = widths[mid_i] if mid_i < widths.size() else widths[0]
+	var wall_center: Vector3 = (points[i_start] + points[i_end]) * 0.5
+	wall_center += rights[mid_i] * (w_mid * 0.5 * side)
+	wall_center.y += path_thickness * 0.5 + wall_height * 0.5
+	var wall_len: float = points[i_start].distance_to(points[i_end])
+	if wall_len < 0.1:
+		return
+	var wall_dir: Vector3 = (points[i_end] - points[i_start]).normalized()
+	var bcol := CollisionShape3D.new()
+	var bbox := BoxShape3D.new()
+	bbox.size = Vector3(wall_thickness, wall_height, wall_len)
+	bcol.shape = bbox
+	var b_right: Vector3 = wall_dir.cross(Vector3.UP).normalized()
+	if b_right.length() < 0.01:
+		b_right = Vector3.RIGHT
+	var b_basis := Basis()
+	b_basis.z = -wall_dir
+	b_basis.x = b_right
+	b_basis.y = wall_dir.cross(b_right).normalized()
+	bcol.transform = Transform3D(b_basis, wall_center)
+	if _road_body:
+		_road_body.add_child(bcol)
+
+
+## 获取左/右墙壁曲线 (供编辑器调用)
+func get_wall_curve_left() -> WallCurve:
+	if _wall_curve_left == null:
+		_wall_curve_left = WallCurve.new()
+	return _wall_curve_left
+
+func get_wall_curve_right() -> WallCurve:
+	if _wall_curve_right == null:
+		_wall_curve_right = WallCurve.new()
+	return _wall_curve_right
+
+## 墙壁曲线节点操作 (供编辑器快捷键调用)
+func wall_add_node(side: String, t: float, active: bool = true) -> void:
+	var curve: WallCurve = _wall_curve_left if side == "left" else _wall_curve_right
+	curve.add_node(t, active)
+	_rebuild()
+
+func wall_remove_node(side: String, index: int) -> void:
+	var curve: WallCurve = _wall_curve_left if side == "left" else _wall_curve_right
+	curve.remove_node(index)
+	_rebuild()
+
+func wall_toggle_node(side: String, index: int) -> void:
+	var curve: WallCurve = _wall_curve_left if side == "left" else _wall_curve_right
+	curve.toggle_node(index)
+	_rebuild()
+
+func wall_move_node(side: String, index: int, new_t: float) -> void:
+	var curve: WallCurve = _wall_curve_left if side == "left" else _wall_curve_right
+	curve.move_node(index, new_t)
+	_rebuild()
 
 
 ## 构建一条 strip mesh (沿 center_points 路径, 宽度渐变, Y 抬高 y_offset)
@@ -599,6 +812,11 @@ func get_editable_params() -> Array:
 		{"key": "curve_offset_end_z", "label": "终点切线Z(m)", "min": -40.0, "max": 40.0, "step": 0.5, "value": curve_offset_end.z},
 		{"key": "segment_count", "label": "分段数", "min": 12.0, "max": 120.0, "step": 1.0, "value": float(segment_count)},
 		{"key": "edge_glow", "label": "边缘发光强度", "min": 0.0, "max": 2.0, "step": 0.1, "value": edge_glow},
+		{"key": "wall_height", "label": "墙壁高度(m)", "min": 0.0, "max": 5.0, "step": 0.1, "value": wall_height},
+		{"key": "wall_thickness", "label": "墙壁厚度(m)", "min": 0.1, "max": 1.0, "step": 0.05, "value": wall_thickness},
+		{"key": "wall_emission", "label": "墙壁发光", "min": 0.0, "max": 2.0, "step": 0.1, "value": wall_emission},
+		{"key": "wall_left_nodes", "label": "左墙节点数", "min": 2.0, "max": 20.0, "step": 1.0, "value": float(_wall_curve_left.nodes.size() if _wall_curve_left else 2)},
+		{"key": "wall_right_nodes", "label": "右墙节点数", "min": 2.0, "max": 20.0, "step": 1.0, "value": float(_wall_curve_right.nodes.size() if _wall_curve_right else 2)},
 		# Hermite 切线 (连接道序列化用, UI 隐藏)
 		{"key": "hermite_from_tan_x", "label": "", "min": -99.0, "max": 99.0, "step": 0.1, "value": hermite_from_tan.x, "hidden": true},
 		{"key": "hermite_from_tan_y", "label": "", "min": -99.0, "max": 99.0, "step": 0.1, "value": hermite_from_tan.y, "hidden": true},
@@ -628,6 +846,25 @@ func set_editable_param(key: String, value: float) -> void:
 		"curve_offset_end_z": curve_offset_end.z = value
 		"segment_count": segment_count = int(value)
 		"edge_glow": edge_glow = value
+		"wall_height": wall_height = value
+		"wall_thickness": wall_thickness = value
+		"wall_emission": wall_emission = value
+		"wall_left_nodes":
+			var target: int = int(value)
+			if _wall_curve_left:
+				while _wall_curve_left.nodes.size() < target:
+					var t: float = float(_wall_curve_left.nodes.size()) / float(target)
+					_wall_curve_left.add_node(t, true)
+				while _wall_curve_left.nodes.size() > target and _wall_curve_left.nodes.size() > 2:
+					_wall_curve_left.remove_node(_wall_curve_left.nodes.size() - 2)
+		"wall_right_nodes":
+			var target_r: int = int(value)
+			if _wall_curve_right:
+				while _wall_curve_right.nodes.size() < target_r:
+					var t_r: float = float(_wall_curve_right.nodes.size()) / float(target_r)
+					_wall_curve_right.add_node(t_r, true)
+				while _wall_curve_right.nodes.size() > target_r and _wall_curve_right.nodes.size() > 2:
+					_wall_curve_right.remove_node(_wall_curve_right.nodes.size() - 2)
 		"hermite_from_tan_x": hermite_from_tan.x = value
 		"hermite_from_tan_y": hermite_from_tan.y = value
 		"hermite_from_tan_z": hermite_from_tan.z = value

@@ -928,6 +928,9 @@ func _act(base_action: String) -> String:
 ## 反向影响 car 物理 (引擎抑制 / 摩擦削减), 通过空格键 (project.godot 里的 grapple action) 触发
 @export var grapple_hook_scene: PackedScene = preload("res://grapple/GrappleHook.tscn")
 @export var auto_spawn_grapple: bool = true
+## 自由钩索 (蜘蛛侠式无锚点拉起). 与原钩索互斥, free_grapple_enabled=true 时原钩索不生效
+@export var free_grapple_scene: PackedScene = null  # 由 Tuner 或手动设置
+@export var auto_spawn_free_grapple: bool = true
 
 # ---------------- 信号 ----------------
 signal speed_changed(kmh: float)
@@ -1224,6 +1227,10 @@ var _pending_landing_q_left: float = 0.0   # 预输入 Q 剩余有效秒数 (倒
 # 决定: 钩索期间是否抑制引擎力, 摩擦削减多少 (具体倍率/开关参数都在 GrappleHook.gd 里, 这里只读 flag)
 # 由 GrappleHook 通过 car.set("_grapple_active", true/false) 直接修改 (而不是走信号), 因为物理读取需要每帧实时
 var _grapple_active: bool = false
+# ---- 自由钩索状态 ----
+# _free_grapple_active = true 表示玩家当前处于自由钩索状态 (拉起/下坠/弹射中)
+# 自由钩索期间: 禁止漂移、禁止小喷、禁止原钩索
+var _free_grapple_active: bool = false
 # 绳子(CoopMode)摩擦削减倍率: 由 CoopMode 每帧设置, 1.0=正常, <1.0=削减摩擦(后车卡墙时被拉动更容易)
 var _rope_friction_mult: float = 1.0
 
@@ -1314,6 +1321,8 @@ var _toxic_slow_mult: float = 1.0
 var _toxic_extra_damping: float = 0.0
 # 钩索系统节点引用 (由 _spawn_grapple_hook 在 _ready 后填入, 给 _read_input 路由空格键用)
 var _grapple_hook: Node = null
+# 自由钩索节点引用
+var _free_grapple: Node = null
 # 钩索释放后车头摆正倒计时 (秒). GrappleHook._release() 设置此值, 每帧递减
 # > 0 时在空中朝向对齐代码段中做车头→速度方向的平滑 slerp
 # 正常从跳台飞出不会触发 (因为 _grapple_active 从未为 true, GrappleHook 不会设此值)
@@ -1418,6 +1427,8 @@ func _ready() -> void:
 		call_deferred("_spawn_tuner")
 	if auto_spawn_grapple and grapple_hook_scene:
 		call_deferred("_spawn_grapple_hook")
+	if auto_spawn_free_grapple:
+		call_deferred("_spawn_free_grapple")
 	if fx_scene:
 		# 不在这里 instantiate, 让 _attach_fx 根据 tailpipe 数量决定挂几个
 		call_deferred("_attach_fx")
@@ -1599,6 +1610,24 @@ func _spawn_grapple_hook() -> void:
 	if hook.has_signal("grapple_boost_window_opened"):
 		hook.connect("grapple_boost_window_opened", _on_grapple_boost_window_opened)
 	print("[Car] GrappleHook 已挂载")
+
+
+func _spawn_free_grapple() -> void:
+	if _free_grapple != null:
+		return
+	if find_child("FreeGrapple", false, false):
+		_free_grapple = get_node_or_null("FreeGrapple")
+		return
+	# FreeGrapple 不需要 .tscn, 直接实例化脚本节点
+	var fg := Node3D.new()
+	fg.name = "FreeGrapple"
+	var script: GDScript = load("res://grapple/FreeGrapple.gd") as GDScript
+	if script == null:
+		return
+	fg.set_script(script)
+	add_child(fg)
+	_free_grapple = fg
+	print("[Car] FreeGrapple 已挂载")
 
 
 func _on_grapple_boost_window_opened(dist_ratio: float, pull_time: float = 0.0, swing_distance: float = 0.0) -> void:
@@ -1811,7 +1840,7 @@ func _read_input() -> void:
 	#   · 空中 + NORMAL: 记录到预输入缓冲, 落地时回放
 	#   · 地面 + NORMAL → 启动入漂宽限期
 	#   · 地面 + DRIFT → 手动退漂(不喷)
-	if Input.is_action_just_pressed(act_drift) and not _require_release_q:
+	if Input.is_action_just_pressed(act_drift) and not _require_release_q and not _free_grapple_active:
 		if player_id == 1:
 			print("[Car P1] RB/LB 按下检测到! airborne=%s state=%s" % [str(_is_airborne), State.keys()[state]])
 		if _is_airborne:
@@ -1870,32 +1899,53 @@ func _read_input() -> void:
 	if Input.is_action_just_pressed(act_nitro):
 		_try_nitro()
 
-	# 空格 钩索 + 跳跃 fallback (用户需求 2026-06-02)
+	# 空格 钩索/自由钩索 + 跳跃 fallback
 	#
-	# 优先级: 钩索 > 跳跃
-	#   钩索 IDLE + try_fire 钩到锚点 → 进入钩索流程, 不跳
-	#   钩索 IDLE + try_fire 失败 (找不到锚点) → fallback _try_jump()
-	#   钩索 非 IDLE (已在钩索流程中) → 钩索处理释放, 不跳 (避免空格在钩索中误触跳跃)
-	#   钩索系统不存在 (auto_spawn_grapple=false) → 直接跳
-	#
-	# 松开空格: 只给钩索处理 (release_on_button_release), 跳跃是按下瞬间触发不需要松开逻辑
+	# 优先级: 自由钩索 (若启用) > 原钩索 > 跳跃
+	#   自由钩索 enabled + 有充能/正在飞行中 → 自由钩索消费
+	#   自由钩索 disabled → 走原钩索逻辑
+	#   原钩索 IDLE + try_fire 钩到锚点 → 进入钩索流程, 不跳
+	#   原钩索 IDLE + try_fire 失败 → fallback _try_jump()
+	#   原钩索 非 IDLE → 钩索处理释放, 不跳
 	if Input.is_action_just_pressed(act_grapple):
-		var hook_consumed: bool = false   # 这次按键有没有被钩索系统消费
-		if _grapple_hook != null and _grapple_hook.has_method("try_fire"):
-			# is_idle() 用来区分"钩索 IDLE 但没找到锚点" vs "钩索已 ATTACHED 中"
-			# 前者应该 fallback 跳跃, 后者钩索消费空格触发释放
-			var was_idle: bool = true
-			if _grapple_hook.has_method("is_idle"):
-				was_idle = bool(_grapple_hook.call("is_idle"))
-			var hooked: bool = bool(_grapple_hook.call("try_fire"))
-			# 钩到 = 消费; 非 IDLE 时 try_fire 也算消费 (释放/取消)
-			hook_consumed = hooked or not was_idle
-		# 钩索没消费 (没钩到锚点 + 不在钩索中) → fallback 跳跃
-		if not hook_consumed:
+		var consumed: bool = false
+		# ---- 自由钩索优先 ----
+		if _free_grapple != null and bool(_free_grapple.get("free_grapple_enabled")):
+			var fg_state: int = int(_free_grapple.get("state"))
+			var fg_charges: int = int(_free_grapple.get("_charges"))
+			var fg_launched: bool = bool(_free_grapple.get("_has_launched"))
+			# IDLE + 有充能 → 触发拉起
+			if fg_state == 0 and fg_charges > 0:
+				_free_grapple.call("_trigger_pull")
+				consumed = true
+			# FALLING + 已发射 + 有充能 → 接续下一次钩索 (空中连续使用)
+			elif fg_state == 2 and fg_launched and fg_charges > 0:
+				_free_grapple.call("_trigger_pull")
+				consumed = true
+			# FALLING + 未发射 → 触发弹射
+			elif fg_state == 2 and not fg_launched:
+				_free_grapple.call("_trigger_launch")
+				consumed = true
+			# PULLING / LAUNCHING 中 → 消费掉空格(不做任何事, 防止误触跳跃)
+			elif fg_state != 0:
+				consumed = true
+		# ---- 原钩索 (自由钩索未启用或未消费) ----
+		if not consumed and _grapple_hook != null and _grapple_hook.has_method("try_fire"):
+			# 自由钩索启用时原钩索不生效
+			if _free_grapple == null or not bool(_free_grapple.get("free_grapple_enabled")):
+				var was_idle: bool = true
+				if _grapple_hook.has_method("is_idle"):
+					was_idle = bool(_grapple_hook.call("is_idle"))
+				var hooked: bool = bool(_grapple_hook.call("try_fire"))
+				consumed = hooked or not was_idle
+		# ---- fallback 跳跃 ----
+		if not consumed:
 			_try_jump()
 	elif Input.is_action_just_released(act_grapple):
-		if _grapple_hook != null and _grapple_hook.has_method("try_release"):
-			_grapple_hook.call("try_release")
+		# 松开空格: 只给原钩索处理释放 (自由钩索不需要松开逻辑)
+		if _free_grapple == null or not bool(_free_grapple.get("free_grapple_enabled")):
+			if _grapple_hook != null and _grapple_hook.has_method("try_release"):
+				_grapple_hook.call("try_release")
 
 	# 2P 复位 (LT 扳机): 类似 B 键的快速回到出生点
 	if player_id == 1 and Input.is_action_just_pressed("p2_reset"):
@@ -2276,6 +2326,9 @@ func _apply_engine_and_brake(_delta: float) -> void:
 	# 这避免了"玩家踩油门 vs 钩索拉力"互相打架, 也让玩家能体验到"被绳子拽着无法挣脱"的手感
 	if _grapple_active and _grapple_hook != null and bool(_grapple_hook.get("disable_engine_during_pull")):
 		return
+	# 自由钩索期间也抑制引擎力 (拉力/重力减弱由 FreeGrapple 自己管)
+	if _free_grapple_active:
+		return
 	# === 视觉车头方向 ===
 	# car_mesh.basis.z = 骨架朝向(被 steer 控制), 但漂移时车壳额外被拧过 drift_yaw_offset
 	# 所以"玩家眼睛看到的车头" = 骨架朝向 × body_mesh.rotation.y
@@ -2655,6 +2708,10 @@ func _apply_friction(delta: float) -> void:
 		var grapple_friction_mult: float = float(_grapple_hook.get("friction_mult_during_pull"))
 		long_k *= grapple_friction_mult
 		lat_k  *= grapple_friction_mult
+	# 自由钩索期间: 摩擦大幅削减让拉力能有效把车拉起来
+	if _free_grapple_active:
+		long_k *= 0.1
+		lat_k  *= 0.1
 
 	# === 绳子(CoopMode)摩擦削减 ===
 	# 后车被绳子拉着卡墙时, CoopMode 会设置 _rope_friction_mult < 1.0
@@ -2794,8 +2851,8 @@ func _try_jump() -> void:
 	# 漂移中拦截 (除非允许)
 	if state == State.DRIFT and not jump_allow_in_drift:
 		return
-	# 钩索中不跳 (was_idle 已过滤但防御一层)
-	if _grapple_active:
+	# 钩索/自由钩索中不跳
+	if _grapple_active or _free_grapple_active:
 		return
 
 	# 当前是否在地面 (优先 ground_ray, 兜底 fallback 短程探测)
@@ -3293,7 +3350,7 @@ func _apply_ground_stick(_delta: float) -> void:
 	#   3) slope_stick_force 坡面贴附力也会把车按在坡面
 	# 钩索期间车应该完全脱离地面物理, 像飞行道具一样被绳子拽着走.
 	# 释放钩索后 _grapple_active 清 false, 防弹机制自动恢复, 落地正常走 _apply_landing_physics.
-	if _grapple_active:
+	if _grapple_active or _free_grapple_active:
 		return
 	# === 跳跃台/弹簧冲击窗口 ===
 	# 机关 (FlipBoard / SpringMushroom / GravityCylinder) 调 apply_jump_pad_kick() 设置的
@@ -3398,7 +3455,7 @@ func _update_visuals(delta: float) -> void:
 		return
 	# 低速/停车时依然允许摆动车头 (QQ飞车风格: 原地也能转向)
 	# 只在"零输入 + 极低速"时跳过转向 (避免无输入时的视觉 yaw 微抖)
-	if linear_velocity.length() < turn_stop_limit and not _grapple_active and absf(steer_input) < 0.05:
+	if linear_velocity.length() < turn_stop_limit and not _grapple_active and not _free_grapple_active and absf(steer_input) < 0.05:
 		prev_yaw = car_mesh.rotation.y
 		return
 
@@ -4269,6 +4326,9 @@ func angle_difference(a: float, b: float) -> float:
 #  喷射
 # ============================================================
 func _try_boost_w() -> void:
+	# === 自由钩索期间禁止所有小喷/氮气弹射 ===
+	if _free_grapple_active:
+		return
 	# === 跳跃豁免 (修 2026-06-02 改镜头 bug) ===
 	# 跳跃中按 W 不触发空喷/落地喷/钩索弹射, 让玩家纯粹享受跳跃过程
 	# 普通的引擎推力 (在 _apply_engine_and_brake) 不在这里, 所以 W 仍能加速车速

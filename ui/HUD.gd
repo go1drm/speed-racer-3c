@@ -108,6 +108,25 @@ var _anchor_shader_mat: ShaderMaterial = null  # 锚点图标 shader 材质
 const ANCHOR_UI_TEXTURE_PATH := "res://assets/ui/anchor_ui.png"
 
 # ============================================================
+#  队友位置指示器 (圆形图标, 整合方向箭头+距离+状态)
+# ============================================================
+# 设计:
+#   · 一个 48px 圆形半透明底盘, 内嵌方向箭头 + 距离数字
+#   · 始终显示在屏幕边缘 (队友在屏幕外) 或头顶 (队友在屏幕内)
+#   · 静态 (不跳动), 仅颜色区分状态: 绿=正常, 金=救援中
+const TEAMMATE_ICON_SIZE: float = 48.0
+const TEAMMATE_EDGE_MARGIN: float = 50.0
+const TEAMMATE_COLOR_1P := Color(0.9, 0.15, 0.1, 1.0)       # 红色 (1P 赛车色)
+const TEAMMATE_COLOR_2P := Color(0.1, 0.3, 0.95, 1.0)       # 蓝色 (2P 赛车色)
+const TEAMMATE_COLOR_RESCUE := Color(1.0, 0.8, 0.15, 1.0)   # 金色 (救援中)
+var _teammate_indicator: Control = null     # 队友指示器根节点 (圆形容器)
+var _teammate_icon: Label = null            # 中心箭头 emoji (指向队友方向)
+var _teammate_dist_label: Label = null      # 距离文字 (圆内底部)
+var _teammate_name_label: Label = null      # 未使用, 保留兼容
+var _teammate_bg: Panel = null              # 圆形背景面板
+var _teammate_pulse_t: float = 0.0         # 保留 (当前不做脉冲)
+
+# ============================================================
 #  赛道名称 + 计时器 + 成绩列表
 # ============================================================
 # 设计:
@@ -135,6 +154,10 @@ func _ready() -> void:
 	call_deferred("_connect_to_car")
 	# 创建锚点指示器 UI
 	_build_anchor_indicator()
+	# 创建自由钩索 HUD (充能+弹射灯)
+	_build_free_grapple_hud()
+	# 创建队友位置指示器 UI
+	_build_teammate_indicator()
 	# 创建赛道名称 + 计时器 + 成绩列表 UI
 	_build_timer_ui()
 
@@ -277,6 +300,11 @@ func _process(delta: float) -> void:
 
 	# 锚点指示器: 每帧更新位置和颜色
 	_update_anchor_indicator()
+
+	# 自由钩索 HUD: 每帧检查是否启用
+	_update_free_grapple_hud()
+	# 队友位置指示器: 每帧更新
+	_update_teammate_indicator(delta)
 
 	# 尾流灯脉冲更新
 	_update_slipstream_lamp(delta)
@@ -915,6 +943,424 @@ func _calc_edge_position(center: Vector2, dir: Vector2, vp_size: Vector2, margin
 
 
 # ============================================================
+#  自由钩索 HUD (充能指示 + 弹射可用灯)
+# ============================================================
+var _fg_charge_container: HBoxContainer = null  # 充能格子容器
+var _fg_charge_slots: Array[ColorRect] = []     # 充能格子
+var _fg_launch_lamp: PanelContainer = null      # 弹射可用提示灯
+var _fg_launch_label: Label = null
+var _fg_connected: bool = false                 # 是否已连接信号
+const FG_SLOT_ON := Color(1.0, 0.7, 0.1, 1.0)   # 有充能: 金色
+const FG_SLOT_OFF := Color(0.2, 0.2, 0.25, 0.7)  # 无充能: 暗灰
+const FG_LAMP_READY := Color(0.1, 1.0, 0.4, 1.0) # 可弹射: 亮绿
+const FG_LAMP_OFF := Color(0.3, 0.3, 0.35, 0.6)  # 不可弹射: 暗灰
+
+
+func _build_free_grapple_hud() -> void:
+	var hud_root: Control = get_node_or_null("Root")
+	if hud_root == null:
+		return
+	# 容器: 右下角
+	var container := VBoxContainer.new()
+	container.name = "FreeGrappleHUD"
+	container.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	container.offset_left = -140.0
+	container.offset_right = -20.0
+	container.offset_top = -80.0
+	container.offset_bottom = -20.0
+	container.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	container.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud_root.add_child(container)
+
+	# 充能格子行
+	_fg_charge_container = HBoxContainer.new()
+	_fg_charge_container.alignment = BoxContainer.ALIGNMENT_END
+	_fg_charge_container.add_theme_constant_override("separation", 6)
+	_fg_charge_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	container.add_child(_fg_charge_container)
+	# 默认 3 格
+	for i in range(3):
+		var slot := ColorRect.new()
+		slot.custom_minimum_size = Vector2(18, 18)
+		slot.color = FG_SLOT_OFF
+		slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_fg_charge_container.add_child(slot)
+		_fg_charge_slots.append(slot)
+
+	# 弹射灯
+	var lamp_style := StyleBoxFlat.new()
+	lamp_style.bg_color = FG_LAMP_OFF
+	lamp_style.corner_radius_top_left = 4
+	lamp_style.corner_radius_top_right = 4
+	lamp_style.corner_radius_bottom_left = 4
+	lamp_style.corner_radius_bottom_right = 4
+	_fg_launch_lamp = PanelContainer.new()
+	_fg_launch_lamp.custom_minimum_size = Vector2(100, 24)
+	_fg_launch_lamp.add_theme_stylebox_override("panel", lamp_style)
+	_fg_launch_lamp.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	container.add_child(_fg_launch_lamp)
+
+	_fg_launch_label = Label.new()
+	_fg_launch_label.text = "弹射"
+	_fg_launch_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_fg_launch_label.add_theme_font_size_override("font_size", 13)
+	_fg_launch_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7, 0.8))
+	_fg_launch_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_fg_launch_lamp.add_child(_fg_launch_label)
+
+	# 初始隐藏 (只有自由钩索启用时才显示)
+	container.visible = false
+
+
+func _update_free_grapple_hud() -> void:
+	# 获取 FreeGrapple 节点
+	var car_node: Node = null
+	if not car_path.is_empty() and has_node(car_path):
+		car_node = get_node(car_path)
+	if car_node == null:
+		return
+	var fg: Node = car_node.get_node_or_null("FreeGrapple")
+	if fg == null or not fg.get("free_grapple_enabled"):
+		var container: Node = get_node_or_null("Root/FreeGrappleHUD")
+		if container:
+			container.visible = false
+		return
+
+	var container: Node = get_node_or_null("Root/FreeGrappleHUD")
+	if container:
+		container.visible = true
+
+	# 连接信号 (只连一次)
+	if not _fg_connected and fg.has_signal("charges_changed"):
+		fg.connect("charges_changed", _on_fg_charges_changed)
+		fg.connect("launch_ready", _on_fg_launch_ready)
+		_fg_connected = true
+		# 立刻同步当前充能
+		_on_fg_charges_changed(int(fg.get("_charges")), int(fg.get("max_charges")))
+
+	# 充能格子数量与 max_charges 同步
+	var max_ch: int = int(fg.get("max_charges"))
+	while _fg_charge_slots.size() < max_ch:
+		var slot := ColorRect.new()
+		slot.custom_minimum_size = Vector2(18, 18)
+		slot.color = FG_SLOT_OFF
+		slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_fg_charge_container.add_child(slot)
+		_fg_charge_slots.append(slot)
+	while _fg_charge_slots.size() > max_ch:
+		var s: ColorRect = _fg_charge_slots.pop_back()
+		s.queue_free()
+
+
+func _on_fg_charges_changed(current: int, max_val: int) -> void:
+	for i in range(_fg_charge_slots.size()):
+		_fg_charge_slots[i].color = FG_SLOT_ON if i < current else FG_SLOT_OFF
+
+
+func _on_fg_launch_ready(ready: bool) -> void:
+	if _fg_launch_lamp == null:
+		return
+	var style: StyleBoxFlat = _fg_launch_lamp.get_theme_stylebox("panel") as StyleBoxFlat
+	if style:
+		style.bg_color = FG_LAMP_READY if ready else FG_LAMP_OFF
+	if _fg_launch_label:
+		_fg_launch_label.text = "⚡ 弹射!" if ready else "弹射"
+		var col: Color = Color(0.1, 1.0, 0.4, 1.0) if ready else Color(0.7, 0.7, 0.7, 0.8)
+		_fg_launch_label.add_theme_color_override("font_color", col)
+
+
+# ============================================================
+#  救援提示 UI (显示在各自半屏内)
+# ============================================================
+var _rescue_text_label: Label = null
+var _rescue_progress_bar: ProgressBar = null
+var _rescue_container: VBoxContainer = null
+
+## 显示救援文本 + 进度条
+func show_rescue_text(text: String) -> void:
+	hide_rescue_text()
+	var hud_root: Control = get_node_or_null("Root")
+	if hud_root == null:
+		return
+	_rescue_container = VBoxContainer.new()
+	_rescue_container.name = "RescueContainer"
+	_rescue_container.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_rescue_container.offset_left = -160.0
+	_rescue_container.offset_right = 160.0
+	_rescue_container.offset_top = 60.0
+	_rescue_container.offset_bottom = 140.0
+	_rescue_container.alignment = BoxContainer.ALIGNMENT_CENTER
+	_rescue_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud_root.add_child(_rescue_container)
+
+	_rescue_text_label = Label.new()
+	_rescue_text_label.text = text
+	_rescue_text_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_rescue_text_label.add_theme_font_size_override("font_size", 20)
+	_rescue_text_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.2, 1.0))
+	_rescue_text_label.add_theme_constant_override("outline_size", 3)
+	_rescue_text_label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.9))
+	_rescue_text_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_rescue_container.add_child(_rescue_text_label)
+
+	_rescue_progress_bar = ProgressBar.new()
+	_rescue_progress_bar.custom_minimum_size = Vector2(200, 14)
+	_rescue_progress_bar.min_value = 0.0
+	_rescue_progress_bar.max_value = 1.0
+	_rescue_progress_bar.value = 0.0
+	_rescue_progress_bar.show_percentage = false
+	var bg_s := StyleBoxFlat.new()
+	bg_s.bg_color = Color(0.1, 0.1, 0.15, 0.8)
+	bg_s.corner_radius_top_left = 4
+	bg_s.corner_radius_top_right = 4
+	bg_s.corner_radius_bottom_left = 4
+	bg_s.corner_radius_bottom_right = 4
+	_rescue_progress_bar.add_theme_stylebox_override("background", bg_s)
+	var fill_s := StyleBoxFlat.new()
+	fill_s.bg_color = Color(1.0, 0.8, 0.1, 0.95)
+	fill_s.corner_radius_top_left = 4
+	fill_s.corner_radius_top_right = 4
+	fill_s.corner_radius_bottom_left = 4
+	fill_s.corner_radius_bottom_right = 4
+	_rescue_progress_bar.add_theme_stylebox_override("fill", fill_s)
+	_rescue_progress_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_rescue_container.add_child(_rescue_progress_bar)
+
+	# 渐入
+	_rescue_container.modulate.a = 0.0
+	var tw := create_tween()
+	tw.tween_property(_rescue_container, "modulate:a", 1.0, 0.15)
+
+
+## 更新救援进度条
+func update_rescue_progress(progress: float) -> void:
+	if _rescue_progress_bar:
+		_rescue_progress_bar.value = progress
+
+
+## 隐藏救援文本
+func hide_rescue_text() -> void:
+	if _rescue_container:
+		_rescue_container.queue_free()
+		_rescue_container = null
+		_rescue_text_label = null
+		_rescue_progress_bar = null
+
+
+## 显示救援完成文本 (自动 1.5 秒后消失)
+func show_rescue_done(text: String) -> void:
+	hide_rescue_text()
+	var hud_root: Control = get_node_or_null("Root")
+	if hud_root == null:
+		return
+	var done_lbl := Label.new()
+	done_lbl.name = "RescueDone"
+	done_lbl.text = text
+	done_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	done_lbl.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	done_lbl.offset_left = -150.0
+	done_lbl.offset_right = 150.0
+	done_lbl.offset_top = 70.0
+	done_lbl.offset_bottom = 110.0
+	done_lbl.add_theme_font_size_override("font_size", 24)
+	done_lbl.add_theme_color_override("font_color", Color(0.3, 1.0, 0.5, 1.0))
+	done_lbl.add_theme_constant_override("outline_size", 4)
+	done_lbl.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.9))
+	done_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud_root.add_child(done_lbl)
+	# 渐入 → 停留 → 渐出 → 销毁
+	done_lbl.modulate.a = 0.0
+	var tw := create_tween()
+	tw.tween_property(done_lbl, "modulate:a", 1.0, 0.12)
+	tw.tween_interval(1.2)
+	tw.tween_property(done_lbl, "modulate:a", 0.0, 0.4)
+	tw.tween_callback(func() -> void: done_lbl.queue_free())
+
+
+# ============================================================
+#  队友位置指示器 — 构建 + 每帧更新
+# ============================================================
+
+func _build_teammate_indicator() -> void:
+	# 挂在 Root 节点下 (这样分屏时会跟随半屏锚点, 不会两个 HUD 重叠在全屏)
+	var hud_root: Control = get_node_or_null("Root")
+	if hud_root == null:
+		return
+	# 根容器
+	var root := Control.new()
+	root.name = "TeammateIndicator"
+	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	hud_root.add_child(root)
+	_teammate_indicator = root
+
+	# 圆形背景 Panel (边框颜色在 _update 中根据队友身份动态设置)
+	var bg_style := StyleBoxFlat.new()
+	bg_style.bg_color = Color(0.1, 0.1, 0.15, 0.75)
+	bg_style.border_color = TEAMMATE_COLOR_2P  # 默认蓝 (1P 看 2P)
+	bg_style.border_width_left = 2
+	bg_style.border_width_right = 2
+	bg_style.border_width_top = 2
+	bg_style.border_width_bottom = 2
+	var corner_r: int = int(TEAMMATE_ICON_SIZE * 0.5)
+	bg_style.corner_radius_top_left = corner_r
+	bg_style.corner_radius_top_right = corner_r
+	bg_style.corner_radius_bottom_left = corner_r
+	bg_style.corner_radius_bottom_right = corner_r
+	_teammate_bg = Panel.new()
+	_teammate_bg.custom_minimum_size = Vector2(TEAMMATE_ICON_SIZE, TEAMMATE_ICON_SIZE)
+	_teammate_bg.size = Vector2(TEAMMATE_ICON_SIZE, TEAMMATE_ICON_SIZE)
+	_teammate_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_teammate_bg.add_theme_stylebox_override("panel", bg_style)
+	root.add_child(_teammate_bg)
+
+	# 距离文字 (圆形中央, 大号清晰)
+	_teammate_dist_label = Label.new()
+	_teammate_dist_label.add_theme_font_size_override("font_size", 13)
+	_teammate_dist_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
+	_teammate_dist_label.add_theme_constant_override("outline_size", 2)
+	_teammate_dist_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	_teammate_dist_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_teammate_dist_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_teammate_dist_label.custom_minimum_size = Vector2(TEAMMATE_ICON_SIZE, TEAMMATE_ICON_SIZE)
+	_teammate_dist_label.size = Vector2(TEAMMATE_ICON_SIZE, TEAMMATE_ICON_SIZE)
+	_teammate_dist_label.position = Vector2.ZERO
+	_teammate_dist_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_teammate_bg.add_child(_teammate_dist_label)
+
+	# 不再需要箭头和名字标签
+	_teammate_icon = null
+	_teammate_name_label = null
+
+	# 初始隐藏
+	_teammate_indicator.visible = false
+
+
+func _update_teammate_indicator(delta: float) -> void:
+	if _teammate_indicator == null:
+		return
+	if _teammate_bg == null:
+		_teammate_indicator.visible = false
+		return
+
+	# 获取 CoopMode 和队友位置
+	var coop_nodes: Array = get_tree().get_nodes_in_group("coop_mode")
+	if coop_nodes.is_empty():
+		_teammate_indicator.visible = false
+		return
+	var coop: Node = coop_nodes[0]
+	if not coop.get("_active"):
+		_teammate_indicator.visible = false
+		return
+	var car_1p: Node3D = coop.get("_car_1p") as Node3D
+	var car_2p: Node3D = coop.get("_car_2p") as Node3D
+	if car_1p == null or car_2p == null:
+		_teammate_indicator.visible = false
+		return
+
+	# 确定"我"和"队友"
+	var my_car: Node3D = null
+	var teammate_car: Node3D = null
+	var is_1p: bool = true
+	if not car_path.is_empty() and has_node(car_path):
+		my_car = get_node(car_path) as Node3D
+	if my_car == car_1p:
+		teammate_car = car_2p
+		is_1p = true
+	elif my_car == car_2p:
+		teammate_car = car_1p
+		is_1p = false
+	else:
+		my_car = car_1p
+		teammate_car = car_2p
+		is_1p = true
+
+	if teammate_car == null:
+		_teammate_indicator.visible = false
+		return
+
+	# 获取队友视觉位置
+	var teammate_pos: Vector3
+	var tm_mesh: Node3D = teammate_car.get_node_or_null("CarMesh") as Node3D
+	if tm_mesh:
+		teammate_pos = tm_mesh.global_position + Vector3(0, 1.5, 0)
+	else:
+		teammate_pos = teammate_car.global_position + Vector3(0, 1.0, 0)
+
+	# 获取相机 (分屏兼容)
+	var cam: Camera3D = null
+	var cam_1p: Camera3D = coop.get("_camera_1p") as Camera3D
+	var cam_2p: Camera3D = coop.get("_camera_2p") as Camera3D
+	if cam_1p != null and cam_2p != null:
+		cam = cam_1p if is_1p else cam_2p
+	else:
+		cam = get_viewport().get_camera_3d()
+	if cam == null:
+		_teammate_indicator.visible = false
+		return
+
+	# Viewport 尺寸
+	var vp_size: Vector2
+	if cam_1p != null and cam_2p != null:
+		var sub_vp: SubViewport = cam.get_viewport() as SubViewport
+		if sub_vp:
+			vp_size = Vector2(sub_vp.size)
+		else:
+			vp_size = get_viewport().get_visible_rect().size * Vector2(0.5, 1.0)
+	else:
+		vp_size = get_viewport().get_visible_rect().size
+
+	var is_behind: bool = cam.is_position_behind(teammate_pos)
+	var screen_pos: Vector2 = cam.unproject_position(teammate_pos)
+
+	# 距离
+	var my_pos: Vector3 = my_car.global_position
+	var dist: float = my_pos.distance_to(teammate_car.global_position)
+
+	# 边框颜色: 队友的赛车颜色 (1P=红, 2P=蓝), 救援中=金色
+	var is_rescuing: bool = bool(coop.get("_follow_active")) if "_follow_active" in coop else false
+	var teammate_base_color: Color = TEAMMATE_COLOR_2P if is_1p else TEAMMATE_COLOR_1P
+	var indicator_color: Color = TEAMMATE_COLOR_RESCUE if is_rescuing else teammate_base_color
+
+	# 判断屏幕内外
+	var margin: float = TEAMMATE_EDGE_MARGIN
+	var in_screen: bool = not is_behind \
+		and screen_pos.x >= margin and screen_pos.x <= vp_size.x - margin \
+		and screen_pos.y >= margin and screen_pos.y <= vp_size.y - margin
+
+	_teammate_indicator.visible = true
+
+	# 计算圆形图标位置 (静态, 不跳动)
+	var icon_pos: Vector2
+	if in_screen:
+		# 队友在屏幕内: 图标显示在队友头顶
+		icon_pos = screen_pos - Vector2(TEAMMATE_ICON_SIZE * 0.5, TEAMMATE_ICON_SIZE + 8.0)
+	else:
+		# 队友在屏幕外: 贴到边缘
+		var center: Vector2 = vp_size * 0.5
+		var dir: Vector2
+		if is_behind:
+			dir = (center - screen_pos).normalized()
+		else:
+			dir = (screen_pos - center).normalized()
+		var edge_pos: Vector2 = _calc_edge_position(center, dir, vp_size, margin)
+		icon_pos = edge_pos - Vector2(TEAMMATE_ICON_SIZE * 0.5, TEAMMATE_ICON_SIZE * 0.5)
+
+	# 应用位置 (静态)
+	_teammate_bg.position = icon_pos
+
+	# 距离文字
+	if _teammate_dist_label:
+		_teammate_dist_label.text = "%dm" % int(dist)
+
+	# 更新边框颜色
+	var bg_sb: StyleBoxFlat = _teammate_bg.get_theme_stylebox("panel") as StyleBoxFlat
+	if bg_sb:
+		bg_sb.border_color = indicator_color
+
+
+# ============================================================
 #  赛道名称 + 计时器 + 成绩列表
 # ============================================================
 
@@ -1375,12 +1821,12 @@ func _build_star_ui() -> void:
 	root.add_child(_star_ui_container)
 
 
-## 由 CoopMode 调用: 更新星星计数显示
-func update_star_count(total: int, combo: int) -> void:
+## 由 CoopMode 调用: 更新星星计数显示 (星星飞到 UI 后才更新数字)
+## star_world_pos: 被收集的星星的 3D 世界坐标 (用于投影到屏幕作为飞行起点)
+func update_star_count(total: int, combo: int, star_world_pos: Vector3 = Vector3.INF) -> void:
 	if _star_ui_container == null:
 		_build_star_ui()
-	if _star_count_label:
-		_star_count_label.text = str(total)
+	# 连击文本立即显示
 	if _star_combo_label:
 		if combo > 1:
 			_star_combo_label.text = "x%d!" % combo
@@ -1388,3 +1834,51 @@ func update_star_count(total: int, combo: int) -> void:
 			_star_combo_fade_left = 1.0
 		else:
 			_star_combo_label.text = ""
+	# 生成飞行星星动效
+	_spawn_flying_star(total, star_world_pos)
+
+
+## 生成飞行星星: 从星星的屏幕投影位置飞到左下角计数器
+func _spawn_flying_star(target_total: int, world_pos: Vector3) -> void:
+	var root: Control = get_node_or_null("Root")
+	if root == null:
+		if _star_count_label:
+			_star_count_label.text = str(target_total)
+		return
+
+	var fly_star := Label.new()
+	fly_star.text = "⭐"
+	fly_star.add_theme_font_size_override("font_size", 42)
+	fly_star.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	fly_star.z_index = 100
+	root.add_child(fly_star)
+
+	# 起点: 从 3D 世界坐标投影到屏幕
+	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
+	var start_pos: Vector2
+	var cam: Camera3D = get_viewport().get_camera_3d()
+	if cam and world_pos != Vector3.INF and not cam.is_position_behind(world_pos):
+		start_pos = cam.unproject_position(world_pos)
+	else:
+		start_pos = viewport_size * 0.5
+
+	# 终点: 左下角星星 UI 位置
+	var end_pos: Vector2 = Vector2(45.0, viewport_size.y - 40.0)
+
+	fly_star.position = start_pos - Vector2(21, 21)  # 居中 emoji
+	fly_star.scale = Vector2(1.5, 1.5)
+	fly_star.modulate = Color(1.0, 1.0, 0.6, 1.0)
+
+	var tw := create_tween()
+	tw.tween_property(fly_star, "scale", Vector2(2.2, 2.2), 0.08).set_ease(Tween.EASE_OUT)
+	tw.tween_property(fly_star, "position", end_pos, 0.4).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_BACK)
+	tw.parallel().tween_property(fly_star, "scale", Vector2(0.5, 0.5), 0.4)
+	tw.parallel().tween_property(fly_star, "modulate:a", 0.8, 0.4)
+	tw.tween_callback(func() -> void:
+		if _star_count_label:
+			_star_count_label.text = str(target_total)
+			var bounce_tw := create_tween()
+			bounce_tw.tween_property(_star_count_label, "scale", Vector2(1.5, 1.5), 0.08)
+			bounce_tw.tween_property(_star_count_label, "scale", Vector2(1.0, 1.0), 0.12).set_ease(Tween.EASE_OUT)
+		fly_star.queue_free()
+	)

@@ -73,16 +73,16 @@ const BLOCK_LIBRARY: Dictionary = {
 	"spring":           "res://track_editor/blocks/spring.tscn",
 	"trigger_spring":   "res://track_editor/blocks/trigger_spring.tscn",
 	"star_trail":       "res://track_editor/blocks/star_trail.tscn",
+	"right_angle_path": "res://track_editor/blocks/right_angle_path.tscn",
 }
 
 # 路段积木显示信息 (UI 列表用)
-# 用户要求: 积木栏删掉上坡/跳台 (这些用 pitch 滑块在直道上做就行, 不需要单独积木)
+# 窄道系列已取代旧积木成为主要赛道构建工具
 const BLOCK_INFO: Array = [
-	{"id": "straight_short", "label": "直道(短)",  "hotkey": KEY_1},
-	{"id": "straight_long",  "label": "直道(长)",  "hotkey": KEY_2},
-	{"id": "turn_90_left",   "label": "90°左弯",   "hotkey": KEY_3},
-	{"id": "turn_90_right",  "label": "90°右弯",   "hotkey": KEY_4},
-	{"id": "turn_180",       "label": "U形弯",     "hotkey": KEY_5},
+	{"id": "narrow_path",      "label": "🛤️ 窄道",     "hotkey": KEY_1},
+	{"id": "fragile_narrow",   "label": "💔 易碎窄道",  "hotkey": KEY_2},
+	{"id": "right_angle_path", "label": "📐 直角窄道",  "hotkey": KEY_3},
+	{"id": "star_trail",       "label": "⭐ 绳星轨迹",  "hotkey": KEY_4},
 ]
 
 # 机关显示信息 (UI 机关栏用) — 独立于路段积木, 走机关栏 UI
@@ -118,11 +118,8 @@ const MECHANISM_INFO: Array = [
 	{"id": "slider",           "label": "🛗 往复滑块",   "hotkey": 0, "kind": "block"},
 	{"id": "pendulum",         "label": "🕰️ 钟摆平台",   "hotkey": 0, "kind": "block"},
 	{"id": "color_gate",       "label": "🚦 红蓝门",     "hotkey": 0, "kind": "block"},
-	{"id": "narrow_path",      "label": "🛤️ 窄道",      "hotkey": 0, "kind": "block"},
-	{"id": "fragile_narrow",   "label": "💔 易碎窄道",   "hotkey": 0, "kind": "block"},
 	{"id": "spring",           "label": "🔵 弹簧",      "hotkey": 0, "kind": "block"},
 	{"id": "trigger_spring",   "label": "🟠 触发弹簧",  "hotkey": 0, "kind": "block"},
-	{"id": "star_trail",       "label": "⭐ 绳星轨迹",  "hotkey": 0, "kind": "block"},
 ]
 
 # 工具枚举: 当前鼠标点击会做什么
@@ -234,9 +231,16 @@ var _drag_plane_y: float = 0.0           # 拖动用的水平面 Y (取第一个
 var _drag_vertical_mode: bool = false    # true = Shift 按下进入 Y 拖拽模式
 # ---- 窄道手柄拖拽 ----
 var _is_dragging_handle: bool = false
-var _dragging_handle_name: String = ""   # "start"/"mid"/"end"
+var _dragging_handle_name: String = ""   # "start"/"mid"/"end" 或 "wall_L_0"/"wall_R_1" 等
 var _dragging_handle_block: Node3D = null
 var _drag_handle_plane_y: float = 0.0
+# 手柄模式: 0=路径手柄, 1=左墙手柄, 2=右墙手柄
+var _wall_handle_mode: int = 0  # H 键循环切换
+# 3D 世界中线长度标签
+var _path_length_label_3d: Label3D = null
+# 手柄拖拽 undo: 拖拽前的参数快照
+var _drag_handle_params_before: Dictionary = {}
+var _drag_handle_block_idx: int = -1
 # 选中编辑面板的 SpinBox 引用 (在 _build_ui 创建, _on_selection_changed 时更新)
 var _sel_panel: VBoxContainer = null
 var _sel_x_spin: SpinBox = null
@@ -1776,6 +1780,7 @@ func _refresh_selection_ui() -> void:
 	if _selected_block_indices.is_empty():
 		if outer_panel:
 			outer_panel.visible = false
+		_clear_path_length_label_3d()
 		_update_status()
 		return
 	if outer_panel:
@@ -1797,6 +1802,8 @@ func _refresh_selection_ui() -> void:
 		var data: Dictionary = _placed_blocks[_selected_block_index]
 		var node: Node3D = data["node"]
 		_sel_title_label.text = "📌 选中: %s  [#%d]" % [String(data["id"]), _selected_block_index]
+		# 窄道类: 在 3D 世界中显示中线长度标签
+		_update_path_length_label_3d(node)
 		var pos: Vector3 = node.global_position
 		_sel_x_spin.set_value_no_signal(pos.x)
 		_sel_y_spin.set_value_no_signal(pos.y)
@@ -3447,6 +3454,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				if not _selected_block_indices.is_empty():
 					var handle_hit: String = _pick_narrow_path_handle_at_mouse()
 					if handle_hit != "":
+						# 墙壁节点: 双击切换 active, 单击拖拽
+						if handle_hit.begins_with("wall_") and mb.double_click:
+							_wall_toggle_node_by_name(handle_hit)
+							return
 						_begin_drag_handle(handle_hit)
 						return
 				var picked: int = _pick_placed_block_at_mouse()
@@ -3565,6 +3576,24 @@ func _unhandled_input(event: InputEvent) -> void:
 				# L 键 = 在选中的道路/窄道中线上生成绳星轨迹 (每3颗一组)
 				if not _selected_block_indices.is_empty():
 					_generate_star_trails_on_selected()
+			KEY_EQUAL:
+				# + 键 = 直角窄道新增节点 / 墙壁模式下新增墙节点
+				if _wall_handle_mode > 0:
+					_wall_add_node_at_center()
+				else:
+					_right_angle_add_waypoint()
+			KEY_MINUS:
+				# - 键 = 直角窄道删除末尾节点 / 墙壁模式下删除末尾墙节点
+				if _wall_handle_mode > 0:
+					_wall_remove_last_node()
+				else:
+					_right_angle_remove_waypoint()
+			KEY_H:
+				# H 键 = 切换手柄模式 (路径 → 左墙 → 右墙 → 路径)
+				_toggle_wall_handle_mode()
+			KEY_U:
+				# U 键 = 墙壁模式下快捷开关整面墙壁 (全部节点 active 切换)
+				_wall_toggle_all()
 			KEY_R:
 				# R 键 = 顺时针旋转 yaw +90°, 行为按当前模式区分:
 				#   · SELECT 模式 + 已选中积木 → 旋转选中的积木 (单选/多选都支持, 多选时整组绕第一个旋转)
@@ -4143,6 +4172,14 @@ func _apply_undo(op: Dictionary) -> void:
 			_spawn_position = op.get("old_pos", Vector3.ZERO)
 			_spawn_yaw = float(op.get("old_yaw", 0.0))
 			_sync_spawn_to_placed()
+		"param_change":
+			# 手柄拖拽整体参数变化: 恢复 before 快照
+			var idx2: int = int(op.get("index", -1))
+			if idx2 >= 0 and idx2 < _placed_blocks.size():
+				var n2: Node3D = _placed_blocks[idx2].get("node")
+				if n2 != null:
+					_apply_block_params(n2, op.get("before", {}))
+			_undo_keep_selection = true
 	# 撤销可能影响选中, 默认清掉. 但 param / range op 例外: 保持选中并刷新参数面板
 	# 让 SpinBox 立刻显示撤销后的值 (用户视觉反馈"我的撤销生效了")
 	if _undo_keep_selection and _selected_block_index >= 0 and _selected_block_index < _placed_blocks.size():
@@ -4225,6 +4262,14 @@ func _apply_redo(op: Dictionary) -> void:
 			_spawn_position = op.get("new_pos", Vector3.ZERO)
 			_spawn_yaw = float(op.get("new_yaw", 0.0))
 			_sync_spawn_to_placed()
+		"param_change":
+			# 重做手柄拖拽: 应用 after 快照
+			var idx2: int = int(op.get("index", -1))
+			if idx2 >= 0 and idx2 < _placed_blocks.size():
+				var n2: Node3D = _placed_blocks[idx2].get("node")
+				if n2 != null:
+					_apply_block_params(n2, op.get("after", {}))
+			_undo_keep_selection = true
 	if _undo_keep_selection and _selected_block_index >= 0 and _selected_block_index < _placed_blocks.size():
 		var sel_n: Node3D = _placed_blocks[_selected_block_index].get("node")
 		_rebuild_sel_param_rows(sel_n)
@@ -4730,6 +4775,19 @@ func _collect_block_params(node: Node3D) -> Dictionary:
 		if key.is_empty():
 			continue
 		out[key] = float(p.get("value", 0.0))
+	# 墙壁曲线序列化: 把左右 WallCurve 节点数据编码为特殊参数
+	if node.has_method("get_wall_curve_left"):
+		var wl: WallCurve = node.call("get_wall_curve_left")
+		for wi in range(wl.nodes.size()):
+			out["_wl_t_%d" % wi] = float(wl.nodes[wi]["t"])
+			out["_wl_a_%d" % wi] = 1.0 if bool(wl.nodes[wi]["active"]) else 0.0
+		out["_wl_count"] = float(wl.nodes.size())
+	if node.has_method("get_wall_curve_right"):
+		var wr: WallCurve = node.call("get_wall_curve_right")
+		for wi in range(wr.nodes.size()):
+			out["_wr_t_%d" % wi] = float(wr.nodes[wi]["t"])
+			out["_wr_a_%d" % wi] = 1.0 if bool(wr.nodes[wi]["active"]) else 0.0
+		out["_wr_count"] = float(wr.nodes.size())
 	return out
 
 
@@ -4741,8 +4799,35 @@ func _collect_block_params(node: Node3D) -> Dictionary:
 func _apply_block_params(node: Node3D, params: Dictionary) -> void:
 	if node == null or params.is_empty() or not node.has_method("set_editable_param"):
 		return
+	# 先应用普通参数 (跳过 _wl_ / _wr_ 开头的墙壁序列化数据)
 	for k in params.keys():
+		if String(k).begins_with("_wl_") or String(k).begins_with("_wr_"):
+			continue
 		node.call("set_editable_param", String(k), float(params[k]))
+	# 恢复 WallCurve 数据
+	if node.has_method("get_wall_curve_left") and params.has("_wl_count"):
+		var wl: WallCurve = node.call("get_wall_curve_left")
+		var count: int = int(params["_wl_count"])
+		wl.nodes.clear()
+		for wi in range(count):
+			var t: float = float(params.get("_wl_t_%d" % wi, 0.0))
+			var active: bool = float(params.get("_wl_a_%d" % wi, 1.0)) > 0.5
+			wl.nodes.append({"t": t, "active": active})
+		if wl.nodes.size() < 2:
+			wl.nodes = [{"t": 0.0, "active": true}, {"t": 1.0, "active": true}]
+	if node.has_method("get_wall_curve_right") and params.has("_wr_count"):
+		var wr: WallCurve = node.call("get_wall_curve_right")
+		var count_r: int = int(params["_wr_count"])
+		wr.nodes.clear()
+		for wi in range(count_r):
+			var t: float = float(params.get("_wr_t_%d" % wi, 0.0))
+			var active: bool = float(params.get("_wr_a_%d" % wi, 1.0)) > 0.5
+			wr.nodes.append({"t": t, "active": active})
+		if wr.nodes.size() < 2:
+			wr.nodes = [{"t": 0.0, "active": true}, {"t": 1.0, "active": true}]
+	# 最终 rebuild (墙壁数据恢复后需要重建)
+	if node.has_method("_rebuild") and (params.has("_wl_count") or params.has("_wr_count")):
+		node.call("_rebuild")
 
 
 func _load_track_data(path: String) -> void:
@@ -4854,31 +4939,91 @@ func _update_status() -> void:
 ## 用屏幕空间距离判定 (把手柄世界坐标投影到屏幕, 比 3D 射线检测更可靠)
 func _pick_narrow_path_handle_at_mouse() -> String:
 	var mp: Vector2 = get_viewport().get_mouse_position()
-	var screen_hit_radius: float = 40.0  # 屏幕像素距离阈值 (40px 以内算命中)
+	var screen_hit_radius: float = 40.0
+	# 墙壁模式下放大命中半径 (墙节点标记比路径手柄小)
+	if _wall_handle_mode > 0:
+		screen_hit_radius = 60.0
 	var best: String = ""
 	var best_screen_dist: float = screen_hit_radius + 1.0
+
+	# 墙壁手柄模式: 检测墙壁节点标记
+	if _wall_handle_mode > 0 and not _selected_block_indices.is_empty():
+		var idx: int = int(_selected_block_indices[0])
+		if idx >= 0 and idx < _placed_blocks.size():
+			var node: Node3D = _placed_blocks[idx].get("node")
+			if node != null and node.has_method("get_wall_curve_left"):
+				var side_str: String = "L" if _wall_handle_mode == 1 else "R"
+				var curve: WallCurve = node.call("get_wall_curve_left") if _wall_handle_mode == 1 else node.call("get_wall_curve_right")
+				var points: Array = node.call("_calc_bezier_points") if node.has_method("_calc_bezier_points") else []
+				var n: int = points.size()
+				if n >= 2:
+					for wi in range(curve.nodes.size()):
+						var t: float = float(curve.nodes[wi]["t"])
+						var pt_idx: int = clampi(int(t * float(n - 1)), 0, n - 1)
+						var pt_local: Vector3 = points[pt_idx] as Vector3
+						# 计算 right 方向
+						var dir: Vector3
+						if pt_idx < n - 1:
+							dir = ((points[pt_idx + 1] as Vector3) - pt_local).normalized()
+						else:
+							dir = (pt_local - (points[pt_idx - 1] as Vector3)).normalized()
+						var right: Vector3 = dir.cross(Vector3.UP).normalized()
+						if right.length_squared() < 0.01:
+							right = Vector3.RIGHT
+						var pw: float = node.get("path_width") if "path_width" in node else 4.0
+						var side_mult: float = -1.0 if _wall_handle_mode == 1 else 1.0
+						var wall_h: float = node.get("wall_height") if "wall_height" in node else 2.5
+						var thickness: float = node.get("path_thickness") if "path_thickness" in node else 0.3
+						var marker_pos: Vector3 = pt_local + right * (pw * 0.5 * side_mult)
+						marker_pos.y += thickness * 0.5 + wall_h + 0.5
+						var marker_world: Vector3 = node.global_transform * marker_pos
+						if not _cam.is_position_behind(marker_world):
+							var screen_pos: Vector2 = _cam.unproject_position(marker_world)
+							var dist: float = mp.distance_to(screen_pos)
+							if dist < screen_hit_radius and dist < best_screen_dist:
+								best_screen_dist = dist
+								best = "wall_%s_%d" % [side_str, wi]
+		return best
+
 	for sel_idx in _selected_block_indices:
 		var i: int = int(sel_idx)
 		if i < 0 or i >= _placed_blocks.size():
 			continue
 		var bid: String = String(_placed_blocks[i].get("id", ""))
-		if bid != "narrow_path" and bid != "fragile_narrow" and bid != "star_trail":
+		if bid != "narrow_path" and bid != "fragile_narrow" and bid != "star_trail" and bid != "right_angle_path":
 			continue
 		var node: Node3D = _placed_blocks[i].get("node")
-		if node == null or not node.has_method("get_end_world_pos"):
+		if node == null:
 			continue
-		# 获取三个手柄的世界坐标 (手柄抬高了 2m, 要加上偏移)
+		# 检查手柄是否可见 (路径模式下才需要)
+		if not node.get("_handles_visible"):
+			continue
+
+		# 直角窄道: 用 pick_handle_at 的多节点模式
+		if bid == "right_angle_path":
+			var waypoints: Array = node.get("waypoints") if "waypoints" in node else []
+			var handle_lift := Vector3(0.0, 2.0, 0.0)
+			for wi in range(waypoints.size()):
+				var wp_local: Vector3 = waypoints[wi] as Vector3
+				var wp_world: Vector3 = node.global_transform * (wp_local + handle_lift)
+				if _cam.is_position_behind(wp_world):
+					continue
+				var screen_pos: Vector2 = _cam.unproject_position(wp_world)
+				var dist: float = mp.distance_to(screen_pos)
+				if dist < screen_hit_radius and dist < best_screen_dist:
+					best_screen_dist = dist
+					best = "handle_%d" % wi
+			continue
+
+		# 窄道/绳星: 三手柄模式 (start/mid/end)
+		if not node.has_method("get_end_world_pos"):
+			continue
 		var handle_lift := Vector3(0.0, 2.0, 0.0)
 		var positions: Dictionary = {
 			"start": node.global_position + handle_lift,
 			"end": node.call("get_end_world_pos") + handle_lift,
 			"mid": node.global_position + node.global_transform.basis * (node.get("end_offset") * 0.5 + node.get("curve_offset")) + handle_lift,
 		}
-		# 检查手柄是否可见
-		if node.has_method("pick_handle_at"):
-			if not node.get("_handles_visible"):
-				continue
-		# 投影到屏幕比较距离
 		for hname in positions.keys():
 			var world_pos: Vector3 = positions[hname]
 			if not _cam.is_position_behind(world_pos):
@@ -4903,15 +5048,31 @@ func _begin_drag_handle(handle_name: String) -> void:
 	_is_dragging_handle = true
 	_dragging_handle_name = handle_name
 	_dragging_handle_block = node
+	_drag_handle_block_idx = idx
+	# 记录拖拽前参数快照 (用于 undo)
+	_drag_handle_params_before = _collect_block_params(node)
 	# 拖动平面 Y = 手柄当前位置的 Y
-	match handle_name:
-		"start":
+	if handle_name.begins_with("wall_"):
+		# 墙壁节点拖拽: wall_L_0 / wall_R_1 等
+		_drag_handle_plane_y = node.global_position.y + node.get("wall_height") if "wall_height" in node else 2.5
+	elif handle_name.begins_with("handle_"):
+		# 直角窄道多节点模式
+		var wi: int = int(handle_name.split("_")[1])
+		var waypoints: Array = node.get("waypoints") if "waypoints" in node else []
+		if wi >= 0 and wi < waypoints.size():
+			var wp_world: Vector3 = node.global_transform * (waypoints[wi] as Vector3)
+			_drag_handle_plane_y = wp_world.y
+		else:
 			_drag_handle_plane_y = node.global_position.y
-		"end":
-			_drag_handle_plane_y = node.call("get_end_world_pos").y
-		"mid":
-			var mid_pos: Vector3 = node.global_position + node.global_transform.basis * ((node.get("end_offset") as Vector3) * 0.5 + (node.get("curve_offset") as Vector3))
-			_drag_handle_plane_y = mid_pos.y
+	else:
+		match handle_name:
+			"start":
+				_drag_handle_plane_y = node.global_position.y
+			"end":
+				_drag_handle_plane_y = node.call("get_end_world_pos").y
+			"mid":
+				var mid_pos: Vector3 = node.global_position + node.global_transform.basis * ((node.get("end_offset") as Vector3) * 0.5 + (node.get("curve_offset") as Vector3))
+				_drag_handle_plane_y = mid_pos.y
 
 
 ## 每帧更新手柄拖拽 (鼠标跟随)
@@ -4934,15 +5095,28 @@ func _update_drag_handle() -> void:
 	# 网格吸附
 	if _grid_snap_enabled and Input.is_key_pressed(KEY_ALT):
 		mp_world = _snap_to_grid(mp_world)
-	_dragging_handle_block.call("move_handle_to", _dragging_handle_name, mp_world)
+	# 墙壁节点拖拽: 将世界坐标转为路径上的 t 值
+	if _dragging_handle_name.begins_with("wall_"):
+		_update_wall_node_drag(mp_world)
+	elif _dragging_handle_name.begins_with("handle_"):
+		var wi: int = int(_dragging_handle_name.split("_")[1])
+		_dragging_handle_block.call("move_handle_to", wi, mp_world)
+	else:
+		_dragging_handle_block.call("move_handle_to", _dragging_handle_name, mp_world)
 
 
 ## 获取当前拖拽中手柄的世界位置 (用于 Shift 纵向模式保持 XZ)
 func _get_current_handle_pos() -> Vector3:
 	if _dragging_handle_block == null:
 		return Vector3.ZERO
-	# 注意: 手柄视觉位置有 +2m 抬高, 但 move_handle_to 接收的是路面级坐标
-	# 这里返回的是路面级坐标 (不含抬高), 用于 Shift 纵向拖拽时固定 XZ
+	# 直角窄道多节点模式
+	if _dragging_handle_name.begins_with("handle_"):
+		var wi: int = int(_dragging_handle_name.split("_")[1])
+		var waypoints: Array = _dragging_handle_block.get("waypoints") if "waypoints" in _dragging_handle_block else []
+		if wi >= 0 and wi < waypoints.size():
+			return _dragging_handle_block.global_transform * (waypoints[wi] as Vector3)
+		return _dragging_handle_block.global_position
+	# 窄道三手柄模式
 	match _dragging_handle_name:
 		"start":
 			return _dragging_handle_block.global_position
@@ -4957,10 +5131,77 @@ func _get_current_handle_pos() -> Vector3:
 
 ## 结束手柄拖拽
 func _end_drag_handle() -> void:
+	# Undo: 记录拖拽后参数快照, push undo op
+	if _dragging_handle_block != null and _drag_handle_block_idx >= 0:
+		var params_after: Dictionary = _collect_block_params(_dragging_handle_block)
+		if params_after != _drag_handle_params_before:
+			_undo_push({"op": "param_change", "index": _drag_handle_block_idx, "before": _drag_handle_params_before, "after": params_after})
 	_is_dragging_handle = false
 	_dragging_handle_name = ""
 	_dragging_handle_block = null
+	_drag_handle_block_idx = -1
+	_drag_handle_params_before = {}
 	# 刷新参数面板 (手柄拖拽改了 end_offset/curve_offset)
+	_refresh_selection_ui()
+
+
+## 墙壁节点拖拽: 将鼠标世界坐标投影到路径上, 得到新的 t 值
+func _update_wall_node_drag(world_pos: Vector3) -> void:
+	if _dragging_handle_block == null:
+		return
+	# 解析 "wall_L_0" → side="left", index=0
+	var parts: PackedStringArray = _dragging_handle_name.split("_")
+	if parts.size() < 3:
+		return
+	var side_char: String = parts[1]  # "L" or "R"
+	var node_idx: int = int(parts[2])
+	var side: String = "left" if side_char == "L" else "right"
+
+	# 获取路径点
+	var node: Node3D = _dragging_handle_block
+	if not node.has_method("_calc_bezier_points"):
+		return
+	var points: Array = node.call("_calc_bezier_points")
+	if points.size() < 2:
+		return
+
+	# 将 world_pos 转为本地坐标
+	var local_pos: Vector3 = node.global_transform.affine_inverse() * world_pos
+
+	# 找路径上最近的点, 得到 t 值
+	var best_t: float = 0.0
+	var best_dist: float = 999999.0
+	var n: int = points.size()
+	for i in range(n):
+		var d: float = (points[i] as Vector3).distance_to(local_pos)
+		if d < best_dist:
+			best_dist = d
+			best_t = float(i) / float(n - 1)
+	# clamp t 到 [0, 1]
+	best_t = clampf(best_t, 0.0, 1.0)
+
+	# 更新节点 t 值
+	if node.has_method("wall_move_node"):
+		node.call("wall_move_node", side, node_idx, best_t)
+
+
+## 墙壁节点双击: 切换 active 状态 (有墙↔无墙)
+func _wall_toggle_node_by_name(handle_name: String) -> void:
+	if _selected_block_indices.is_empty():
+		return
+	var idx: int = int(_selected_block_indices[0])
+	if idx < 0 or idx >= _placed_blocks.size():
+		return
+	var node: Node3D = _placed_blocks[idx].get("node")
+	if node == null or not node.has_method("wall_toggle_node"):
+		return
+	var parts: PackedStringArray = handle_name.split("_")
+	if parts.size() < 3:
+		return
+	var side_char: String = parts[1]
+	var node_idx: int = int(parts[2])
+	var side: String = "left" if side_char == "L" else "right"
+	node.call("wall_toggle_node", side, node_idx)
 	_refresh_selection_ui()
 
 
@@ -4984,9 +5225,10 @@ func _join_narrow_paths(join_type: String = "narrow_path") -> void:
 		return
 	var bid_a: String = String(_placed_blocks[idx_a].get("id", ""))
 	var bid_b: String = String(_placed_blocks[idx_b].get("id", ""))
-	if bid_a != "narrow_path" and bid_a != "fragile_narrow":
+	var joinable_ids: Array = ["narrow_path", "fragile_narrow", "right_angle_path", "star_trail"]
+	if bid_a not in joinable_ids:
 		return
-	if bid_b != "narrow_path" and bid_b != "fragile_narrow":
+	if bid_b not in joinable_ids:
 		return
 	if not node_a.has_method("get_end_world_pos") or not node_b.has_method("get_end_world_pos"):
 		return
@@ -5189,6 +5431,234 @@ func _generate_star_trails_on_selected() -> void:
 		_undo_push({"op": "add_many", "indices": added_indices})
 		_update_status()
 		print("[TrackEditor] L键: 在选中道路上生成了 %d 组绳星轨迹" % added_indices.size())
+
+
+## 在 3D 世界中显示选中窄道的中线长度
+func _update_path_length_label_3d(node: Node3D) -> void:
+	# 清除旧标签
+	if _path_length_label_3d != null and is_instance_valid(_path_length_label_3d):
+		_path_length_label_3d.queue_free()
+		_path_length_label_3d = null
+	if node == null:
+		return
+	# 获取路径点 (支持所有窄道类型)
+	var pts: Array = []
+	if node.has_method("_calc_bezier_points"):
+		pts = node.call("_calc_bezier_points")
+	elif node.has_method("_bezier_at"):
+		# FragileNarrow: 用采样获取点
+		for i in range(49):
+			var t: float = float(i) / 48.0
+			pts.append(node.call("_bezier_at", t))
+	elif node.has_method("get_end_world_pos"):
+		# 简单两点
+		pts = [Vector3.ZERO, node.global_transform.affine_inverse() * node.call("get_end_world_pos")]
+	if pts.size() < 2:
+		return
+	var path_len: float = 0.0
+	for pi in range(1, pts.size()):
+		path_len += (pts[pi] as Vector3).distance_to(pts[pi - 1] as Vector3)
+	# 标签位于路径中点上方
+	var mid_idx: int = pts.size() / 2
+	var mid_local: Vector3 = pts[mid_idx] as Vector3
+	var mid_world: Vector3 = node.global_transform * mid_local
+	_path_length_label_3d = Label3D.new()
+	_path_length_label_3d.text = "%.1f m" % path_len
+	_path_length_label_3d.font_size = 96
+	_path_length_label_3d.pixel_size = 0.01
+	_path_length_label_3d.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	_path_length_label_3d.no_depth_test = true
+	_path_length_label_3d.modulate = Color(1.0, 1.0, 1.0, 1.0)
+	_path_length_label_3d.outline_modulate = Color(0.0, 0.0, 0.0, 1.0)
+	_path_length_label_3d.outline_size = 12
+	_path_length_label_3d.global_position = mid_world + Vector3(0.0, 8.0, 0.0)
+	add_child(_path_length_label_3d)
+
+
+## 清除 3D 长度标签 (取消选中时调用)
+func _clear_path_length_label_3d() -> void:
+	if _path_length_label_3d != null and is_instance_valid(_path_length_label_3d):
+		_path_length_label_3d.queue_free()
+		_path_length_label_3d = null
+
+
+# ============================================================
+#  H 键: 墙壁手柄模式切换
+#  模式 0 = 路径手柄 (默认, start/mid/end)
+#  模式 1 = 左墙手柄 (显示左墙节点, 可拖拽 t 值, 点击切 active)
+#  模式 2 = 右墙手柄 (同上)
+# ============================================================
+func _toggle_wall_handle_mode() -> void:
+	if _selected_block_indices.is_empty():
+		return
+	var idx: int = int(_selected_block_indices[0])
+	if idx < 0 or idx >= _placed_blocks.size():
+		return
+	var node: Node3D = _placed_blocks[idx].get("node")
+	if node == null:
+		return
+	# 只有有墙壁系统的窄道才能切换
+	if not node.has_method("get_wall_curve_left"):
+		return
+	_wall_handle_mode = (_wall_handle_mode + 1) % 3
+	# 隐藏旧手柄, 显示新手柄
+	if node.has_method("hide_handles"):
+		node.call("hide_handles")
+	match _wall_handle_mode:
+		0:
+			if node.has_method("show_handles"):
+				node.call("show_handles")
+			_show_wall_mode_label("路径手柄")
+		1:
+			_show_wall_mode_label("◀ 左墙 ▶  (拖拽/双击/U全开关/+增/-删)")
+		2:
+			_show_wall_mode_label("◀ 右墙 ▶  (拖拽/双击/U全开关/+增/-删)")
+	# 触发 rebuild 显示/隐藏对应墙壁标记
+	if node.has_method("_rebuild"):
+		node.call("_rebuild")
+
+
+var _wall_mode_label_3d: Label3D = null
+
+func _show_wall_mode_label(text: String) -> void:
+	print("[TrackEditor] %s" % text)
+	# 在选中物上方显示模式标签 (2秒后消失)
+	if _wall_mode_label_3d and is_instance_valid(_wall_mode_label_3d):
+		_wall_mode_label_3d.queue_free()
+	if _selected_block_indices.is_empty():
+		return
+	var idx: int = int(_selected_block_indices[0])
+	if idx < 0 or idx >= _placed_blocks.size():
+		return
+	var node: Node3D = _placed_blocks[idx].get("node")
+	if node == null:
+		return
+	_wall_mode_label_3d = Label3D.new()
+	_wall_mode_label_3d.text = text
+	_wall_mode_label_3d.font_size = 64
+	_wall_mode_label_3d.pixel_size = 0.01
+	_wall_mode_label_3d.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	_wall_mode_label_3d.no_depth_test = true
+	_wall_mode_label_3d.modulate = Color(0.3, 0.9, 1.0, 1.0)
+	_wall_mode_label_3d.outline_modulate = Color(0.0, 0.0, 0.0, 1.0)
+	_wall_mode_label_3d.outline_size = 10
+	_wall_mode_label_3d.global_position = node.global_position + Vector3(0.0, 6.0, 0.0)
+	add_child(_wall_mode_label_3d)
+	# 2秒后淡出
+	var tw := create_tween()
+	tw.tween_interval(1.5)
+	tw.tween_property(_wall_mode_label_3d, "modulate:a", 0.0, 0.5)
+	tw.tween_callback(func() -> void:
+		if _wall_mode_label_3d and is_instance_valid(_wall_mode_label_3d):
+			_wall_mode_label_3d.queue_free()
+			_wall_mode_label_3d = null
+	)
+
+
+## 墙壁模式下: 在路径中间添加一个新墙节点
+func _wall_add_node_at_center() -> void:
+	if _selected_block_indices.is_empty():
+		return
+	var idx: int = int(_selected_block_indices[0])
+	if idx < 0 or idx >= _placed_blocks.size():
+		return
+	var node: Node3D = _placed_blocks[idx].get("node")
+	if node == null:
+		return
+	var side: String = "left" if _wall_handle_mode == 1 else "right"
+	if node.has_method("wall_add_node"):
+		# 在中间位置(0.5)添加, 如果已有则在最后两个节点中间
+		var curve: WallCurve = node.call("get_wall_curve_left") if side == "left" else node.call("get_wall_curve_right")
+		var last_t: float = 0.5
+		if curve.nodes.size() >= 2:
+			var t0: float = float(curve.nodes[curve.nodes.size() - 2]["t"])
+			var t1: float = float(curve.nodes[curve.nodes.size() - 1]["t"])
+			last_t = (t0 + t1) * 0.5
+		node.call("wall_add_node", side, last_t, true)
+	_refresh_selection_ui()
+
+
+## 墙壁模式下: 删除最后一个非端点墙节点
+func _wall_remove_last_node() -> void:
+	if _selected_block_indices.is_empty():
+		return
+	var idx: int = int(_selected_block_indices[0])
+	if idx < 0 or idx >= _placed_blocks.size():
+		return
+	var node: Node3D = _placed_blocks[idx].get("node")
+	if node == null:
+		return
+	var side: String = "left" if _wall_handle_mode == 1 else "right"
+	if node.has_method("wall_remove_node"):
+		var curve: WallCurve = node.call("get_wall_curve_left") if side == "left" else node.call("get_wall_curve_right")
+		if curve.nodes.size() > 2:
+			node.call("wall_remove_node", side, curve.nodes.size() - 2)
+	_refresh_selection_ui()
+
+
+## U 键: 墙壁模式下快捷开关整面墙壁 (全部节点 active ↔ inactive)
+func _wall_toggle_all() -> void:
+	if _wall_handle_mode == 0:
+		return
+	if _selected_block_indices.is_empty():
+		return
+	var idx: int = int(_selected_block_indices[0])
+	if idx < 0 or idx >= _placed_blocks.size():
+		return
+	var node: Node3D = _placed_blocks[idx].get("node")
+	if node == null or not node.has_method("get_wall_curve_left"):
+		return
+	var side: String = "left" if _wall_handle_mode == 1 else "right"
+	var curve: WallCurve = node.call("get_wall_curve_left") if side == "left" else node.call("get_wall_curve_right")
+	# 判断当前状态: 如果大部分 active 则全关, 否则全开
+	var active_count: int = 0
+	for nd in curve.nodes:
+		if bool(nd["active"]):
+			active_count += 1
+	var new_state: bool = active_count <= curve.nodes.size() / 2
+	for nd in curve.nodes:
+		nd["active"] = new_state
+	# rebuild
+	if node.has_method("_rebuild"):
+		node.call("_rebuild")
+	_show_wall_mode_label("墙壁 %s: %s" % [side, "全部开启" if new_state else "全部关闭"])
+	_refresh_selection_ui()
+
+
+## 直角窄道: 新增节点
+func _right_angle_add_waypoint() -> void:
+	if _selected_block_indices.is_empty():
+		return
+	var idx: int = int(_selected_block_indices[0])
+	if idx < 0 or idx >= _placed_blocks.size():
+		return
+	var bid: String = String(_placed_blocks[idx].get("id", ""))
+	if bid != "right_angle_path":
+		return
+	var node: Node3D = _placed_blocks[idx].get("node")
+	if node == null or not node.has_method("add_waypoint"):
+		return
+	node.call("add_waypoint")
+	_refresh_selection_ui()
+	print("[TrackEditor] 直角窄道: 新增节点 (共 %d)" % (node.get("waypoints") as Array).size())
+
+
+## 直角窄道: 删除末尾节点
+func _right_angle_remove_waypoint() -> void:
+	if _selected_block_indices.is_empty():
+		return
+	var idx: int = int(_selected_block_indices[0])
+	if idx < 0 or idx >= _placed_blocks.size():
+		return
+	var bid: String = String(_placed_blocks[idx].get("id", ""))
+	if bid != "right_angle_path":
+		return
+	var node: Node3D = _placed_blocks[idx].get("node")
+	if node == null or not node.has_method("remove_last_waypoint"):
+		return
+	node.call("remove_last_waypoint")
+	_refresh_selection_ui()
+	print("[TrackEditor] 直角窄道: 删除末尾节点 (共 %d)" % (node.get("waypoints") as Array).size())
 
 
 ## 获取道路中线的世界坐标点序列

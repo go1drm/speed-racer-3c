@@ -1,0 +1,811 @@
+extends Node3D
+class_name FreeGrapple
+## ============================================================
+##  自由钩索 (Free Grapple)
+##
+##  与原 GrappleHook 完全独立、互斥. 开启自由钩索后原钩索不生效.
+##
+##  状态机:
+##    IDLE      → 空闲, 有充能时按空格触发
+##    PULLING   → 绳索收缩中, 持续把车拉向锚点 (绳子可见)
+##    FALLING   → 绳断甩出后, 空中可调整车头朝向, 可按空格发射
+##    LAUNCHING → 发射加速中 (沿车头方向冲刺)
+##    WALL_HIT  → 撞墙中断
+##
+##  流程:
+##    空格 → 射出钩索抓住前方虚拟锚点 → 绳索收缩拉车 → 靠近锚点
+##    → 绳断, 沿速度方向甩出 → 空中调整车头 → 按空格沿车头发射
+##
+##  充能系统:
+##    · 最多 N 层充能 (max_charges), 每次使用氮气获得 1 层
+##    · 每次触发消耗 1 层
+##
+##  按键:
+##    · 空格 (IDLE + 有充能): 射出钩索
+##    · 空格 (FALLING): 沿车头方向发射
+## ============================================================
+
+# ============ 状态枚举 ============
+enum State { IDLE, PULLING, FALLING, LAUNCHING, WALL_HIT }
+var state: int = State.IDLE
+
+# ============ 节点引用 ============
+@export var car_path: NodePath
+var car: RigidBody3D = null
+var car_mesh: Node3D = null
+
+# ============ 参数 ============
+
+@export_group("开关")
+## 自由钩索总开关
+@export var free_grapple_enabled: bool = true
+
+@export_group("锚点")
+## 锚点基础偏移 (本地坐标): X=右, Y=上, Z=前方基础距离
+@export var anchor_offset: Vector3 = Vector3(0.0, 5.0, 15.0)
+## 锚点前方距离随车速增加的系数 (米/(m/s)). 实际前方距离 = Z + 车速 × 此值
+@export_range(0.0, 3.0, 0.05) var anchor_speed_scale: float = 0.8
+## 锚点高度随水平车速增加的系数 (米/(m/s))
+@export_range(0.0, 1.0, 0.02) var anchor_height_speed_scale: float = 0.15
+## 锚点高度随向上速度增加的系数 (米/(m/s)). 车往上飞时锚点更高
+@export_range(0.0, 2.0, 0.05) var anchor_height_upspeed_scale: float = 0.5
+
+@export_group("收绳")
+## 绳索射出后延迟多久开始收绳 (秒). 射出动画在此期间播放, 绳头飞向锚点
+@export_range(0.2, 2.0, 0.02) var rope_taut_delay: float = 0.5
+## 收绳速度 (米/秒). 每秒绳子缩短多少米
+@export_range(5.0, 80.0, 1.0) var reel_speed: float = 35.0
+## 朝锚点的持续拉力 (N × mass). 绳子绷紧时朝锚点拉车的力
+@export_range(30.0, 500.0, 5.0) var pull_force: float = 180.0
+## 收绳最大时长 (秒). 超时强制断绳甩出
+@export_range(0.5, 5.0, 0.1) var pull_max_time: float = 2.5
+## 断绳距离百分比 (初始绳长的%). 车与锚点距离 < 绳长×此比例 时断绳
+## 例: 0.2 = 距离缩短到绳长的 20% 以下时断绳
+@export_range(0.05, 0.5, 0.01) var arrive_ratio: float = 0.2
+## 收绳时重力抵消比例 (0=不抵消, 1=完全抵消重力)
+@export_range(0.0, 1.0, 0.05) var pull_gravity_cancel: float = 0.8
+## 碰撞豁免时间 (秒). 射出后短暂无视墙体碰撞
+@export_range(0.0, 2.0, 0.05) var collision_exempt_time: float = 0.3
+
+@export_group("甩出")
+## 甩出速度倍率. 绳断时 速度 = 当前速度 × 倍率
+@export_range(1.0, 3.0, 0.05) var fling_speed_mult: float = 1.2
+## 甩出最低速度 (m/s). 保底甩出速度
+@export_range(5.0, 40.0, 1.0) var fling_min_speed: float = 18.0
+
+@export_group("空中")
+## 空中转向速度 (rad/s)
+@export_range(0.5, 8.0, 0.1) var air_turn_speed: float = 2.5
+## 按住漂移键时转向倍率
+@export_range(1.0, 5.0, 0.1) var air_drift_turn_mult: float = 2.0
+## 下坠重力倍率 (<1 = 滞空感, 1 = 正常, >1 = 加速下落)
+@export_range(0.1, 5.0, 0.05) var fall_gravity_mult: float = 0.5
+## 空中阻力系数. 速度越高阻力越大, 让车逐渐减速. 0=无阻力
+@export_range(0.0, 2.0, 0.02) var air_drag: float = 0.3
+
+@export_group("发射")
+## 发射速度 (m/s). 按空格后沿车头方向的速度
+@export_range(10.0, 80.0, 1.0) var launch_speed: float = 35.0
+## 发射后无重力时间 (秒)
+@export_range(0.0, 1.5, 0.05) var launch_float_time: float = 0.4
+## 发射持续时间 (秒). 之后回到自由落体
+@export_range(0.1, 2.0, 0.05) var launch_duration: float = 0.5
+## 发射后下坠重力倍率 (>1 = 加速落地). 弹射结束后进入 FALLING 使用此值
+@export_range(1.0, 5.0, 0.1) var post_launch_gravity_mult: float = 2.5
+
+@export_group("镜头效果")
+## 发射时震屏强度 (0=无震屏)
+@export_range(0.0, 3.0, 0.1) var launch_shake_intensity: float = 1.2
+## 发射时震屏时长 (秒)
+@export_range(0.0, 0.8, 0.05) var launch_shake_duration: float = 0.3
+## 发射时 FOV 增量 (度). 产生冲击加速感
+@export_range(0.0, 30.0, 0.5) var launch_fov_boost: float = 12.0
+## 甩出时震屏强度
+@export_range(0.0, 3.0, 0.1) var fling_shake_intensity: float = 0.6
+## 甩出时 FOV 增量
+@export_range(0.0, 20.0, 0.5) var fling_fov_boost: float = 6.0
+
+@export_group("充能")
+## 最大充能层数
+@export_range(1, 5, 1) var max_charges: int = 3
+## 每次使用氮气获得的充能层数
+@export_range(1, 3, 1) var charge_per_nitro: int = 1
+## 充能冷却时间 (秒)
+@export_range(0.0, 5.0, 0.1) var charge_cooldown: float = 1.0
+
+@export_group("视觉")
+## 钩索线颜色
+@export var rope_color: Color = Color(0.9, 0.75, 0.2, 1.0)
+## 钩索线粗细 (米)
+@export_range(0.02, 0.3, 0.01) var rope_thickness: float = 0.12
+
+@export_group("绳索物理")
+## 绳子节点数
+@export_range(8, 48, 1) var rope_node_count: int = 16
+## Verlet 距离约束迭代次数
+@export_range(1, 30, 1) var rope_constraint_iters: int = 20
+## 绳子受到的重力 (仅视觉)
+@export_range(0.0, 80.0, 0.5) var rope_gravity: float = 10.0
+## 空气阻力/阻尼
+@export_range(0.0, 0.5, 0.005) var rope_damping: float = 0.08
+
+# ============ 运行时状态 ============
+var _charges: int = 0
+var _charge_cooldown_left: float = 0.0
+var _state_timer: float = 0.0
+var _anchor_world_pos: Vector3 = Vector3.ZERO
+var _initial_rope_length: float = 30.0
+var _current_rope_length: float = 30.0  ## 当前允许的最大绳长 (每帧缩短)
+var _exempt_timer: float = 0.0
+var _launch_timer: float = 0.0
+var _wall_hit: bool = false
+var _has_launched: bool = false  ## 本次飞行是否已发射过
+var _original_collision_mask: int = 0
+var _original_collision_layer: int = 0
+
+# 视觉
+var _rope_mat: StandardMaterial3D = null
+var _rope_segments: Array[MeshInstance3D] = []
+var _verlet_pos: PackedVector3Array = PackedVector3Array()
+var _verlet_old: PackedVector3Array = PackedVector3Array()
+var _verlet_rest_len: float = 1.0
+var _verlet_inited: bool = false
+
+# 信号
+signal state_changed(new_state: int)
+signal charges_changed(current: int, max_val: int)
+signal launch_ready(ready: bool)
+
+
+func _ready() -> void:
+	call_deferred("_deferred_init")
+
+
+func _deferred_init() -> void:
+	if not car_path.is_empty() and has_node(car_path):
+		car = get_node(car_path) as RigidBody3D
+	if car == null:
+		var p: Node = get_parent()
+		if p is RigidBody3D:
+			car = p as RigidBody3D
+	if car:
+		car_mesh = car.get_node_or_null("CarMesh")
+		_original_collision_layer = car.collision_layer
+		_original_collision_mask = car.collision_mask
+		if car.has_signal("boost_triggered"):
+			car.connect("boost_triggered", _on_boost_triggered)
+	_build_rope_visual()
+	_charges = max_charges
+	emit_signal("charges_changed", _charges, max_charges)
+	print("[FreeGrapple] 初始化完成: car=%s, enabled=%s, charges=%d" % [str(car != null), str(free_grapple_enabled), _charges])
+
+
+func _physics_process(delta: float) -> void:
+	if not free_grapple_enabled or car == null:
+		return
+
+	if _charge_cooldown_left > 0.0:
+		_charge_cooldown_left -= delta
+
+	# FOV 冲击衰减
+	if cam_fov_boost > 0.01:
+		cam_fov_boost = maxf(cam_fov_boost - _fov_decay_speed * delta, 0.0)
+
+	_update_collision_exempt(delta)
+
+	match state:
+		State.IDLE:
+			pass
+		State.PULLING:
+			_update_pulling(delta)
+		State.FALLING:
+			_update_falling(delta)
+		State.LAUNCHING:
+			_update_launching(delta)
+		State.WALL_HIT:
+			_update_wall_hit(delta)
+
+	_update_rope_visual()
+
+
+# ============================================================
+#  PULLING: 绳索收缩, 把车拉向锚点
+# ============================================================
+
+func _update_pulling(delta: float) -> void:
+	_state_timer += delta
+
+	var to_anchor: Vector3 = _anchor_world_pos - car.global_position
+	var dist: float = to_anchor.length()
+	if dist < 0.01:
+		_fling_release()
+		return
+
+	# 1. 超时 → 强制断绳甩出
+	if _state_timer >= pull_max_time:
+		_fling_release()
+		return
+
+	# 2. 绳子射出延迟
+	if _state_timer < rope_taut_delay:
+		return
+
+	# 3. 收绳: 每帧缩短允许绳长
+	_current_rope_length -= reel_speed * delta
+	_current_rope_length = maxf(_current_rope_length, 0.0)
+
+	# 4. 断绳条件: 绳长缩到阈值以下, 或车实际距离 < 阈值
+	#    阈值 = 初始绳长 × arrive_ratio (绳越长断绳距离越大)
+	var snap_dist: float = _initial_rope_length * arrive_ratio
+	if _current_rope_length <= snap_dist or dist < snap_dist:
+		_fling_release()
+		return
+
+	# 5. 绳索约束: 车超出当前允许绳长时, 去掉远离锚点的速度分量 + 施加拉力
+	var pull_dir: Vector3 = to_anchor.normalized()
+	# 安全: 拉力方向不允许朝下 (防止把车压进地面)
+	if pull_dir.y < 0.0:
+		pull_dir.y = 0.0
+		if pull_dir.length_squared() > 0.001:
+			pull_dir = pull_dir.normalized()
+		else:
+			pull_dir = Vector3.UP
+
+	if dist > _current_rope_length:
+		var vel: Vector3 = car.linear_velocity
+		var radial_speed: float = vel.dot(pull_dir)
+		if radial_speed < 0.0:
+			# 去掉远离锚点的速度分量 (只保留切线速度)
+			var new_vel: Vector3 = vel - pull_dir * radial_speed
+			# 保护: 不把 Y 速度压到负值 (防止陷地)
+			if new_vel.y < 0.0 and vel.y >= 0.0:
+				new_vel.y = 0.0
+			car.linear_velocity = new_vel
+		# 朝锚点拉力
+		var overshoot: float = dist - _current_rope_length
+		var constraint_force: float = pull_force * clampf(overshoot / 5.0, 0.2, 1.5)
+		car.apply_central_force(pull_dir * constraint_force * car.mass)
+	else:
+		# 在允许范围内: 施加温和拉力
+		car.apply_central_force(pull_dir * pull_force * 0.5 * car.mass)
+
+	# 6. 重力完全抵消 (收绳阶段车不应该下沉)
+	car.apply_central_force(Vector3.UP * 9.8 * car.mass * pull_gravity_cancel)
+
+	# 7. 地面保护: 如果车在地面附近且速度向下, 清除向下速度
+	if car.linear_velocity.y < -1.0 and _is_on_ground():
+		var v: Vector3 = car.linear_velocity
+		v.y = 0.0
+		car.linear_velocity = v
+
+	# 7. 撞墙检测
+	if _exempt_timer <= 0.0 and _detect_wall_collision():
+		_enter_state(State.WALL_HIT)
+
+
+# ============================================================
+#  FALLING: 空中自由调整车头朝向, 可按空格发射
+# ============================================================
+
+func _update_falling(delta: float) -> void:
+	_state_timer += delta
+
+	# 绳断后统一重力: fall_gravity_mult 控制
+	var gravity_adjust: float = (1.0 - fall_gravity_mult) * 9.8 * car.mass
+	car.apply_central_force(Vector3.UP * gravity_adjust)
+
+	# 空气阻力: F = -v * speed * air_drag * mass (二次方阻力, 速度越快减速越猛)
+	if air_drag > 0.001:
+		var vel: Vector3 = car.linear_velocity
+		var speed: float = vel.length()
+		if speed > 1.0:
+			car.apply_central_force(-vel.normalized() * speed * air_drag * car.mass)
+
+	# 空中转向: 只有未发射时可以调整车头 (发射后锁定方向快速落地)
+	if not _has_launched:
+		var steer_input: float = Input.get_axis("steer_right", "steer_left")
+		if absf(steer_input) < 0.05:
+			steer_input = Input.get_axis("ui_right", "ui_left")
+		var drift_held: bool = Input.is_action_pressed("drift")
+		var turn_mult: float = air_drift_turn_mult if drift_held else 1.0
+		if car_mesh and absf(steer_input) > 0.1:
+			car_mesh.rotate_y(air_turn_speed * turn_mult * steer_input * delta)
+
+	# 着地检测 (前 0.3s 不检测)
+	if _state_timer > 0.3 and _is_on_ground():
+		_enter_state(State.IDLE)
+
+	# 撞墙检测
+	if _detect_wall_collision():
+		_enter_state(State.WALL_HIT)
+
+
+# ============================================================
+#  LAUNCHING: 发射加速中
+# ============================================================
+
+func _update_launching(delta: float) -> void:
+	_launch_timer += delta
+
+	# 发射期间减弱重力
+	if _launch_timer < launch_float_time:
+		var gravity_cancel: float = 9.8 * car.mass * 0.9
+		car.apply_central_force(Vector3.UP * gravity_cancel)
+
+	# 发射结束 → 自由落体
+	if _launch_timer >= launch_duration:
+		_enter_state(State.FALLING)
+
+	# 着地检测
+	if _is_on_ground():
+		_enter_state(State.IDLE)
+
+	# 撞墙检测
+	if _detect_wall_collision():
+		_enter_state(State.WALL_HIT)
+
+
+func _update_wall_hit(_delta: float) -> void:
+	_wall_hit = true
+	_restore_collision()
+	_enter_state(State.IDLE)
+
+
+# ============================================================
+#  状态切换
+# ============================================================
+
+func _enter_state(new_state: int) -> void:
+	# 退出旧状态
+	match state:
+		State.FALLING:
+			emit_signal("launch_ready", false)
+
+	state = new_state
+	_state_timer = 0.0
+
+	match new_state:
+		State.IDLE:
+			_restore_collision()
+			_hide_rope()
+			_wall_hit = false
+			_has_launched = false
+			if car and "_free_grapple_active" in car:
+				car.set("_free_grapple_active", false)
+		State.PULLING:
+			if car and "_free_grapple_active" in car:
+				car.set("_free_grapple_active", true)
+		State.FALLING:
+			if car and "_free_grapple_active" in car:
+				car.set("_free_grapple_active", true)
+			if not _has_launched:
+				emit_signal("launch_ready", true)
+		State.LAUNCHING:
+			if car and "_free_grapple_active" in car:
+				car.set("_free_grapple_active", true)
+			emit_signal("launch_ready", false)
+		State.WALL_HIT:
+			pass
+
+	emit_signal("state_changed", new_state)
+
+
+# ============================================================
+#  触发动作
+# ============================================================
+
+## 按空格 (IDLE 或 弹射后FALLING): 射出钩索. 支持空中接续
+func _trigger_pull() -> void:
+	if _charges <= 0:
+		return
+	_charges -= 1
+	emit_signal("charges_changed", _charges, max_charges)
+
+	# 必须最先设 flag
+	if car and "_free_grapple_active" in car:
+		car.set("_free_grapple_active", true)
+
+	_has_launched = false
+
+	# 计算锚点: 前方距离根据水平速度, 高度根据水平速度+向上速度
+	var vel: Vector3 = car.linear_velocity
+	var horizontal_speed: float = Vector2(vel.x, vel.z).length()
+	var upward_speed: float = maxf(vel.y, 0.0)  # 只取向上分量，向下不影响
+	var forward_dist: float = anchor_offset.z + horizontal_speed * anchor_speed_scale
+	var height: float = anchor_offset.y + horizontal_speed * anchor_height_speed_scale + upward_speed * anchor_height_upspeed_scale
+
+	if car_mesh:
+		var origin: Vector3 = car_mesh.global_position
+		var forward: Vector3 = -car_mesh.global_transform.basis.z
+		var right: Vector3 = car_mesh.global_transform.basis.x
+		_anchor_world_pos = origin \
+			+ right * anchor_offset.x \
+			+ Vector3.UP * height \
+			+ forward * forward_dist
+	else:
+		_anchor_world_pos = car.global_position + Vector3(0, height, -forward_dist)
+
+	_initial_rope_length = car.global_position.distance_to(_anchor_world_pos)
+	_current_rope_length = _initial_rope_length
+
+	# 不禁用碰撞 (保留地面碰撞, 防止陷地)
+	_exempt_timer = 0.0
+
+	# 清除向下速度分量 (确保不会被重力压着跑不动)
+	var cur_vel: Vector3 = car.linear_velocity
+	cur_vel.y = maxf(cur_vel.y, 0.0)
+	car.linear_velocity = cur_vel
+
+	_enter_state(State.PULLING)
+	_show_rope()
+	print("[FreeGrapple] 射出钩索! 锚点=%s, 绳长=%.1f, 收绳速度=%.1f m/s" % [str(_anchor_world_pos), _initial_rope_length, reel_speed])
+
+
+## 绳断甩出: 靠近锚点/超时 → 绳断, 沿当前速度甩出
+func _fling_release() -> void:
+	_hide_rope()
+
+	var vel: Vector3 = car.linear_velocity
+	var speed: float = vel.length()
+	var fling_dir: Vector3
+	if speed > 1.0:
+		fling_dir = vel.normalized()
+	elif car_mesh:
+		fling_dir = -car_mesh.global_transform.basis.z
+	else:
+		fling_dir = Vector3.FORWARD
+	# 不让甩出方向完全朝下
+	fling_dir.y = maxf(fling_dir.y, -0.2)
+	fling_dir = fling_dir.normalized()
+
+	var fling_speed: float = maxf(speed * fling_speed_mult, fling_min_speed)
+	car.linear_velocity = fling_dir * fling_speed
+
+	_enter_state(State.FALLING)
+	_apply_camera_effect(fling_shake_intensity, 0.2, fling_fov_boost)
+	print("[FreeGrapple] 绳断甩出! 速度=%.1f" % fling_speed)
+
+
+## 按空格 (FALLING): 沿车头方向发射
+func _trigger_launch() -> void:
+	if state != State.FALLING:
+		return
+	if _has_launched:
+		return  # 每次飞行只能发射一次
+
+	_has_launched = true
+	_enter_state(State.LAUNCHING)
+	_launch_timer = 0.0
+
+	var forward: Vector3 = -car_mesh.global_transform.basis.z if car_mesh else Vector3.FORWARD
+	forward.y = clampf(forward.y, -0.3, 0.3)
+	forward = forward.normalized()
+	car.linear_velocity = forward * launch_speed
+	_apply_camera_effect(launch_shake_intensity, launch_shake_duration, launch_fov_boost)
+	print("[FreeGrapple] 发射! 方向=%s, 速度=%.1f" % [str(forward), launch_speed])
+
+
+# ============================================================
+#  镜头效果
+# ============================================================
+
+## 当前 FOV 增量 (Camera3D 每帧读取并叠加)
+var cam_fov_boost: float = 0.0
+var _fov_decay_speed: float = 20.0  # FOV 回落速度 (度/秒)
+
+func _apply_camera_effect(shake_intensity: float, shake_duration: float, fov_add: float) -> void:
+	# 震屏
+	if car and shake_intensity > 0.01 and car.has_signal("camera_shake_requested"):
+		car.emit_signal("camera_shake_requested", shake_intensity, shake_duration)
+	# FOV 冲击 (瞬间拉大, 自动衰减回 0)
+	cam_fov_boost = fov_add
+
+
+# ============================================================
+#  充能
+# ============================================================
+
+func _on_boost_triggered(boost_type: String = "") -> void:
+	if boost_type == "nitro" or boost_type == "c":
+		_add_charge()
+
+func _add_charge() -> void:
+	if _wall_hit:
+		return
+	if state != State.IDLE:
+		return
+	if _charge_cooldown_left > 0.0:
+		return
+	_charges = mini(_charges + charge_per_nitro, max_charges)
+	_charge_cooldown_left = charge_cooldown
+	emit_signal("charges_changed", _charges, max_charges)
+
+func get_charges() -> int:
+	return _charges
+
+
+# ============================================================
+#  碰撞豁免
+# ============================================================
+
+func _update_collision_exempt(delta: float) -> void:
+	if _exempt_timer > 0.0:
+		_exempt_timer -= delta
+		if _exempt_timer <= 0.0:
+			if _is_inside_wall():
+				_exempt_timer = 0.05
+			else:
+				_restore_collision()
+
+func _disable_wall_collision() -> void:
+	if car == null:
+		return
+	_original_collision_mask = car.collision_mask
+	_original_collision_layer = car.collision_layer
+	car.collision_mask = 0
+	car.collision_layer = 0
+
+func _restore_collision() -> void:
+	if car == null:
+		return
+	car.collision_mask = _original_collision_mask
+	car.collision_layer = _original_collision_layer
+
+func _is_inside_wall() -> bool:
+	if car == null:
+		return false
+	var space: PhysicsDirectSpaceState3D = car.get_world_3d().direct_space_state
+	if space == null:
+		return false
+	var pos: Vector3 = car.global_position
+	var dirs: Array[Vector3] = [Vector3.RIGHT, Vector3.LEFT, Vector3.FORWARD, Vector3.BACK]
+	for d in dirs:
+		var query := PhysicsRayQueryParameters3D.create(pos, pos + d * 0.5)
+		query.collision_mask = _original_collision_mask
+		query.exclude = [car.get_rid()]
+		var result: Dictionary = space.intersect_ray(query)
+		if result.size() > 0:
+			return true
+	return false
+
+
+# ============================================================
+#  地面/墙壁检测
+# ============================================================
+
+func _is_on_ground() -> bool:
+	if car == null:
+		return false
+	var space: PhysicsDirectSpaceState3D = car.get_world_3d().direct_space_state
+	if space == null:
+		return false
+	var pos: Vector3 = car.global_position
+	var query := PhysicsRayQueryParameters3D.create(pos, pos + Vector3.DOWN * 1.5)
+	query.collision_mask = _original_collision_mask
+	query.exclude = [car.get_rid()]
+	var result: Dictionary = space.intersect_ray(query)
+	return result.size() > 0
+
+func _detect_wall_collision() -> bool:
+	if car == null:
+		return false
+	if _exempt_timer > 0.0:
+		return false
+	var vel: Vector3 = car.linear_velocity
+	if vel.length() < 1.0:
+		return false
+	var space: PhysicsDirectSpaceState3D = car.get_world_3d().direct_space_state
+	if space == null:
+		return false
+	var pos: Vector3 = car.global_position
+	var dir: Vector3 = vel.normalized()
+	var query := PhysicsRayQueryParameters3D.create(pos, pos + dir * 2.0)
+	query.collision_mask = _original_collision_mask
+	query.exclude = [car.get_rid()]
+	var result: Dictionary = space.intersect_ray(query)
+	if result.size() > 0:
+		var normal: Vector3 = result["normal"]
+		if normal.dot(Vector3.UP) < 0.5:
+			return true
+	return false
+
+
+# ============================================================
+#  视觉: 钩索线 (Verlet 绳索)
+# ============================================================
+
+func _build_rope_visual() -> void:
+	_rope_mat = StandardMaterial3D.new()
+	_rope_mat.albedo_color = rope_color
+	_rope_mat.emission_enabled = false
+	_rope_mat.roughness = 0.95
+	_rope_mat.metallic = 0.0
+	_rope_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+
+func _show_rope() -> void:
+	_verlet_inited = false
+
+func _hide_rope() -> void:
+	for seg in _rope_segments:
+		if seg and is_instance_valid(seg):
+			seg.queue_free()
+	_rope_segments.clear()
+	_verlet_pos = PackedVector3Array()
+	_verlet_old = PackedVector3Array()
+	_verlet_inited = false
+
+func _init_verlet(from_pos: Vector3, to_pos: Vector3) -> void:
+	_verlet_pos.clear()
+	_verlet_old.clear()
+	for i in range(rope_node_count):
+		var t: float = float(i) / float(rope_node_count - 1)
+		var p: Vector3 = from_pos.lerp(to_pos, t)
+		_verlet_pos.append(p)
+		_verlet_old.append(p)
+	var total_len: float = from_pos.distance_to(to_pos) * 1.005
+	_verlet_rest_len = total_len / float(rope_node_count - 1)
+	_verlet_inited = true
+
+func _update_rope_visual() -> void:
+	if car == null:
+		return
+	# 绳子只在 PULLING 状态可见
+	if state != State.PULLING:
+		if _rope_segments.size() > 0:
+			_hide_rope()
+		return
+
+	var from_pos: Vector3 = car.global_position + Vector3(0, 0.5, 0)
+
+	# 射出动画: 绳头从车飞向锚点
+	# 飞行进度: 0 = 刚射出(绳头在车上), 1 = 到达锚点
+	var fly_duration: float = maxf(rope_taut_delay - 0.1, 0.05)  # 在延迟结束前0.1s到达
+	var fly_progress: float = clampf(_state_timer / fly_duration, 0.0, 1.0)
+	# ease-out: 开始快结尾慢 (钩索飞出的感觉)
+	var eased: float = 1.0 - (1.0 - fly_progress) * (1.0 - fly_progress)
+
+	# 绳头位置: 从车飞向锚点
+	var to_pos: Vector3
+	if fly_progress < 1.0:
+		# 射出中: 绳头还没到锚点
+		to_pos = from_pos.lerp(_anchor_world_pos, eased)
+	else:
+		# 已挂住: 绳头固定在锚点
+		to_pos = _anchor_world_pos
+
+	var current_dist: float = from_pos.distance_to(to_pos)
+	if current_dist < 0.1:
+		# 绳头还在车上, 不渲染
+		if _rope_segments.size() > 0:
+			_hide_rope()
+		return
+
+	# 绳子长度: 射出时松弛(比直线长50%), 拉紧后贴合(比直线长2%)
+	var slack_mult: float
+	if fly_progress < 1.0:
+		slack_mult = 1.50  # 射出阶段: 大幅松弛, 剧烈甩动
+	else:
+		var taut_p: float = clampf((_state_timer - fly_duration) / 0.1, 0.0, 1.0)
+		slack_mult = lerpf(1.30, 1.05, taut_p)  # 挂住后逐渐收紧
+	var target_rest_total: float = current_dist * slack_mult
+	_verlet_rest_len = target_rest_total / float(rope_node_count - 1)
+
+	if not _verlet_inited or _verlet_pos.size() != rope_node_count:
+		_init_verlet(from_pos, to_pos)
+
+	# Verlet 积分
+	var dt: float = get_physics_process_delta_time()
+	if dt <= 0.0:
+		dt = 1.0 / 60.0
+	dt = minf(dt, 1.0 / 30.0)
+
+	# 射出阶段: 绳子松弛下垂; 拉紧后: 强制直线
+	var is_flying: bool = fly_progress < 1.0
+	var taut_progress: float = clampf((_state_timer - fly_duration) / 0.1, 0.0, 1.0) if not is_flying else 0.0
+
+	if taut_progress >= 1.0:
+		# 完全拉紧: 所有节点强制在直线上 (一根笔直的绳子)
+		for i in range(1, rope_node_count - 1):
+			var t_ratio: float = float(i) / float(rope_node_count - 1)
+			var line_pos: Vector3 = from_pos.lerp(to_pos, t_ratio)
+			_verlet_old[i] = line_pos
+			_verlet_pos[i] = line_pos
+	else:
+		# 射出/过渡阶段: Verlet 物理模拟
+		var grav_scale: float
+		var damp_scale: float
+		if is_flying:
+			grav_scale = 2.5   # 射出时重力加倍 → 绳子剧烈下坠甩动
+			damp_scale = 0.02  # 几乎无阻尼 → 保持甩动动量
+		else:
+			grav_scale = 1.0 - taut_progress
+			damp_scale = lerpf(0.02, rope_damping, taut_progress)
+		var gravity_vec: Vector3 = Vector3(0, -rope_gravity * grav_scale, 0) * dt * dt
+
+		for i in range(1, rope_node_count - 1):
+			var pos: Vector3 = _verlet_pos[i]
+			var old: Vector3 = _verlet_old[i]
+			var vel: Vector3 = (pos - old) * (1.0 - damp_scale)
+			var t_ratio: float = float(i) / float(rope_node_count - 1)
+			var line_target: Vector3 = from_pos.lerp(to_pos, t_ratio)
+			var pull_strength: float
+			if is_flying:
+				pull_strength = 0.005  # 极弱回弹, 让绳子自由甩
+			else:
+				pull_strength = lerpf(0.05, 0.8, taut_progress)
+			var pull_to_line: Vector3 = (line_target - pos) * pull_strength
+			var new_pos: Vector3 = pos + vel + gravity_vec + pull_to_line
+			_verlet_old[i] = pos
+			_verlet_pos[i] = new_pos
+
+	# 锁定端点
+	_verlet_pos[0] = from_pos
+	_verlet_old[0] = from_pos
+	_verlet_pos[rope_node_count - 1] = to_pos
+	_verlet_old[rope_node_count - 1] = to_pos
+
+	# 距离约束
+	for _iter in range(rope_constraint_iters):
+		for i in range(rope_node_count - 1):
+			var p0: Vector3 = _verlet_pos[i]
+			var p1: Vector3 = _verlet_pos[i + 1]
+			var diff: Vector3 = p1 - p0
+			var seg_dist: float = diff.length()
+			if seg_dist < 0.0001:
+				continue
+			var error: float = seg_dist - _verlet_rest_len
+			var correction: Vector3 = diff.normalized() * error * 0.5
+			if i == 0:
+				_verlet_pos[i + 1] -= correction
+			elif i + 1 == rope_node_count - 1:
+				_verlet_pos[i] += correction
+			else:
+				_verlet_pos[i] += correction
+				_verlet_pos[i + 1] -= correction
+
+	# 确保 MeshInstance3D 段数够
+	var seg_count: int = rope_node_count - 1
+	while _rope_segments.size() < seg_count:
+		var seg := MeshInstance3D.new()
+		var cyl := CylinderMesh.new()
+		cyl.top_radius = rope_thickness * 0.5
+		cyl.bottom_radius = rope_thickness * 0.5
+		cyl.height = 1.0
+		cyl.radial_segments = 6
+		seg.mesh = cyl
+		if _rope_mat:
+			seg.material_override = _rope_mat
+		seg.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		get_tree().current_scene.add_child(seg)
+		_rope_segments.append(seg)
+	while _rope_segments.size() > seg_count:
+		var extra: MeshInstance3D = _rope_segments.pop_back()
+		if extra and is_instance_valid(extra):
+			extra.queue_free()
+
+	# 更新每段圆柱
+	for i in range(seg_count):
+		var seg: MeshInstance3D = _rope_segments[i]
+		if seg == null or not is_instance_valid(seg):
+			continue
+		var p0: Vector3 = _verlet_pos[i]
+		var p1: Vector3 = _verlet_pos[i + 1]
+		var seg_dir: Vector3 = p1 - p0
+		var seg_len: float = seg_dir.length()
+		if seg_len < 0.001:
+			seg.visible = false
+			continue
+		seg.visible = true
+		var cyl_mesh: CylinderMesh = seg.mesh as CylinderMesh
+		if cyl_mesh:
+			cyl_mesh.height = seg_len
+			cyl_mesh.top_radius = rope_thickness * 0.5
+			cyl_mesh.bottom_radius = rope_thickness * 0.5
+		var mid_pt: Vector3 = (p0 + p1) * 0.5
+		var y_ax: Vector3 = seg_dir.normalized()
+		var x_ax: Vector3 = Vector3.UP.cross(y_ax)
+		if x_ax.length_squared() < 0.001:
+			x_ax = Vector3.RIGHT.cross(y_ax)
+		x_ax = x_ax.normalized()
+		var z_ax: Vector3 = x_ax.cross(y_ax).normalized()
+		seg.global_transform = Transform3D(Basis(x_ax, y_ax, z_ax), mid_pt)

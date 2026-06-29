@@ -165,7 +165,13 @@ func _physics_process(delta: float) -> void:
 	_grapple_roll_current = lerpf(_grapple_roll_current, _grapple_roll_target, delta * zoom_lerp_speed)
 	# 离开钩索后 target 已经清零, 但 extra 还在追, 自动衰减回 0
 
-	fov = _base_fov + _fov_current_boost + _grapple_fov_extra
+	# 自由钩索 FOV 冲击 (直接从 FreeGrapple 节点读 cam_fov_boost)
+	var _fg_fov: float = 0.0
+	if target and target.get_parent():
+		var _fg: Node = target.get_parent().get_node_or_null("FreeGrapple")
+		if _fg and "cam_fov_boost" in _fg:
+			_fg_fov = float(_fg.get("cam_fov_boost"))
+	fov = _base_fov + _fov_current_boost + _grapple_fov_extra + _fg_fov
 
 	var effective_offset: Vector3 = offset + _zoom_extra
 	# === FreeFly 模式: 相机额外拉远 ===

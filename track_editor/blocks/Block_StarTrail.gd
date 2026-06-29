@@ -355,26 +355,32 @@ func _on_car_touch_star(body: Node3D, star_index: int) -> void:
 		return
 	if not collect_star(star_index):
 		return
+	# 获取星星世界坐标
+	var star_world: Vector3 = Vector3.INF
+	if star_index >= 0 and star_index < _stars.size():
+		var snode: Node3D = _stars[star_index]["node"]
+		if snode:
+			star_world = snode.global_position
 	# 通知 CoopMode 更新计数 (有绳子模式时走 CoopMode 统一计数)
 	var coop_nodes: Array = get_tree().get_nodes_in_group("coop_mode")
 	var notified: bool = false
 	for coop in coop_nodes:
 		if coop.has_method("on_star_collected_by_car"):
-			coop.call("on_star_collected_by_car")
+			coop.call("on_star_collected_by_car", star_world)
 			notified = true
 	# 没有 CoopMode (单人模式): 直接更新 HUD
 	if not notified:
 		_solo_star_count += 1
-		_notify_hud_directly()
+		_notify_hud_directly(star_world)
 
 
 ## 单人模式星星计数 (没有 CoopMode 时用)
 var _solo_star_count: int = 0
 
-func _notify_hud_directly() -> void:
+func _notify_hud_directly(star_world_pos: Vector3 = Vector3.INF) -> void:
 	var hud: Node = get_tree().current_scene.find_child("HUD", true, false)
 	if hud and hud.has_method("update_star_count"):
-		hud.call("update_star_count", _solo_star_count, 0)
+		hud.call("update_star_count", _solo_star_count, 0, star_world_pos)
 
 
 func _play_collect_fx(star_node: Node3D) -> void:

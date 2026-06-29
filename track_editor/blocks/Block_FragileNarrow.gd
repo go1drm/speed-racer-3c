@@ -37,14 +37,23 @@ class_name Block_FragileNarrow
 @export var crack_color: Color = Color(0.9, 0.3, 0.1)
 @export_range(0.0, 2.0, 0.1) var edge_glow: float = 0.4
 
+@export_group("墙壁")
+@export_range(0.0, 5.0, 0.1) var wall_height: float = 0.0  ## 默认0=无墙
+@export_range(0.1, 1.0, 0.05) var wall_thickness: float = 0.3
+@export var wall_color: Color = Color(0.2, 0.5, 0.9, 0.45)  ## 半透明蓝色
+@export_range(0.0, 2.0, 0.1) var wall_emission: float = 0.6
+
 ## Hermite 模式: 当 hermite_from_tan 非零时启用
 var hermite_from_tan: Vector3 = Vector3.ZERO
 var hermite_to_tan: Vector3 = Vector3.ZERO
 
 # ---- 内部 ----
-# 每段: {body: StaticBody3D, mesh: MeshInstance3D, state: "solid"/"cracking"/"falling"/"gone", timer: float, original_pos: Vector3, original_basis: Basis}
+# 每段: {body: StaticBody3D, mesh: MeshInstance3D, state: "solid"/"cracking"/"falling"/"gone", timer: float, original_pos: Vector3, original_basis: Basis, wall_left: MeshInstance3D, wall_right: MeshInstance3D}
 var _segments: Array = []
 var _fall_area: Area3D = null
+# 墙壁系统
+var _wall_curve_left: WallCurve = null
+var _wall_curve_right: WallCurve = null
 # 控制点手柄 (与窄道完全一致)
 var _handle_start: Node3D = null
 var _handle_mid: Node3D = null
@@ -54,6 +63,10 @@ var _handles_visible: bool = false
 
 
 func _ready() -> void:
+	if _wall_curve_left == null:
+		_wall_curve_left = WallCurve.new()
+	if _wall_curve_right == null:
+		_wall_curve_right = WallCurve.new()
 	_rebuild()
 
 
@@ -181,6 +194,17 @@ func _rebuild() -> void:
 		area.transform = Transform3D(area_basis, seg_center + Vector3(0.0, 2.0, 0.0))
 		body.add_child(area)
 
+		# 墙壁: 附加到 body 上 (塌陷时墙壁一同陷落)
+		var wall_left_mi: MeshInstance3D = null
+		var wall_right_mi: MeshInstance3D = null
+		if wall_height > 0.01:
+			wall_left_mi = _build_wall_for_segment(sub_points, sub_rights, sub_widths, -1.0)
+			wall_right_mi = _build_wall_for_segment(sub_points, sub_rights, sub_widths, 1.0)
+			if wall_left_mi:
+				body.add_child(wall_left_mi)
+			if wall_right_mi:
+				body.add_child(wall_right_mi)
+
 		add_child(body)
 
 		var seg_data: Dictionary = {
@@ -191,6 +215,8 @@ func _rebuild() -> void:
 			"timer": 0.0,
 			"original_xform": body.transform,
 			"fall_vel": 0.0,
+			"wall_left": wall_left_mi,
+			"wall_right": wall_right_mi,
 		}
 		_segments.append(seg_data)
 
@@ -364,6 +390,56 @@ func _approx_curve_length() -> float:
 		total += prev.distance_to(pt)
 		prev = pt
 	return total
+
+## 为一段构建墙壁 mesh (side: -1=左, +1=右)
+func _build_wall_for_segment(sub_points: Array[Vector3], sub_rights: Array[Vector3], sub_widths: Array[float], side: float) -> MeshInstance3D:
+	if sub_points.size() < 2:
+		return null
+	# 检查这段是否在墙壁曲线的有墙区间内
+	# 简化: wall_height > 0 时全段都有墙 (由 WallCurve 在外部控制)
+	var wall_mat := StandardMaterial3D.new()
+	wall_mat.albedo_color = wall_color
+	wall_mat.metallic = 0.4
+	wall_mat.roughness = 0.3
+	wall_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	if wall_color.a < 0.99:
+		wall_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	if wall_emission > 0.01:
+		wall_mat.emission_enabled = true
+		wall_mat.emission = Color(wall_color.r, wall_color.g, wall_color.b)
+		wall_mat.emission_energy_multiplier = wall_emission
+
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in range(sub_points.size()):
+		var w_i: float = sub_widths[i] if i < sub_widths.size() else path_width
+		var edge: Vector3 = sub_points[i] + sub_rights[i] * (w_i * 0.5 * side)
+		var bottom: Vector3 = edge + Vector3(0.0, path_thickness * 0.5, 0.0)
+		var top: Vector3 = bottom + Vector3(0.0, wall_height, 0.0)
+		var normal: Vector3 = (sub_rights[i] * side).normalized()
+		var uv_v: float = float(i) / float(sub_points.size() - 1)
+		st.set_normal(normal)
+		st.set_uv(Vector2(0.0, uv_v))
+		st.add_vertex(bottom)
+		st.set_normal(normal)
+		st.set_uv(Vector2(1.0, uv_v))
+		st.add_vertex(top)
+	for i in range(sub_points.size() - 1):
+		var bl: int = i * 2
+		var tl: int = i * 2 + 1
+		var br: int = (i + 1) * 2
+		var tr: int = (i + 1) * 2 + 1
+		if side > 0.0:
+			st.add_index(bl); st.add_index(br); st.add_index(tl)
+			st.add_index(tl); st.add_index(br); st.add_index(tr)
+		else:
+			st.add_index(bl); st.add_index(tl); st.add_index(br)
+			st.add_index(tl); st.add_index(tr); st.add_index(br)
+	var mi := MeshInstance3D.new()
+	mi.mesh = st.commit()
+	mi.material_override = wall_mat
+	return mi
+
 
 func _build_strip_mesh(center_points: Array[Vector3], right_dirs: Array[Vector3], width: float, y_offset: float, widths: Array[float] = []) -> ArrayMesh:
 	var st := SurfaceTool.new()

@@ -91,6 +91,11 @@ var _rope_last_path_len: float = 0.0
 ## 后车卡墙摩擦削减参数 (由 Tuner 控制)
 var rope_friction_mult_when_pulled: float = 0.15  ## 后车被绳子拉时的摩擦倍率 (0=无摩擦, 1=正常摩擦). 越小后车越容易被拉动
 var rope_stuck_speed_threshold: float = 3.0       ## 后车速度低于此值(km/h)且绳子拉紧时, 视为卡住, 开始削减摩擦
+## 防坠坑拉扯阻力: 当绳子拉力方向有向下分量 (拉向坑/低处) 时, 给后车额外的刹车阻力
+## 防止队友在高处被绳子拉下坑. 值越大越不容易被拉下去
+var rope_edge_resist_force: float = 800.0         ## 坠坑抵抗力 (N), 当拉力方向向下时施加反向制动
+var rope_edge_resist_y_threshold: float = -0.15   ## 拉力方向 Y 分量低于此值时触发 (越负=越陡才触发)
+var rope_edge_resist_speed_cap: float = 8.0       ## 只有后车速度(km/h)低于此值时才施加抵抗 (高速行驶中不触发)
 
 ## 绳子缠绕系统参数 (由 Tuner 控制)
 var rope_wrap_enabled: bool = true          ## 绳子缠绕开关 (true=绳子沿墙面缠绕, false=绳子可穿墙)
@@ -263,15 +268,23 @@ var _hud_1p: CanvasLayer = null        ## 1P 的 HUD (左半屏)
 var _hud_2p: CanvasLayer = null        ## 2P 的 HUD (右半屏)
 var _original_hud: CanvasLayer = null  ## 原始 HUD (隐藏)
 
-## 绳子追随 (吸附) 状态
-var _follow_active: bool = false          ## 是否正在追随飞行中
-var _follow_src: RigidBody3D = null        ## 正在飞行的车
-var _follow_target: RigidBody3D = null     ## 飞行目标车 (用于实时获取朝向)
-var _follow_start_pos: Vector3 = Vector3.ZERO  ## 飞行起点
-var _follow_target_pos: Vector3 = Vector3.ZERO ## 飞行终点 (对方当前位置)
-var _follow_start_basis: Basis = Basis.IDENTITY ## 飞行起始朝向
+## 绳索救援 (按键拉队友飞到自己身边) 状态
+## 语义: 1P按ALT → 把2P拉到1P身边 (救援队友); 2P按手柄A → 把1P拉到2P身边
+var _follow_active: bool = false          ## 是否正在救援飞行中
+var _follow_src: RigidBody3D = null        ## 正在被拉过来的车 (队友)
+var _follow_target: RigidBody3D = null     ## 发起救援的车 (自己, 用于实时获取位置)
+var _follow_start_pos: Vector3 = Vector3.ZERO  ## 被救队友的起始位置
+var _follow_target_pos: Vector3 = Vector3.ZERO ## 目标位置 (发起者当前位置)
+var _follow_start_basis: Basis = Basis.IDENTITY ## 被救队友的起始朝向
 var _follow_elapsed: float = 0.0          ## 已飞行时间
 var _follow_duration: float = 0.5         ## 飞行总时长 (秒)
+var _follow_initiator_is_1p: bool = true  ## true=1P发起救援, false=2P发起救援
+## 救援 UI (现在通过 _hud_1p/_hud_2p 各自显示, 不再用全局 CanvasLayer)
+## 救援期间绳索变色: 保存原始绳子颜色 (结束后恢复)
+var _rescue_rope_orig_color: Color = Color.WHITE
+var _rescue_rope_orig_emission: bool = false
+var _rescue_rope_orig_emission_color: Color = Color.BLACK
+var _rescue_rope_orig_emission_energy: float = 0.0
 
 ## 原始场景备份
 var _original_camera: Camera3D = null
@@ -289,17 +302,15 @@ func _input(event: InputEvent) -> void:
 		if event.keycode == KEY_L and _active and _car_1p and _car_2p:
 			_toggle_rope()
 
-	# 绳子追随: 按下时开始向另一名玩家加速飞行 (仅绳子连接时可用)
+	# 绳索救援: 按下时把队友拉到自己身边 (仅绳子连接时可用)
 	if _active and _rope_connected and _car_1p and _car_2p and not _follow_active:
-		# 1P (键盘 ALT): 1P 飞向 2P
+		# 1P (键盘 ALT): 1P 发起救援 → 把 2P 拉到 1P 身边
 		if event is InputEventKey and event.pressed and not event.echo:
 			if event.keycode == KEY_ALT or event.physical_keycode == KEY_ALT:
-				_start_follow(_car_1p, _car_2p)
-				print("[CoopMode] 1P 开始追随飞向 2P")
-		# 2P (手柄 A): 2P 飞向 1P
+				_start_rescue(_car_2p, _car_1p, true)
+		# 2P (手柄 A): 2P 发起救援 → 把 1P 拉到 2P 身边
 		if event.is_action_pressed("p2_rope_follow") and not event.is_echo():
-			_start_follow(_car_2p, _car_1p)
-			print("[CoopMode] 2P 开始追随飞向 1P")
+			_start_rescue(_car_1p, _car_2p, false)
 
 	# 尾流突进: 模式2下后车能量满时按键触发
 	if _active and _rope_connected and rope_mode2_enabled and rope_mode2_slipstream_enabled:
@@ -891,36 +902,57 @@ func _cleanup_2p_car() -> void:
 		_car_2p = null
 
 
-## 绳子追随: 开始加速飞行
-func _start_follow(src: RigidBody3D, target: RigidBody3D) -> void:
-	if src == null or target == null:
+## 绳索救援: 发起者按键 → 把队友拉到自己身边
+## rescued_car: 被救的车 (将飞向发起者)
+## initiator_car: 发起救援的车 (目标位置)
+## initiator_is_1p: true=1P发起, false=2P发起
+func _start_rescue(rescued_car: RigidBody3D, initiator_car: RigidBody3D, initiator_is_1p: bool) -> void:
+	if rescued_car == null or initiator_car == null:
 		return
 	_follow_active = true
-	_follow_src = src
-	_follow_target = target
-	_follow_start_pos = src.global_position
-	# 目标 = 对方当前位置 (无偏移, 直接飞到对方身边)
-	_follow_target_pos = target.global_position
-	# 记录起始朝向 (用于缓动插值到目标朝向)
-	var src_mesh: Node3D = src.get_node_or_null("CarMesh")
+	_follow_src = rescued_car         # 被拉过来的队友
+	_follow_target = initiator_car    # 发起者 (目标)
+	_follow_initiator_is_1p = initiator_is_1p
+	_follow_start_pos = rescued_car.global_position
+	_follow_target_pos = initiator_car.global_position
+	# 记录被救队友的起始朝向
+	var src_mesh: Node3D = rescued_car.get_node_or_null("CarMesh")
 	if src_mesh:
 		_follow_start_basis = src_mesh.global_transform.basis
 	else:
 		_follow_start_basis = Basis.IDENTITY
 	_follow_elapsed = 0.0
-	# 飞行期间冻结物理 (不受重力/碰撞影响)
-	src.linear_velocity = Vector3.ZERO
-	src.angular_velocity = Vector3.ZERO
+	# 被救的车冻结物理
+	rescued_car.linear_velocity = Vector3.ZERO
+	rescued_car.angular_velocity = Vector3.ZERO
 	# 清空缠绕锚点
 	_rope_wrap_points.clear()
+	# 绳索变色: 救援时绳子变金色脉冲发光
+	if _rope_mat:
+		_rescue_rope_orig_color = _rope_mat.albedo_color
+		_rescue_rope_orig_emission = _rope_mat.emission_enabled
+		_rescue_rope_orig_emission_color = _rope_mat.emission if _rope_mat.emission_enabled else Color.BLACK
+		_rescue_rope_orig_emission_energy = _rope_mat.emission_energy_multiplier
+		_rope_mat.albedo_color = Color(1.0, 0.8, 0.15, 1.0)  # 金色
+		_rope_mat.emission_enabled = true
+		_rope_mat.emission = Color(1.0, 0.75, 0.1)
+		_rope_mat.emission_energy_multiplier = 4.0
+	# 显示救援 UI
+	_show_rescue_ui(initiator_is_1p)
+	var who: String = "1P" if initiator_is_1p else "2P"
+	print("[CoopMode] %s 发起救援, 把队友拉到身边!" % who)
 
-## 绳子追随: 每帧更新飞行位置 (加速曲线: ease-in) + 朝向缓动
+## 绳索救援: 每帧更新被救队友的飞行位置 + UI进度
 func _update_follow(delta: float) -> void:
 	if _follow_src == null:
 		_follow_active = false
+		_hide_rescue_ui()
 		return
 	_follow_elapsed += delta
 	var t: float = clampf(_follow_elapsed / _follow_duration, 0.0, 1.0)
+	# 实时更新目标位置 (发起者可能还在移动)
+	if _follow_target:
+		_follow_target_pos = _follow_target.global_position
 	# 加速曲线: t^2 (ease-in, 越来越快)
 	var eased_t: float = t * t
 	# 插值位置
@@ -928,24 +960,23 @@ func _update_follow(delta: float) -> void:
 	# 飞行中保持速度为零 (由位置插值驱动, 不走物理)
 	_follow_src.linear_velocity = Vector3.ZERO
 	_follow_src.angular_velocity = Vector3.ZERO
-	# 飞行中缓动朝向: 从起始朝向平滑过渡到目标车的朝向
+	# 飞行中缓动朝向: 被救队友朝向平滑过渡到发起者朝向
 	var src_mesh: Node3D = _follow_src.get_node_or_null("CarMesh")
 	if src_mesh and _follow_target:
 		var target_mesh: Node3D = _follow_target.get_node_or_null("CarMesh")
 		if target_mesh:
-			# 用四元数 slerp 实现平滑朝向过渡
 			var start_quat: Quaternion = Quaternion(_follow_start_basis)
 			var target_quat: Quaternion = Quaternion(target_mesh.global_transform.basis)
-			# 朝向使用 smoothstep 缓动 (开始慢-中间快-结束慢)
-			var rot_t: float = t * t * (3.0 - 2.0 * t)
+			var rot_t: float = t * t * (3.0 - 2.0 * t)  # smoothstep
 			var current_quat: Quaternion = start_quat.slerp(target_quat, rot_t)
 			src_mesh.global_transform.basis = Basis(current_quat)
+	# 更新救援进度 UI
+	_update_rescue_progress(t)
 	# 到达终点
 	if t >= 1.0:
 		_follow_src.global_position = _follow_target_pos
 		_follow_src.linear_velocity = Vector3.ZERO
 		_follow_src.angular_velocity = Vector3.ZERO
-		# 最终朝向完全对齐目标车
 		if src_mesh and _follow_target:
 			var target_mesh: Node3D = _follow_target.get_node_or_null("CarMesh")
 			if target_mesh:
@@ -953,10 +984,73 @@ func _update_follow(delta: float) -> void:
 		_follow_active = false
 		_follow_src = null
 		_follow_target = null
-		print("[CoopMode] 追随飞行完成, 已到达目标位置")
+		# 恢复绳索颜色
+		_restore_rope_color()
+		# 显示"队友已到达!"完成提示
+		_show_rescue_complete()
+		print("[CoopMode] 救援完成, 队友已到达!")
 	# 飞行中也更新绳子视觉
 	if _rope_connected:
 		_update_rope_visual()
+
+
+# ============================================================
+#  救援 UI 系统
+# ============================================================
+
+## 恢复绳索到救援前的颜色
+func _restore_rope_color() -> void:
+	if _rope_mat:
+		_rope_mat.albedo_color = _rescue_rope_orig_color
+		_rope_mat.emission_enabled = _rescue_rope_orig_emission
+		_rope_mat.emission = _rescue_rope_orig_emission_color
+		_rope_mat.emission_energy_multiplier = _rescue_rope_orig_emission_energy
+
+
+## 显示救援 UI — 分别在 1P 和 2P 的 HUD 上显示不同文本
+## 发起者看到: "🚨 你已对队友发起救援"
+## 被救者看到: "🔗 队友正在救援你!"
+func _show_rescue_ui(initiator_is_1p: bool) -> void:
+	_hide_rescue_ui()
+	# 发起者的 HUD / 被救者的 HUD
+	var initiator_hud: CanvasLayer = _hud_1p if initiator_is_1p else _hud_2p
+	var rescued_hud: CanvasLayer = _hud_2p if initiator_is_1p else _hud_1p
+	if initiator_hud and initiator_hud.has_method("show_rescue_text"):
+		initiator_hud.call("show_rescue_text", "🚨 你已对队友发起救援")
+	if rescued_hud and rescued_hud.has_method("show_rescue_text"):
+		rescued_hud.call("show_rescue_text", "🔗 队友正在救援你!")
+
+
+## 更新救援进度
+func _update_rescue_progress(progress: float) -> void:
+	# 更新两个 HUD 的进度条
+	if _hud_1p and _hud_1p.has_method("update_rescue_progress"):
+		_hud_1p.call("update_rescue_progress", progress)
+	if _hud_2p and _hud_2p.has_method("update_rescue_progress"):
+		_hud_2p.call("update_rescue_progress", progress)
+	# 绳索脉冲发光
+	if _rope_mat:
+		var pulse: float = 3.0 + sin(_follow_elapsed * 12.0) * 1.5
+		_rope_mat.emission_energy_multiplier = pulse
+
+
+## 显示救援完成提示 — 分别在两边显示
+func _show_rescue_complete() -> void:
+	_hide_rescue_ui()
+	var initiator_hud: CanvasLayer = _hud_1p if _follow_initiator_is_1p else _hud_2p
+	var rescued_hud: CanvasLayer = _hud_2p if _follow_initiator_is_1p else _hud_1p
+	if initiator_hud and initiator_hud.has_method("show_rescue_done"):
+		initiator_hud.call("show_rescue_done", "✅ 队友已到达!")
+	if rescued_hud and rescued_hud.has_method("show_rescue_done"):
+		rescued_hud.call("show_rescue_done", "✅ 救援完成!")
+
+
+## 隐藏救援 UI
+func _hide_rescue_ui() -> void:
+	if _hud_1p and _hud_1p.has_method("hide_rescue_text"):
+		_hud_1p.call("hide_rescue_text")
+	if _hud_2p and _hud_2p.has_method("hide_rescue_text"):
+		_hud_2p.call("hide_rescue_text")
 
 
 func _toggle_rope() -> void:
@@ -2490,12 +2584,13 @@ func get_star_count() -> int:
 	return _star_collected_total
 
 ## 赛车直接碰到星星时由 Block_StarTrail 调用
-func on_star_collected_by_car() -> void:
+func on_star_collected_by_car(star_world_pos: Vector3 = Vector3.INF) -> void:
 	_star_collected_total += 1
 	_star_combo += 1
 	_star_combo_timer = STAR_COMBO_WINDOW
 	_flash_rope_on_star_collect()
-	_update_star_hud()
+	_spawn_spiral_fx(star_world_pos)
+	_update_star_hud(star_world_pos)
 
 ## 获取当前连击数
 func get_star_combo() -> int:
@@ -2537,8 +2632,10 @@ func _check_rope_star_collection() -> void:
 				_star_combo_timer = STAR_COMBO_WINDOW
 				# 绳子短暂发光反馈
 				_flash_rope_on_star_collect()
-				# 通知 HUD 更新
-				_update_star_hud()
+				# 螺旋缠绕效果
+				_spawn_spiral_fx(star_pos)
+				# 通知 HUD 更新 (传星星世界坐标)
+				_update_star_hud(star_pos)
 
 
 ## 线段组是否穿过球体 (宽松判定: 线段到球心最短距离 < 半径)
@@ -2582,9 +2679,143 @@ func _flash_rope_on_star_collect() -> void:
 	)
 
 
-## 通知 HUD 更新星星计数
-func _update_star_hud() -> void:
+## 星星缠绕绳子的螺旋运动效果 — 粒子紧贴绳子从碰撞点向两端缠绕
+## center: 星星被收集时的世界坐标 (碰撞点)
+## 实现: 获取当前绳子路径, 找到碰撞点在路径上的最近点, 然后生成两组粒子
+##       一组向 1P 方向缠绕, 一组向 2P 方向缠绕. 每个粒子沿路径前进并绕路径
+##       切线螺旋旋转 (半径很小, 紧贴绳子表面)
+func _spawn_spiral_fx(center: Vector3) -> void:
+	if center == Vector3.INF:
+		return
+	if _car_1p == null or _car_2p == null:
+		return
+	# 获取绳子路径
+	var pos_1p: Vector3 = _get_rope_visual_anchor(_car_1p)
+	var pos_2p: Vector3 = _get_rope_visual_anchor(_car_2p)
+	var rope_path: Array[Vector3] = _get_rope_path(pos_1p, pos_2p)
+	if rope_path.size() < 2:
+		return
+
+	# 计算路径累积长度
+	var cum_len: Array[float] = [0.0]
+	for i in range(1, rope_path.size()):
+		cum_len.append(cum_len[i - 1] + rope_path[i].distance_to(rope_path[i - 1]))
+	var total_len: float = cum_len[cum_len.size() - 1]
+	if total_len < 0.5:
+		return
+
+	# 找碰撞点在绳子路径上的最近投影 t (0~1 归一化)
+	var best_t: float = 0.5
+	var best_dist: float = INF
+	for i in range(rope_path.size() - 1):
+		var a: Vector3 = rope_path[i]
+		var b: Vector3 = rope_path[i + 1]
+		var ab: Vector3 = b - a
+		var ab_len_sq: float = ab.length_squared()
+		var local_t: float = 0.0
+		if ab_len_sq > 0.0001:
+			local_t = clampf((center - a).dot(ab) / ab_len_sq, 0.0, 1.0)
+		var closest: Vector3 = a + ab * local_t
+		var d: float = closest.distance_to(center)
+		if d < best_dist:
+			best_dist = d
+			# 全局 t = (cum_len[i] + local_t * seg_len) / total_len
+			var seg_len: float = cum_len[i + 1] - cum_len[i]
+			best_t = (cum_len[i] + local_t * seg_len) / total_len
+
+	# 沿路径采样一个世界坐标 (t ∈ [0,1])
+	# 返回 {pos: Vector3, tangent: Vector3}
+	var _sample_path := func(t_val: float) -> Dictionary:
+		var target_len: float = t_val * total_len
+		var seg_i: int = 0
+		for i in range(1, cum_len.size()):
+			if cum_len[i] >= target_len:
+				seg_i = i - 1
+				break
+			seg_i = i - 1
+		var seg_len: float = cum_len[seg_i + 1] - cum_len[seg_i]
+		var lt: float = (target_len - cum_len[seg_i]) / maxf(seg_len, 0.001)
+		var pos: Vector3 = rope_path[seg_i].lerp(rope_path[seg_i + 1], lt)
+		var tangent: Vector3 = (rope_path[seg_i + 1] - rope_path[seg_i]).normalized()
+		return {"pos": pos, "tangent": tangent}
+
+	# 创建效果根节点
+	var fx_root := Node3D.new()
+	get_tree().current_scene.add_child(fx_root)
+
+	# 粒子材质 (金色发光半透明)
+	var star_mat := StandardMaterial3D.new()
+	star_mat.albedo_color = Color(1.0, 0.9, 0.2, 0.85)
+	star_mat.emission_enabled = true
+	star_mat.emission = Color(1.0, 0.85, 0.1)
+	star_mat.emission_energy_multiplier = 3.5
+	star_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	star_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+
+	# 共享球体 mesh
+	var shared_sphere := SphereMesh.new()
+	shared_sphere.radius = 0.12
+	shared_sphere.height = 0.24
+	shared_sphere.radial_segments = 6
+	shared_sphere.rings = 3
+
+	# 每个方向 3 个粒子, 共 6 个
+	var particles_per_dir: int = 3
+	var all_particles: Array[MeshInstance3D] = []
+	for i in range(particles_per_dir * 2):
+		var mi := MeshInstance3D.new()
+		mi.mesh = shared_sphere
+		mi.material_override = star_mat
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		fx_root.add_child(mi)
+		all_particles.append(mi)
+
+	# 动画参数
+	var duration: float = 0.7          # 总时长
+	var spiral_radius: float = 0.35    # 螺旋半径 (紧贴绳子)
+	var spiral_turns: float = 4.0      # 螺旋圈数
+	var steps: int = 24
+
+	var tw := fx_root.create_tween()
+	for step in range(steps):
+		var progress: float = float(step + 1) / float(steps)
+		tw.tween_callback(func() -> void:
+			# 粒子 [0..particles_per_dir-1] 向 1P 方向 (t 递减)
+			# 粒子 [particles_per_dir..end] 向 2P 方向 (t 递增)
+			for pi in range(all_particles.size()):
+				var dir_sign: float = -1.0 if pi < particles_per_dir else 1.0
+				var local_idx: int = pi % particles_per_dir
+				# 每个粒子有相位偏移让它们不重叠
+				var phase_offset: float = float(local_idx) * TAU / float(particles_per_dir)
+				# 当前 t 在路径上的位置
+				var current_t: float = best_t + dir_sign * progress * (1.0 - best_t if dir_sign > 0.0 else best_t)
+				current_t = clampf(current_t, 0.0, 1.0)
+				var sample: Dictionary = _sample_path.call(current_t)
+				var path_pos: Vector3 = sample["pos"]
+				var tangent: Vector3 = sample["tangent"]
+				# 计算垂直于切线的螺旋偏移
+				var up: Vector3 = Vector3.UP
+				var right: Vector3 = tangent.cross(up).normalized()
+				if right.length_squared() < 0.01:
+					right = Vector3.RIGHT
+				var local_up: Vector3 = right.cross(tangent).normalized()
+				# 螺旋角度
+				var angle: float = progress * spiral_turns * TAU + phase_offset
+				var r: float = spiral_radius * (1.0 - progress * 0.4)  # 越远越收紧
+				var offset: Vector3 = right * cos(angle) * r + local_up * sin(angle) * r
+				all_particles[pi].global_position = path_pos + offset
+				# 缩小渐隐
+				all_particles[pi].scale = Vector3.ONE * (1.0 - progress * 0.6)
+		)
+		tw.tween_interval(duration / float(steps))
+	tw.tween_callback(func() -> void:
+		fx_root.queue_free()
+	)
+
+
+## 通知 HUD 更新星星计数 (传递星星世界坐标用于飞行动效)
+func _update_star_hud(star_world_pos: Vector3 = Vector3.INF) -> void:
 	if _hud_1p and _hud_1p.has_method("update_star_count"):
-		_hud_1p.call("update_star_count", _star_collected_total, _star_combo)
+		_hud_1p.call("update_star_count", _star_collected_total, _star_combo, star_world_pos)
 	if _hud_2p and _hud_2p.has_method("update_star_count"):
-		_hud_2p.call("update_star_count", _star_collected_total, _star_combo)
+		_hud_2p.call("update_star_count", _star_collected_total, _star_combo, star_world_pos)

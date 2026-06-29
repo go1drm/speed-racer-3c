@@ -219,7 +219,13 @@ func _apply_label_colors() -> void:
 
 
 func _show_stage_banner(stage_idx: int) -> void:
-	_stage_label.text = "第 %d 关" % (stage_idx + 1)
+	var title: String = "第 %d 关" % (stage_idx + 1)
+	# 如果有关卡描述, 附加显示
+	if challenge_data and "stage_descriptions" in challenge_data:
+		var descs: Array = challenge_data.stage_descriptions
+		if stage_idx < descs.size() and String(descs[stage_idx]).strip_edges() != "":
+			title += "\n" + String(descs[stage_idx]).strip_edges()
+	_stage_label.text = title
 	_stage_label.modulate = Color(1, 1, 1, 1)
 	_transition_layer.visible = true
 	# 全覆盖遮住画面 (此时新场景正在初始化, 车在回到出生点)

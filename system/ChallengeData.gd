@@ -13,6 +13,10 @@ class_name ChallengeData
 ## 按数组顺序 = 关卡顺序 (index 0 = 第1关)
 @export var track_sequence: Array[String] = []
 
+## 每关的描述文本 (开局时显示, 如"机关关卡"/"高速关卡"等)
+## 索引对应 track_sequence, 空字符串 = 不显示额外信息
+@export var stage_descriptions: Array[String] = []
+
 ## 保存到 tracks/ 目录
 static func save_challenge(data: ChallengeData, file_name: String) -> String:
 	var dir_path: String = "user://challenges/"

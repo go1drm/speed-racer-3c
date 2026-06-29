@@ -627,6 +627,12 @@ func _show_challenge_editor(existing_path) -> void:
 
 	# 当前序列副本 (闭包内修改)
 	var sequence: Array = data.track_sequence.duplicate()
+	# 关卡描述副本 (与 sequence 等长, 不够的补空串)
+	var descriptions: Array = []
+	if "stage_descriptions" in data:
+		descriptions = data.stage_descriptions.duplicate()
+	while descriptions.size() < sequence.size():
+		descriptions.append("")
 	var user_tracks: Array = _list_user_tracks()
 
 	# 重建列表显示 (用数组包装 Callable 解决递归引用)
@@ -650,9 +656,23 @@ func _show_challenge_editor(existing_path) -> void:
 					break
 			var track_lbl := Label.new()
 			track_lbl.text = track_name
-			track_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			track_lbl.custom_minimum_size = Vector2(100, 0)
 			track_lbl.add_theme_font_size_override("font_size", 12)
 			row.add_child(track_lbl)
+			# 描述输入框
+			var desc_edit := LineEdit.new()
+			desc_edit.placeholder_text = "描述(如:机关关卡)"
+			desc_edit.text = descriptions[i] if i < descriptions.size() else ""
+			desc_edit.custom_minimum_size = Vector2(120, 24)
+			desc_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			desc_edit.add_theme_font_size_override("font_size", 11)
+			var desc_idx: int = i
+			desc_edit.text_changed.connect(func(new_text: String) -> void:
+				while descriptions.size() <= desc_idx:
+					descriptions.append("")
+				descriptions[desc_idx] = new_text
+			)
+			row.add_child(desc_edit)
 			var up_btn := Button.new()
 			up_btn.text = "↑"
 			up_btn.custom_minimum_size = Vector2(28, 24)
@@ -663,6 +683,11 @@ func _show_challenge_editor(existing_path) -> void:
 					var tmp = sequence[idx_up]
 					sequence[idx_up] = sequence[idx_up - 1]
 					sequence[idx_up - 1] = tmp
+					# 同步 descriptions
+					if idx_up < descriptions.size() and idx_up - 1 < descriptions.size():
+						var tmp_d = descriptions[idx_up]
+						descriptions[idx_up] = descriptions[idx_up - 1]
+						descriptions[idx_up - 1] = tmp_d
 					_rebuild_ref[0].call()
 			)
 			row.add_child(up_btn)
@@ -676,6 +701,10 @@ func _show_challenge_editor(existing_path) -> void:
 					var tmp = sequence[idx_down]
 					sequence[idx_down] = sequence[idx_down + 1]
 					sequence[idx_down + 1] = tmp
+					if idx_down < descriptions.size() and idx_down + 1 < descriptions.size():
+						var tmp_d = descriptions[idx_down]
+						descriptions[idx_down] = descriptions[idx_down + 1]
+						descriptions[idx_down + 1] = tmp_d
 					_rebuild_ref[0].call()
 			)
 			row.add_child(down_btn)
@@ -687,6 +716,8 @@ func _show_challenge_editor(existing_path) -> void:
 			var idx_del: int = i
 			del_btn.pressed.connect(func() -> void:
 				sequence.remove_at(idx_del)
+				if idx_del < descriptions.size():
+					descriptions.remove_at(idx_del)
 				_rebuild_ref[0].call()
 			)
 			row.add_child(del_btn)
@@ -711,6 +742,7 @@ func _show_challenge_editor(existing_path) -> void:
 		if sel >= 0:
 			var path: String = add_option.get_item_metadata(sel)
 			sequence.append(path)
+			descriptions.append("")
 			_rebuild_ref[0].call()
 	)
 	add_row.add_child(add_btn)
@@ -729,6 +761,10 @@ func _show_challenge_editor(existing_path) -> void:
 		data.track_sequence.clear()
 		for s in sequence:
 			data.track_sequence.append(s)
+		# 保存关卡描述
+		data.stage_descriptions.clear()
+		for d_text in descriptions:
+			data.stage_descriptions.append(d_text)
 		var save_name: String = data.challenge_name
 		ChallengeDataScript.save_challenge(data, save_name)
 		dlg.queue_free()

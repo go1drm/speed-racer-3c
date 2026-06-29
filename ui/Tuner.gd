@@ -1003,6 +1003,107 @@ const GRAPPLE_PARAMS := [
 
 
 # ============================================================
+# 🕷️ 自由钩索 (FREE_GRAPPLE_PARAMS) - kind="free_grapple"
+# ============================================================
+# 射出钩索抓前方锚点 → 收绳拉车 → 靠近断绳甩出 → 空中调向 → 按空格发射
+const FREE_GRAPPLE_PARAMS := [
+	["__group", "开关"],
+	["free_grapple_enabled",   "自由钩索总开关",       0, 1, 1,
+		"1=启用自由钩索(与原钩索互斥); 0=禁用.", ""],
+
+	["__group", "锚点位置"],
+	["anchor_offset.x",       "锚点X偏移(右)",        -10.0, 10.0, 0.5,
+		"锚点相对车的右方偏移.", ""],
+	["anchor_offset.y",       "锚点Y偏移(上)",         0.0, 20.0, 0.5,
+		"锚点相对车的上方偏移.", ""],
+	["anchor_offset.z",       "锚点基础前方距离",      5.0, 60.0, 1.0,
+		"锚点基础前方距离. 实际距离 = 此值 + 车速×速度系数.", ""],
+	["anchor_speed_scale",    "锚点前方速度系数",      0.0, 3.0, 0.05,
+		"每1m/s车速额外前移多少米.", ""],
+	["anchor_height_speed_scale","锚点高度水平速度系数", 0.0, 1.0, 0.02,
+		"每1m/s水平车速锚点额外升高多少米.", ""],
+	["anchor_height_upspeed_scale","锚点高度向上速度系数", 0.0, 2.0, 0.05,
+		"每1m/s向上速度锚点额外升高多少米. 起飞时锚点更高.", ""],
+
+	["__group", "收绳"],
+	["rope_taut_delay",        "绳索射出时间(秒)",     0.2, 2.0, 0.02,
+		"射出动画时长. 绳头飞向锚点, 挂住后开始收绳.", ""],
+	["reel_speed",             "收绳速度(米/秒)",      5.0, 80.0, 1.0,
+		"绳子每秒缩短多少米. 越快越猛.", ""],
+	["pull_force",             "绷紧拉力(N×mass)",     30.0, 500.0, 5.0,
+		"车超出绳长时朝锚点拉的力.", ""],
+	["pull_max_time",          "收绳最大时长(秒)",     0.5, 5.0, 0.1,
+		"超时强制断绳甩出.", ""],
+	["arrive_ratio",           "断绳距离(%绳长)",      0.05, 0.5, 0.01,
+		"距离<绳长×此比例时断绳. 例:0.2=缩到20%断.", ""],
+	["pull_gravity_cancel",    "收绳重力抵消",         0.0, 1.0, 0.05,
+		"收绳时抵消多少重力.", ""],
+	["collision_exempt_time",  "碰撞豁免时间(秒)",     0.0, 2.0, 0.05,
+		"射出后短暂穿墙.", ""],
+
+	["__group", "甩出"],
+	["fling_speed_mult",       "甩出速度倍率",         1.0, 3.0, 0.05,
+		"绳断时速度 = 当前速度 × 倍率.", ""],
+	["fling_min_speed",        "甩出最低速度(m/s)",    5.0, 40.0, 1.0,
+		"保底甩出速度.", ""],
+
+	["__group", "🪂 空中(甩出后)"],
+	["fall_gravity_mult",      "空中重力倍率",         0.1, 5.0, 0.05,
+		"甩出后的重力. <1滞空, 1正常, >1加速下落. 越大落得越快.", ""],
+	["air_drag",               "空中阻力系数",         0.0, 2.0, 0.02,
+		"空气阻力. 速度越高减速越猛. 0=无阻力, 0.3=适中.", ""],
+	["air_turn_speed",         "空中转向速度(rad/s)",  0.5, 8.0, 0.1,
+		"甩出后方向键调整车头朝向.", ""],
+	["air_drift_turn_mult",    "漂移键转向倍率",       1.0, 5.0, 0.1,
+		"按住漂移键时转向加速.", ""],
+
+	["__group", "发射"],
+	["launch_speed",           "发射速度(m/s)",        10.0, 80.0, 1.0,
+		"FALLING中按空格沿车头方向发射.", ""],
+	["launch_float_time",      "发射无重力时间(秒)",   0.0, 1.5, 0.05,
+		"发射后短暂无重力.", ""],
+	["launch_duration",        "发射持续时间(秒)",     0.1, 2.0, 0.05,
+		"发射状态总时长, 之后自由落体.", ""],
+	["post_launch_gravity_mult","发射后重力倍率",      1.0, 5.0, 0.1,
+		"弹射后加速落地. >1=更快落地, 1=正常重力.", ""],
+
+	["__group", "充能"],
+	["max_charges",            "最大充能层数",         1, 5, 1,
+		"自由钩索最多存几次充能.", ""],
+	["charge_per_nitro",       "每次氮气充能数",       1, 3, 1,
+		"每次使用氮气获得的充能.", ""],
+	["charge_cooldown",        "充能冷却(秒)",         0.0, 5.0, 0.1,
+		"两次充能之间的冷却.", ""],
+
+	["__group", "视觉"],
+	["rope_thickness",         "钩索线粗细(米)",       0.02, 0.3, 0.01,
+		"钩索线的粗细.", ""],
+
+	["__group", "绳子物理"],
+	["rope_node_count",        "绳子节点数",           8, 48, 1,
+		"越多绳子越平滑.", ""],
+	["rope_constraint_iters",  "约束迭代次数",         1, 30, 1,
+		"越多绳子越硬.", ""],
+	["rope_gravity",           "绳子重力",             0.0, 80.0, 0.5,
+		"绳子视觉重力.", ""],
+	["rope_damping",           "绳子阻尼",             0.0, 0.5, 0.005,
+		"绳子阻尼.", ""],
+
+	["__group", "镜头效果"],
+	["launch_shake_intensity", "发射震屏强度",         0.0, 3.0, 0.1,
+		"发射时镜头震动强度.", ""],
+	["launch_shake_duration",  "发射震屏时长(秒)",     0.0, 0.8, 0.05,
+		"发射时震动持续时间.", ""],
+	["launch_fov_boost",       "发射FOV冲击(度)",      0.0, 30.0, 0.5,
+		"发射时FOV增大, 产生冲击加速感.", ""],
+	["fling_shake_intensity",  "甩出震屏强度",         0.0, 3.0, 0.1,
+		"绳断甩出时震动强度.", ""],
+	["fling_fov_boost",        "甩出FOV冲击(度)",      0.0, 20.0, 0.5,
+		"甩出时FOV增大.", ""],
+]
+
+
+# ============================================================
 # 🖼️ 图形设置 (GRAPHICS_PARAMS) - kind="graphics"
 # ============================================================
 # 这一组参数比较特殊: 不是节点上的 @export, 而是 Godot 渲染管线的运行时设置
@@ -1465,6 +1566,24 @@ func _bind_car() -> void:
 				_rows[prop].slider.set_value_no_signal(float(v))
 				_rows[prop].spin.set_value_no_signal(float(v))
 
+	# FreeGrapple 参数 (自由钩索)
+	var fgrapple = _get_free_grapple()
+	if fgrapple:
+		for p in FREE_GRAPPLE_PARAMS:
+			if p.size() < 2:
+				continue
+			var prop: String = p[0]
+			if prop.begins_with("__"):
+				continue
+			if not _has_prop(fgrapple, prop):
+				continue
+			var v = _read_prop(fgrapple, prop)
+			if first_bind:
+				_defaults[prop] = v
+			if _rows.has(prop) and not cfg_keys.has(prop):
+				_rows[prop].slider.set_value_no_signal(float(v))
+				_rows[prop].spin.set_value_no_signal(float(v))
+
 	# CoopMode 参数 (双人绳子)
 	var coop = get_node_or_null("/root/CoopMode")
 	if coop:
@@ -1737,6 +1856,8 @@ func _dispatch_apply(kind: String, prop: String, v: float) -> bool:
 				if hook_2p:
 					_apply_to(hook_2p, prop, v)
 			return ok
+		"free_grapple":
+			return _apply_to(_get_free_grapple(), prop, v)
 		"coop":
 			var coop = get_node_or_null("/root/CoopMode")
 			return _apply_to(coop, prop, v)
@@ -1766,6 +1887,13 @@ func _get_grapple_hook() -> Node:
 	if car == null:
 		return null
 	return car.get_node_or_null("GrappleHook")
+
+
+# 获取自由钩索节点 (car 节点下的 FreeGrapple)
+func _get_free_grapple() -> Node:
+	if car == null:
+		return null
+	return car.get_node_or_null("FreeGrapple")
 
 
 # ============================================================
@@ -2268,6 +2396,11 @@ func _build_ui() -> void:
 	var grapple_list: VBoxContainer = _create_tab_page("🪝 钩索")
 	for p in GRAPPLE_PARAMS:
 		_add_param_row(grapple_list, p, "grapple")
+
+	# 🕷️ 自由钩索 Tab (FreeGrapple, 与原钩索互斥)
+	var fg_list: VBoxContainer = _create_tab_page("🕷️ 自由钩索")
+	for p in FREE_GRAPPLE_PARAMS:
+		_add_param_row(fg_list, p, "free_grapple")
 
 	# 🪢 绳子 Tab (CoopMode 双人模式绳子物理参数)
 	var coop_list: VBoxContainer = _create_tab_page("🪢 绳子")
@@ -3128,6 +3261,7 @@ func _build_mechanism_defaults_tab() -> void:
 		"spring": "res://track_editor/blocks/spring.tscn",
 		"trigger_spring": "res://track_editor/blocks/trigger_spring.tscn",
 		"star_trail": "res://track_editor/blocks/star_trail.tscn",
+		"right_angle_path": "res://track_editor/blocks/right_angle_path.tscn",
 	}
 
 	# 机关中文名映射
@@ -3155,6 +3289,7 @@ func _build_mechanism_defaults_tab() -> void:
 		"spring": "🔵 弹簧",
 		"trigger_spring": "🟠 触发弹簧",
 		"star_trail": "⭐ 绳星轨迹",
+		"right_angle_path": "📐 直角窄道",
 	}
 
 	for block_id in block_library.keys():
