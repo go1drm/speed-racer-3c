@@ -1034,8 +1034,8 @@ const FREE_GRAPPLE_PARAMS := [
 		"朝锚点的拉力.", ""],
 	["pull_max_time",          "最大时长(秒)",          0.5, 5.0, 0.1,
 		"超时断绳.", ""],
-	["arrive_ratio",           "断绳距离(%绳长)",       0.05, 0.5, 0.01,
-		"距离<绳长×此比例时断绳.", ""],
+	["break_angle_deg",        "断绳垂线夹角(度)",      30.0, 150.0, 5.0,
+		"绳子与锚点正下方垂线的夹角. 0°=车在正下方, 90°=车升到锚点同高断绳.", ""],
 	["pull_gravity_cancel",    "重力抵消",              0.0, 1.0, 0.05,
 		"收绳时抵消多少重力.", ""],
 
@@ -1066,18 +1066,38 @@ const FREE_GRAPPLE_PARAMS := [
 		"(保留,未使用)", ""],
 
 	["__group", "🔄 过弯-锚点"],
+	["swing_anchor_mode",      "锚点模式(0车头/1速度)", 0, 1, 1,
+		"0=车头方向决定锚点位置, 1=速度方向决定锚点位置. 车头模式锚点随车头朝向, 速度模式锚点随实际运动方向.", ""],
+
+	["__sub", "方案1: 车头方向"],
 	["swing_anchor_offset.x",  "侧向距离(米)",          5.0, 30.0, 0.5,
-		"锚点在漂移方向的侧面距离. 越大弧线越宽.", ""],
+		"[车头模式] 锚点在漂移方向的侧面距离. 越大弧线越宽.", ""],
 	["swing_anchor_offset.y",  "高度(米)",              0.0, 20.0, 0.5,
-		"锚点上方偏移.", ""],
+		"[车头模式] 锚点上方偏移.", ""],
 	["swing_anchor_offset.z",  "前方距离(米)",          0.0, 20.0, 1.0,
-		"锚点少量前移. 0=纯侧面.", ""],
-	["swing_anchor_speed_scale","侧向速度系数",         0.0, 3.0, 0.05,
-		"每1m/s水平速度额外侧移.", ""],
+		"[车头模式] 锚点少量前移. 0=纯侧面.", ""],
+	["swing_anchor_speed_scale","前方速度系数",          0.0, 3.0, 0.05,
+		"[车头模式] 每1m/s水平速度额外前移.", ""],
 	["swing_anchor_height_speed_scale","高度水平速度系数", 0.0, 1.0, 0.02,
-		"每1m/s水平速度额外升高.", ""],
+		"[车头模式] 每1m/s水平速度额外升高.", ""],
 	["swing_anchor_height_upspeed_scale","高度向上速度系数", 0.0, 2.0, 0.05,
-		"每1m/s向上速度额外升高.", ""],
+		"[车头模式] 每1m/s向上速度额外升高.", ""],
+
+	["__sub", "方案2: 速度方向"],
+	["swing_vel_anchor_offset.x",  "侧向距离(米)",      0.0, 30.0, 0.5,
+		"[速度模式] 锚点在漂移方向的侧面距离. 越大弧线越宽.", ""],
+	["swing_vel_anchor_offset.y",  "高度(米)",          0.0, 20.0, 0.5,
+		"[速度模式] 锚点上方偏移.", ""],
+	["swing_vel_anchor_offset.z",  "前方距离(米)",      0.0, 30.0, 1.0,
+		"[速度模式] 锚点在速度方向前方的基础距离.", ""],
+	["swing_vel_anchor_speed_scale","前方速度系数",      0.0, 3.0, 0.05,
+		"[速度模式] 每1m/s水平速度额外前移.", ""],
+	["swing_vel_anchor_height_speed_scale","高度水平速度系数", 0.0, 1.0, 0.02,
+		"[速度模式] 每1m/s水平速度额外升高.", ""],
+	["swing_vel_anchor_height_upspeed_scale","高度向上速度系数", 0.0, 2.0, 0.05,
+		"[速度模式] 每1m/s向上速度额外升高.", ""],
+
+	["__sub", "通用偏转"],
 	["drift_base_yaw_deg",    "漂移偏转角(度)",         0.0, 90.0, 1.0,
 		"漂移时自动向弯内偏转.", ""],
 	["steer_extra_yaw_deg",   "方向键偏转角(度)",       0.0, 90.0, 1.0,
@@ -1094,8 +1114,8 @@ const FREE_GRAPPLE_PARAMS := [
 		"过弯拉力.", ""],
 	["swing_duration",         "最大时长(秒)",          0.3, 3.0, 0.05,
 		"过弯收绳最大时长.", ""],
-	["swing_arrive_ratio",     "断绳距离(%绳长)",       0.05, 0.5, 0.01,
-		"过弯断绳比例.", ""],
+	["swing_break_swept_deg",  "断绳扫过角度(度)",      30.0, 360.0, 5.0,
+		"车绕锚点扫过的累计角度≥此值时断绳. 90°=过一个直角弯.", ""],
 	["swing_gravity_cancel",   "重力抵消",              0.0, 1.0, 0.05,
 		"过弯收绳重力抵消.", ""],
 	["swing_torque",           "扭矩修正(rad/s²)",      0.0, 15.0, 0.5,
@@ -1138,17 +1158,17 @@ const FREE_GRAPPLE_PARAMS := [
 		"两次充能之间的冷却.", ""],
 
 	["__group", "视觉"],
-	["rope_thickness",         "钩索线粗细(米)",       0.02, 0.3, 0.01,
+	["fg_rope_thickness",      "钩索线粗细(米)",       0.02, 0.3, 0.01,
 		"钩索线的粗细.", ""],
 
 	["__group", "绳子物理"],
-	["rope_node_count",        "绳子节点数",           8, 48, 1,
+	["fg_rope_node_count",     "绳子节点数",           8, 48, 1,
 		"越多绳子越平滑.", ""],
-	["rope_constraint_iters",  "约束迭代次数",         1, 30, 1,
+	["fg_rope_constraint_iters","约束迭代次数",        1, 30, 1,
 		"越多绳子越硬.", ""],
-	["rope_gravity",           "绳子重力",             0.0, 80.0, 0.5,
+	["fg_rope_gravity",        "绳子重力",             0.0, 80.0, 0.5,
 		"绳子视觉重力.", ""],
-	["rope_damping",           "绳子阻尼",             0.0, 0.5, 0.005,
+	["fg_rope_damping",        "绳子阻尼",             0.0, 0.5, 0.005,
 		"绳子阻尼.", ""],
 
 	["__group", "镜头效果"],
@@ -1707,6 +1727,8 @@ func _bind_car() -> void:
 	# 这样后续 _exit_tree 保存时, 即使 spin 已无效 (被 continue 跳过),
 	# 旧 cfg 中已有这些参数的值 (增量更新不会丢)
 	_save_to_path(_stable_cfg_path())
+	# 加载+回写完成后启用 autosave, 之后用户改参数会自动持久化
+	_autosave_enabled = true
 
 
 # 预读 cfg 的 [tune] 段所有 key, 用于 _bind_car 判断"哪些参数玩家已经调过"
@@ -3899,13 +3921,14 @@ func _on_reset() -> void:
 # 改为手动保存: 保存按钮 → backup1.cfg, 加载按钮 → backup1.cfg, 默认按钮 → tune.cfg
 # autosave timer 保留但永远不启动 (_autosave_enabled 始终为 false)
 func _request_autosave() -> void:
-	# 已禁用自动保存, 此函数不再做任何事
-	return
+	if not _autosave_enabled:
+		return
+	if _autosave_timer:
+		_autosave_timer.start()
 
 
 func _on_autosave_timeout() -> void:
-	# 已禁用自动保存, 不再自动触发保存
-	pass
+	_on_save()
 
 
 # 关键修复: 切场景时 (F2 切赛道) 立即 flush autosave timer, 防止"改了值还没等 0.5s 就 F2 → 丢失"
@@ -4079,11 +4102,25 @@ func _load_from_path(load_path: String) -> void:
 		_restore_window_from_cfg(cfg)
 		# 调试: 收集所有 g_* 加载日志, 一次性打印让用户看到哪些图形参数被恢复了
 		var graphics_loaded: Array = []
-		for prop in cfg.get_section_keys("tune"):
+		# 旧名 → 新名映射 (重命名参数时保持向后兼容)
+		# 注: rope_thickness/rope_damping 不映射, 因为它们在 grapple/coop 的 _rows 里仍存在
+		# 首次迁移后 fg_rope_thickness/fg_rope_damping 会以默认值重新写入 cfg
+		var _legacy_prop_map: Dictionary = {
+			"rope_node_count": "fg_rope_node_count",
+			"rope_constraint_iters": "fg_rope_constraint_iters",
+			"rope_gravity": "fg_rope_gravity",
+		}
+		for cfg_key in cfg.get_section_keys("tune"):
+			var prop: String = cfg_key
+			# 旧名兼容: 如果 cfg 里是旧名且新名存在于 _rows, 则映射到新名
+			if not _rows.has(prop) and _legacy_prop_map.has(prop):
+				var new_prop: String = _legacy_prop_map[prop]
+				if _rows.has(new_prop):
+					prop = new_prop
 			if not _rows.has(prop):
 				skipped_count += 1
 				continue   # 已废弃的旧参数, 忽略
-			var v = cfg.get_value("tune", prop)
+			var v = cfg.get_value("tune", cfg_key)
 			var fv: float = float(v)
 			var row = _rows[prop]
 			# 越界时自动放宽 row 范围, 把用户调过的值放进去

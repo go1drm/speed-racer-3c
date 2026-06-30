@@ -60,8 +60,10 @@ var car_mesh: Node3D = null
 @export_range(30.0, 500.0, 5.0) var pull_force: float = 180.0
 ## 收绳最大时长 (秒)
 @export_range(0.5, 5.0, 0.1) var pull_max_time: float = 2.5
-## 断绳距离百分比
-@export_range(0.05, 0.5, 0.01) var arrive_ratio: float = 0.2
+## 直线断绳夹角 (度): 绳子与锚点正下方垂线的夹角
+## 车经过锚点正下方时 θ=0°, 被拉起后 θ 增大
+## 90° = 车升到与锚点同高(锚点正前方), 断绳!
+@export_range(30.0, 150.0, 5.0) var break_angle_deg: float = 90.0
 ## 重力抵消比例
 @export_range(0.0, 1.0, 0.05) var pull_gravity_cancel: float = 0.8
 
@@ -93,14 +95,32 @@ var car_mesh: Node3D = null
 
 ## ==================== 过弯钩索 ====================
 @export_group("过弯-锚点")
-## 过弯锚点偏移: X=侧向距离(漂移方向), Y=高度, Z=少量前移
-@export var swing_anchor_offset: Vector3 = Vector3(15.0, 8.0, 5.0)
+## 锚点定位模式: 0=车头方向, 1=速度方向
+## 车头方向: 锚点基于 car_mesh 的 -basis.z (车头朝向) 计算
+## 速度方向: 锚点基于 car.linear_velocity 的水平分量方向计算
+@export_range(0, 1, 1) var swing_anchor_mode: int = 0
+
+## ---------- 方案1: 车头方向锚点参数 ----------
+## 车头方向锚点偏移: X=侧向微偏, Y=高度, Z=车头前方基础距离
+@export var swing_anchor_offset: Vector3 = Vector3(2.0, 8.0, 18.0)
 ## 前方距离随水平速度系数
-@export_range(0.0, 3.0, 0.05) var swing_anchor_speed_scale: float = 0.5
+@export_range(0.0, 3.0, 0.05) var swing_anchor_speed_scale: float = 0.8
 ## 高度随水平速度系数
 @export_range(0.0, 1.0, 0.02) var swing_anchor_height_speed_scale: float = 0.1
 ## 高度随向上速度系数
 @export_range(0.0, 2.0, 0.05) var swing_anchor_height_upspeed_scale: float = 0.3
+
+## ---------- 方案2: 速度方向锚点参数 ----------
+## 速度方向锚点偏移: X=侧向微偏, Y=高度, Z=速度方向前方基础距离
+@export var swing_vel_anchor_offset: Vector3 = Vector3(2.0, 8.0, 18.0)
+## 前方距离随水平速度系数
+@export_range(0.0, 3.0, 0.05) var swing_vel_anchor_speed_scale: float = 0.8
+## 高度随水平速度系数
+@export_range(0.0, 1.0, 0.02) var swing_vel_anchor_height_speed_scale: float = 0.1
+## 高度随向上速度系数
+@export_range(0.0, 2.0, 0.05) var swing_vel_anchor_height_upspeed_scale: float = 0.3
+
+## ---------- 通用偏转 ----------
 ## 漂移基础偏转角度 (度)
 @export_range(0.0, 90.0, 1.0) var drift_base_yaw_deg: float = 30.0
 ## 方向键额外偏转角度 (度)
@@ -117,8 +137,9 @@ var car_mesh: Node3D = null
 @export_range(30.0, 500.0, 5.0) var swing_pull_force: float = 220.0
 ## 过弯收绳最大时长 (秒)
 @export_range(0.3, 3.0, 0.05) var swing_duration: float = 1.2
-## 过弯断绳距离百分比
-@export_range(0.05, 0.5, 0.01) var swing_arrive_ratio: float = 0.15
+## 过弯断绳累计角度 (度): 车绕锚点扫过的累计角度超过此值就断绳
+## 90° = 过了一个直角弯, 120° = 过了大约1/3圈
+@export_range(30.0, 360.0, 5.0) var swing_break_swept_deg: float = 90.0
 ## 过弯重力抵消
 @export_range(0.0, 1.0, 0.05) var swing_gravity_cancel: float = 0.9
 ## 松手断绳
@@ -181,17 +202,17 @@ var car_mesh: Node3D = null
 ## 钩索线颜色
 @export var rope_color: Color = Color(0.9, 0.75, 0.2, 1.0)
 ## 钩索线粗细 (米)
-@export_range(0.02, 0.3, 0.01) var rope_thickness: float = 0.12
+@export_range(0.02, 0.3, 0.01) var fg_rope_thickness: float = 0.12
 
 @export_group("绳索物理")
 ## 绳子节点数
-@export_range(8, 48, 1) var rope_node_count: int = 16
+@export_range(8, 48, 1) var fg_rope_node_count: int = 16
 ## Verlet 距离约束迭代次数
-@export_range(1, 30, 1) var rope_constraint_iters: int = 20
+@export_range(1, 30, 1) var fg_rope_constraint_iters: int = 20
 ## 绳子受到的重力 (仅视觉)
-@export_range(0.0, 80.0, 0.5) var rope_gravity: float = 10.0
+@export_range(0.0, 80.0, 0.5) var fg_rope_gravity: float = 10.0
 ## 空气阻力/阻尼
-@export_range(0.0, 0.5, 0.005) var rope_damping: float = 0.08
+@export_range(0.0, 0.5, 0.005) var fg_rope_damping: float = 0.08
 
 # ============ 运行时状态 ============
 var _charges: int = 0
@@ -207,6 +228,17 @@ var _has_launched: bool = false  ## 本次飞行是否已发射过
 var _swing_dir: float = 0.0     ## 本次钩索的偏转方向 (-1=左, 0=直线, 1=右)
 var _is_swing_hook: bool = false ## 本次是否是过弯钩索 (有偏转)
 var _steer_release_timer: float = 0.0  ## 松开方向键的计时器
+
+# --- 直线钩索: 垂线夹角断绳 ---
+var _passed_below_anchor: bool = false   ## 车是否已经过锚点正下方
+var _straight_prev_angle: float = 999.0  ## 历史最小垂线夹角 (用于检测θ开始回升)
+var _straight_base_angle: float = 0.0    ## 经过正下方时的θ (断绳 = base + break_angle_deg)
+
+# --- 过弯钩索: 累计扫过角度断绳 ---
+# 抓住瞬间 "锚点→车" 的水平方向 (起始方向)
+var _swing_prev_dir: Vector3 = Vector3.FORWARD
+# 累计扫过角度 (弧度)
+var _swing_swept_angle: float = 0.0
 var _hook_drift_broken: bool = false   ## 钩索挂住时是否已断漂
 var _original_collision_mask: int = 0
 var _original_collision_layer: int = 0
@@ -300,9 +332,31 @@ func _update_pulling(delta: float) -> void:
 	if _state_timer < cur_taut_delay:
 		return
 
-	# 2.5 钩索挂住的第一帧: 设 _free_grapple_active + 强制断漂 + 过弯穿墙
+	# 2.5 钩索挂住的第一帧: 重新计算锚点 + 设 _free_grapple_active + 强制断漂 + 过弯穿墙
 	if not _hook_drift_broken:
 		_hook_drift_broken = true
+		# ====== 关键: 锚点在此刻(抓住瞬间)重新确定 ======
+		# 射出阶段的锚点只是绳头飞行的视觉目标,
+		# 真正的锚点坐标以抓住瞬间的车头位置/速度为准
+		_compute_anchor_position()
+		_initial_rope_length = car.global_position.distance_to(_anchor_world_pos)
+		_current_rope_length = _initial_rope_length
+
+		# --- 初始化断绳判定数据 ---
+		if _is_swing_hook:
+			# 过弯钩索: 记录 "锚点→车" 水平方向作为起始, 累计角度归零
+			var radial: Vector3 = car.global_position - _anchor_world_pos
+			radial.y = 0.0
+			if radial.length() > 0.01:
+				_swing_prev_dir = radial.normalized()
+			else:
+				_swing_prev_dir = Vector3.FORWARD
+			_swing_swept_angle = 0.0
+		else:
+			# 直线钩索: 初始化 "经过正下方" 检测
+			_passed_below_anchor = false
+			_straight_prev_angle = 999.0  # 初始极大值, 第一帧一定会更新
+			_straight_base_angle = 0.0
 		# 现在才设 flag (射出阶段不设, 保留正常摩擦让漂移维持到此刻)
 		if car and "_free_grapple_active" in car:
 			car.set("_free_grapple_active", true)
@@ -346,12 +400,63 @@ func _update_pulling(delta: float) -> void:
 	_current_rope_length -= cur_reel * delta
 	_current_rope_length = maxf(_current_rope_length, 0.0)
 
-	# 5. 断绳条件
-	var cur_arrive: float = swing_arrive_ratio if _is_swing_hook else arrive_ratio
-	var snap_dist: float = _initial_rope_length * cur_arrive
-	if _current_rope_length <= snap_dist or dist < snap_dist:
-		_fling_release()
-		return
+	# 5. 断绳条件 (直线和过弯完全不同的判定方式)
+	if _is_swing_hook:
+		# ---- 过弯钩索: 累计扫过角度断绳 ----
+		# 每帧计算 "锚点→车" 水平方向的增量角度, 累加到 _swing_swept_angle
+		var radial_now: Vector3 = car.global_position - _anchor_world_pos
+		radial_now.y = 0.0
+		if radial_now.length() > 0.01:
+			var dir_now: Vector3 = radial_now.normalized()
+			# 用 atan2 求增量角 (带符号, 但我们只关心绝对值累计)
+			var cross_y: float = _swing_prev_dir.x * dir_now.z - _swing_prev_dir.z * dir_now.x
+			var dot_val: float = _swing_prev_dir.dot(dir_now)
+			var delta_angle: float = absf(atan2(cross_y, dot_val))
+			# 过滤掉过大的突变 (可能是瞬移/穿墙导致, 超过 30°/帧 不合理)
+			if delta_angle < deg_to_rad(30.0):
+				_swing_swept_angle += delta_angle
+			_swing_prev_dir = dir_now
+
+		if _swing_swept_angle >= deg_to_rad(swing_break_swept_deg):
+			print("[FreeGrapple] 过弯断绳! 累计扫过角度=%.1f° (阈值=%.1f°)" % [rad_to_deg(_swing_swept_angle), swing_break_swept_deg])
+			_fling_release()
+			return
+	else:
+		# ---- 直线钩索: 垂线夹角断绳 ----
+		# 车先飞向锚点, 经过锚点正下方 (θ 达到最小值然后回升),
+		# 之后被绳子向上拉起, θ 不断增大.
+		#
+		# 几何:
+		#   θ = Vector3.DOWN 与 (锚点→车) 的夹角
+		#   θ=0°  : 车在锚点正下方
+		#   θ=90° : 车升到与锚点同高
+		#   θ>90° : 车飞到锚点上方
+		#
+		# 关键: 只有车 **经过正下方之后** 才开始判定断绳!
+		# 断绳条件: θ ≥ _straight_base_angle + break_angle_deg
+		#   即从"过正下方时的角度"再被拉起 break_angle_deg 度才断
+		#   这样无论车水平速度多大, 都需要真正被绳子拉起足够角度
+		var anchor_to_car: Vector3 = car.global_position - _anchor_world_pos
+		if anchor_to_car.length() > 0.01:
+			var dir_to_car: Vector3 = anchor_to_car.normalized()
+			var angle_rad: float = Vector3.DOWN.angle_to(dir_to_car)
+			var angle_deg: float = rad_to_deg(angle_rad)
+
+			if not _passed_below_anchor:
+				# 还没经过正下方: 检测 θ 是否开始回升 (过了最低点)
+				if angle_deg > _straight_prev_angle + 0.5:
+					# θ 开始增大了 → 已经过了正下方最低点
+					_passed_below_anchor = true
+					_straight_base_angle = _straight_prev_angle
+					print("[FreeGrapple] 直线: 已过锚点正下方! base_θ=%.1f°, 断绳阈值=%.1f°+%.1f°=%.1f°" % [_straight_base_angle, _straight_base_angle, break_angle_deg, _straight_base_angle + break_angle_deg])
+				_straight_prev_angle = minf(angle_deg, _straight_prev_angle)
+			else:
+				# 已经过正下方: θ 需要从 base 再增大 break_angle_deg 度才断绳
+				var threshold_deg: float = _straight_base_angle + break_angle_deg
+				if angle_deg >= threshold_deg:
+					print("[FreeGrapple] 直线断绳! 垂线夹角=%.1f° (base=%.1f° + 阈值%.1f° = %.1f°)" % [angle_deg, _straight_base_angle, break_angle_deg, threshold_deg])
+					_fling_release()
+					return
 
 	# 5. 绳索约束: 车超出当前允许绳长时, 去掉远离锚点的速度分量 + 施加拉力
 	var pull_dir: Vector3 = to_anchor.normalized()
@@ -381,7 +486,10 @@ func _update_pulling(delta: float) -> void:
 		car.apply_central_force(pull_dir * cur_pull_force * 0.5 * car.mass)
 
 	# 6. 重力抵消
-	car.apply_central_force(Vector3.UP * 9.8 * car.mass * cur_gravity_cancel)
+	# 过弯钩索: 完全抵消重力 (1.0), 不允许残余重力把车压进地面
+	# 直线钩索: 按 pull_gravity_cancel 比例抵消 (默认 0.8)
+	var effective_gravity_cancel: float = 1.0 if _is_swing_hook else cur_gravity_cancel
+	car.apply_central_force(Vector3.UP * 9.8 * car.mass * effective_gravity_cancel)
 
 	# 7. 过弯扭矩修正: 让车头朝钩索切线方向转 (绕锚点荡时车头跟着转)
 	if _is_swing_hook and swing_torque > 0.01 and car_mesh:
@@ -400,11 +508,36 @@ func _update_pulling(delta: float) -> void:
 			# 施加扭矩让车头朝切线方向转
 			car_mesh.rotate_y(swing_torque * cross_y * delta)
 
-	# 8. 地面保护: 如果车在地面附近且速度向下, 清除向下速度
-	if car.linear_velocity.y < -1.0 and _is_on_ground():
-		var v: Vector3 = car.linear_velocity
-		v.y = 0.0
-		car.linear_velocity = v
+	# 8. 地面防陷保护 (仅过弯钩索! 直线钩索需要车飞离地面, 不能阻止)
+	# 用短距射线探测地面, 如果车太贴地或陷入地面则强制抬起
+	# 球体半径 = 1.5 (与 car.gd 一致)
+	if _is_swing_hook:
+		const SWING_SPHERE_RADIUS: float = 1.5
+		var ground_protect_ray_len: float = SWING_SPHERE_RADIUS + 1.5  # 探 3m 够了
+		var space: PhysicsDirectSpaceState3D = car.get_world_3d().direct_space_state
+		if space:
+			var ray_from: Vector3 = car.global_position
+			var ray_to: Vector3 = ray_from + Vector3.DOWN * ground_protect_ray_len
+			var query := PhysicsRayQueryParameters3D.create(ray_from, ray_to)
+			query.collision_mask = _original_collision_mask
+			query.exclude = [car.get_rid()]
+			var result: Dictionary = space.intersect_ray(query)
+			if result.size() > 0:
+				var hit_pos: Vector3 = result["position"]
+				var hit_normal: Vector3 = result["normal"]
+				# 车球心沿法线方向到地面的距离
+				var dist_to_ground: float = (ray_from - hit_pos).dot(hit_normal)
+				# 如果球心距地面 < 球半径 (即球体陷入/刚好接触地面)
+				var min_clearance: float = SWING_SPHERE_RADIUS + 0.05  # 留 5cm 余量
+				if dist_to_ground < min_clearance:
+					# 强制把车抬到安全高度
+					var correction: float = min_clearance - dist_to_ground
+					car.global_position += hit_normal * correction
+					# 清除向下速度分量 (沿法线方向)
+					var v: Vector3 = car.linear_velocity
+					var v_along_n: float = v.dot(hit_normal)
+					if v_along_n < 0.0:
+						car.linear_velocity = v - hit_normal * v_along_n
 
 	# 9. 撞墙检测 (过弯穿墙时跳过, 因为车已经可以穿过墙体)
 	if not (_is_swing_hook and swing_ignore_wall):
@@ -558,58 +691,13 @@ func _trigger_pull() -> void:
 	_is_swing_hook = absf(drift_d) > 0.1
 	_swing_dir = drift_d  # 记录漂移方向 (用于松手断绳检测和扭矩修正)
 
-	# 根据类型计算锚点
-	var vel: Vector3 = car.linear_velocity
-	var horizontal_speed: float = Vector2(vel.x, vel.z).length()
-	var upward_speed: float = maxf(vel.y, 0.0)
-
-	if _is_swing_hook:
-		# 过弯钩索: 锚点在车的侧面 (漂移方向), 固定偏移
-		# swing_anchor_offset: X=侧向距离, Y=高度, Z=前方距离
-		var side_dist: float = swing_anchor_offset.x + horizontal_speed * swing_anchor_speed_scale
-		var height: float = swing_anchor_offset.y + horizontal_speed * swing_anchor_height_speed_scale + upward_speed * swing_anchor_height_upspeed_scale
-		var fwd_dist: float = swing_anchor_offset.z
-
-		if car_mesh:
-			var origin: Vector3 = car_mesh.global_position
-			var basis: Basis = car_mesh.global_transform.basis
-			var body_mesh: Node3D = car_mesh.get_node_or_null("suv2")
-			if body_mesh and absf(body_mesh.rotation.y) > 0.001:
-				basis = basis.rotated(basis.y, body_mesh.rotation.y)
-			var forward: Vector3 = -basis.z
-			var right: Vector3 = basis.x
-			# _swing_dir: 左漂=正(锚点在左), 右漂=负(锚点在右)
-			# right 指向车的右边, 所以左边 = -right
-			_anchor_world_pos = origin \
-				+ right * (-_swing_dir * side_dist) \
-				+ Vector3.UP * height \
-				+ forward * fwd_dist
-		else:
-			_anchor_world_pos = car.global_position + Vector3(-_swing_dir * side_dist, height, 0)
-	else:
-		# 直线钩索: 锚点在车头正前方
-		var forward_dist: float = anchor_offset.z + horizontal_speed * anchor_speed_scale
-		var height: float = anchor_offset.y + horizontal_speed * anchor_height_speed_scale + upward_speed * anchor_height_upspeed_scale
-
-		if car_mesh:
-			var origin: Vector3 = car_mesh.global_position
-			var basis: Basis = car_mesh.global_transform.basis
-			var body_mesh: Node3D = car_mesh.get_node_or_null("suv2")
-			if body_mesh and absf(body_mesh.rotation.y) > 0.001:
-				basis = basis.rotated(basis.y, body_mesh.rotation.y)
-			var forward: Vector3 = -basis.z
-			var right: Vector3 = basis.x
-			_anchor_world_pos = origin \
-				+ right * anchor_offset.x \
-				+ Vector3.UP * height \
-				+ forward * forward_dist
-		else:
-			_anchor_world_pos = car.global_position + Vector3(0, height, -forward_dist)
+	# ====== 锚点坐标不在此处确定! ======
+	# 锚点实际坐标在钩索抓住的瞬间 (_hook_drift_broken 那帧) 才计算
+	# 射出阶段只给一个临时的视觉目标 (绳头飞向的方向)
+	_compute_anchor_position()  # 临时锚点, 用于绳头飞行视觉
 
 	_initial_rope_length = car.global_position.distance_to(_anchor_world_pos)
 	_current_rope_length = _initial_rope_length
-
-
 
 	# 不禁用碰撞 (保留地面碰撞, 防止陷地)
 	_exempt_timer = 0.0
@@ -626,7 +714,80 @@ func _trigger_pull() -> void:
 
 	_enter_state(State.PULLING)
 	_show_rope()
-	print("[FreeGrapple] 射出钩索! 锚点=%s, 绳长=%.1f, 收绳速度=%.1f m/s" % [str(_anchor_world_pos), _initial_rope_length, reel_speed])
+	var mode_str: String = "直线"
+	if _is_swing_hook:
+		mode_str = "过弯(车头)" if swing_anchor_mode == 0 else "过弯(速度)"
+	print("[FreeGrapple] 射出钩索! 模式=%s, 临时锚点=%s, 绳长=%.1f" % [mode_str, str(_anchor_world_pos), _initial_rope_length])
+
+
+## 计算锚点位置 (直线/过弯; 过弯支持 车头方向/速度方向 两种模式)
+func _compute_anchor_position() -> void:
+	var vel: Vector3 = car.linear_velocity
+	var horizontal_speed: float = Vector2(vel.x, vel.z).length()
+	var upward_speed: float = maxf(vel.y, 0.0)
+
+	if _is_swing_hook:
+		if swing_anchor_mode == 1:
+			# ---- 方案2: 速度方向决定锚点位置 ----
+			# 前方方向 = 水平速度方向 (而非车头朝向)
+			var vel_h: Vector3 = Vector3(vel.x, 0.0, vel.z)
+			var vel_forward: Vector3
+			if vel_h.length() > 0.5:
+				vel_forward = vel_h.normalized()
+			elif car_mesh:
+				# 速度太小时回退到车头方向
+				vel_forward = -car_mesh.global_transform.basis.z
+				vel_forward.y = 0.0
+				vel_forward = vel_forward.normalized()
+			else:
+				vel_forward = Vector3.FORWARD
+
+			var vel_right: Vector3 = vel_forward.cross(Vector3.UP).normalized()
+
+			var fwd_dist: float = swing_vel_anchor_offset.z + horizontal_speed * swing_vel_anchor_speed_scale
+			var height: float = swing_vel_anchor_offset.y + horizontal_speed * swing_vel_anchor_height_speed_scale + upward_speed * swing_vel_anchor_height_upspeed_scale
+			var side_offset: float = swing_vel_anchor_offset.x
+
+			var origin: Vector3 = car.global_position
+			if car_mesh:
+				origin = car_mesh.global_position
+			_anchor_world_pos = origin \
+				+ vel_forward * fwd_dist \
+				+ vel_right * (_swing_dir * side_offset) \
+				+ Vector3.UP * height
+		else:
+			# ---- 方案1: 车头方向决定锚点位置 (原逻辑) ----
+			var fwd_dist: float = swing_anchor_offset.z + horizontal_speed * swing_anchor_speed_scale
+			var height: float = swing_anchor_offset.y + horizontal_speed * swing_anchor_height_speed_scale + upward_speed * swing_anchor_height_upspeed_scale
+			var side_offset: float = swing_anchor_offset.x
+
+			if car_mesh:
+				var origin: Vector3 = car_mesh.global_position
+				var basis: Basis = car_mesh.global_transform.basis
+				var forward: Vector3 = -basis.z
+				var right: Vector3 = basis.x
+				_anchor_world_pos = origin \
+					+ forward * fwd_dist \
+					+ right * (-_swing_dir * side_offset) \
+					+ Vector3.UP * height
+			else:
+				_anchor_world_pos = car.global_position + Vector3(-_swing_dir * side_offset, height, -fwd_dist)
+	else:
+		# 直线钩索: 锚点在车头正前方
+		var forward_dist: float = anchor_offset.z + horizontal_speed * anchor_speed_scale
+		var height: float = anchor_offset.y + horizontal_speed * anchor_height_speed_scale + upward_speed * anchor_height_upspeed_scale
+
+		if car_mesh:
+			var origin: Vector3 = car_mesh.global_position
+			var basis: Basis = car_mesh.global_transform.basis
+			var forward: Vector3 = -basis.z
+			var right: Vector3 = basis.x
+			_anchor_world_pos = origin \
+				+ forward * forward_dist \
+				+ right * anchor_offset.x \
+				+ Vector3.UP * height
+		else:
+			_anchor_world_pos = car.global_position + Vector3(0, height, -forward_dist)
 
 
 ## 绳断甩出: 靠近锚点/超时 → 绳断, 沿当前速度甩出
@@ -837,13 +998,13 @@ func _hide_rope() -> void:
 func _init_verlet(from_pos: Vector3, to_pos: Vector3) -> void:
 	_verlet_pos.clear()
 	_verlet_old.clear()
-	for i in range(rope_node_count):
-		var t: float = float(i) / float(rope_node_count - 1)
+	for i in range(fg_rope_node_count):
+		var t: float = float(i) / float(fg_rope_node_count - 1)
 		var p: Vector3 = from_pos.lerp(to_pos, t)
 		_verlet_pos.append(p)
 		_verlet_old.append(p)
 	var total_len: float = from_pos.distance_to(to_pos) * 1.005
-	_verlet_rest_len = total_len / float(rope_node_count - 1)
+	_verlet_rest_len = total_len / float(fg_rope_node_count - 1)
 	_verlet_inited = true
 
 func _update_rope_visual() -> void:
@@ -889,9 +1050,9 @@ func _update_rope_visual() -> void:
 		var taut_p: float = clampf((_state_timer - fly_duration) / 0.1, 0.0, 1.0)
 		slack_mult = lerpf(1.30, 1.05, taut_p)  # 挂住后逐渐收紧
 	var target_rest_total: float = current_dist * slack_mult
-	_verlet_rest_len = target_rest_total / float(rope_node_count - 1)
+	_verlet_rest_len = target_rest_total / float(fg_rope_node_count - 1)
 
-	if not _verlet_inited or _verlet_pos.size() != rope_node_count:
+	if not _verlet_inited or _verlet_pos.size() != fg_rope_node_count:
 		_init_verlet(from_pos, to_pos)
 
 	# Verlet 积分
@@ -906,8 +1067,8 @@ func _update_rope_visual() -> void:
 
 	if taut_progress >= 1.0:
 		# 完全拉紧: 所有节点强制在直线上 (一根笔直的绳子)
-		for i in range(1, rope_node_count - 1):
-			var t_ratio: float = float(i) / float(rope_node_count - 1)
+		for i in range(1, fg_rope_node_count - 1):
+			var t_ratio: float = float(i) / float(fg_rope_node_count - 1)
 			var line_pos: Vector3 = from_pos.lerp(to_pos, t_ratio)
 			_verlet_old[i] = line_pos
 			_verlet_pos[i] = line_pos
@@ -920,14 +1081,14 @@ func _update_rope_visual() -> void:
 			damp_scale = 0.02  # 几乎无阻尼 → 保持甩动动量
 		else:
 			grav_scale = 1.0 - taut_progress
-			damp_scale = lerpf(0.02, rope_damping, taut_progress)
-		var gravity_vec: Vector3 = Vector3(0, -rope_gravity * grav_scale, 0) * dt * dt
+			damp_scale = lerpf(0.02, fg_rope_damping, taut_progress)
+		var gravity_vec: Vector3 = Vector3(0, -fg_rope_gravity * grav_scale, 0) * dt * dt
 
-		for i in range(1, rope_node_count - 1):
+		for i in range(1, fg_rope_node_count - 1):
 			var pos: Vector3 = _verlet_pos[i]
 			var old: Vector3 = _verlet_old[i]
 			var vel: Vector3 = (pos - old) * (1.0 - damp_scale)
-			var t_ratio: float = float(i) / float(rope_node_count - 1)
+			var t_ratio: float = float(i) / float(fg_rope_node_count - 1)
 			var line_target: Vector3 = from_pos.lerp(to_pos, t_ratio)
 			var pull_strength: float
 			if is_flying:
@@ -942,12 +1103,12 @@ func _update_rope_visual() -> void:
 	# 锁定端点
 	_verlet_pos[0] = from_pos
 	_verlet_old[0] = from_pos
-	_verlet_pos[rope_node_count - 1] = to_pos
-	_verlet_old[rope_node_count - 1] = to_pos
+	_verlet_pos[fg_rope_node_count - 1] = to_pos
+	_verlet_old[fg_rope_node_count - 1] = to_pos
 
 	# 距离约束
-	for _iter in range(rope_constraint_iters):
-		for i in range(rope_node_count - 1):
+	for _iter in range(fg_rope_constraint_iters):
+		for i in range(fg_rope_node_count - 1):
 			var p0: Vector3 = _verlet_pos[i]
 			var p1: Vector3 = _verlet_pos[i + 1]
 			var diff: Vector3 = p1 - p0
@@ -958,19 +1119,19 @@ func _update_rope_visual() -> void:
 			var correction: Vector3 = diff.normalized() * error * 0.5
 			if i == 0:
 				_verlet_pos[i + 1] -= correction
-			elif i + 1 == rope_node_count - 1:
+			elif i + 1 == fg_rope_node_count - 1:
 				_verlet_pos[i] += correction
 			else:
 				_verlet_pos[i] += correction
 				_verlet_pos[i + 1] -= correction
 
 	# 确保 MeshInstance3D 段数够
-	var seg_count: int = rope_node_count - 1
+	var seg_count: int = fg_rope_node_count - 1
 	while _rope_segments.size() < seg_count:
 		var seg := MeshInstance3D.new()
 		var cyl := CylinderMesh.new()
-		cyl.top_radius = rope_thickness * 0.5
-		cyl.bottom_radius = rope_thickness * 0.5
+		cyl.top_radius = fg_rope_thickness * 0.5
+		cyl.bottom_radius = fg_rope_thickness * 0.5
 		cyl.height = 1.0
 		cyl.radial_segments = 6
 		seg.mesh = cyl
@@ -1000,8 +1161,8 @@ func _update_rope_visual() -> void:
 		var cyl_mesh: CylinderMesh = seg.mesh as CylinderMesh
 		if cyl_mesh:
 			cyl_mesh.height = seg_len
-			cyl_mesh.top_radius = rope_thickness * 0.5
-			cyl_mesh.bottom_radius = rope_thickness * 0.5
+			cyl_mesh.top_radius = fg_rope_thickness * 0.5
+			cyl_mesh.bottom_radius = fg_rope_thickness * 0.5
 		var mid_pt: Vector3 = (p0 + p1) * 0.5
 		var y_ax: Vector3 = seg_dir.normalized()
 		var x_ax: Vector3 = Vector3.UP.cross(y_ax)
